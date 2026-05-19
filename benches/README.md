@@ -225,10 +225,10 @@ cross-engine match before timing starts.
 
 | Engine                       | Time       | Throughput | vs Tantivy        |
 |------------------------------|------------|------------|-------------------|
-| infino_1thread               | 9.20 s     | 108.7 K/s  | **infino wins, 1.5× faster than tantivy**   |
-| tantivy_1thread              | 13.42 s    | 74.5 K/s   | —                 |
-| infino_rayon_default_threads | 808.95 ms  | 1.24 M/s   | **infino wins, 2.3× faster than tantivy**   |
-| tantivy_default_threads      | 1.83 s     | 547.8 K/s  | —                 |
+| infino_1thread               | 10.51 s    | 95.2 K/s   | **infino wins, 1.3× faster than tantivy** |
+| tantivy_1thread              | 14.05 s    | 71.2 K/s   | —                 |
+| infino_rayon_default_threads | 1.10 s     | 911.4 K/s  | **infino wins, 1.9× faster than tantivy** |
+| tantivy_default_threads      | 2.06 s     | 485.0 K/s  | —                 |
 
 <!-- END: bench/fts/superfile/ingest -->
 
@@ -237,21 +237,21 @@ cross-engine match before timing starts.
 
 | Query          | infino     | Tantivy    | Winner                |
 |----------------|------------|------------|-----------------------|
-| single_rare    | 267 ns     | 10.42 µs   | **infino wins, 39.1× faster than tantivy**      |
-| single_df1     | 118 ns     | 5.98 µs    | **infino wins, 50.6× faster than tantivy**      |
-| single_common  | 5.16 µs    | 74.95 µs   | **infino wins, 14.5× faster than tantivy**      |
-| two_term_or    | 103.20 µs  | 427.04 µs  | **infino wins, 4.1× faster than tantivy**       |
-| three_wide     | 1.25 ms    | 3.06 ms    | **infino wins, 2.5× faster than tantivy**       |
-| three_similar  | 5.67 ms    | 8.05 ms    | **infino wins, 1.4× faster than tantivy**       |
-| five_term      | 10.07 ms   | 18.21 ms   | **infino wins, 1.8× faster than tantivy**       |
+| single_rare    | 275 ns     | 11.09 µs   | **infino wins, 40.2× faster than tantivy** |
+| single_df1     | 122 ns     | 6.72 µs    | **infino wins, 55.1× faster than tantivy** |
+| single_common  | 6.06 µs    | 76.82 µs   | **infino wins, 12.7× faster than tantivy** |
+| two_term_or    | 106.96 µs  | 444.55 µs  | **infino wins, 4.2× faster than tantivy** |
+| three_wide     | 1.30 ms    | 3.16 ms    | **infino wins, 2.4× faster than tantivy** |
+| three_similar  | 6.23 ms    | 8.34 ms    | **infino wins, 1.3× faster than tantivy** |
+| five_term      | 10.65 ms   | 18.33 ms   | **infino wins, 1.7× faster than tantivy** |
 
 **Per-algorithm probes** (infino-only, WAND+BMW vs MaxScore+BMM):
 
 | Shape         | WAND+BMW   | MaxScore+BMM | Winner                |
 |---------------|------------|--------------|-----------------------|
-| wide_3        | 4.75 ms    | 1.24 ms      | **BMM wins, 3.8× faster than WAND+BMW**          |
-| similar_3     | 9.01 ms    | 5.69 ms      | **BMM wins, 1.6× faster than WAND+BMW**          |
-| similar_5     | 25.67 ms   | 9.97 ms      | **BMM wins, 2.6× faster than WAND+BMW**          |
+| wide_3        | 5.03 ms    | 1.32 ms      | **MaxScore+BMM wins, 3.8× faster than WAND+BMW** |
+| similar_3     | 9.60 ms    | 6.16 ms      | **MaxScore+BMM wins, 1.6× faster than WAND+BMW** |
+| similar_5     | 27.09 ms   | 10.62 ms     | **MaxScore+BMM wins, 2.5× faster than WAND+BMW** |
 
 <!-- END: bench/fts/superfile/search -->
 
@@ -262,8 +262,8 @@ cross-engine match before timing starts.
 
 | Engine                  | Time       | Throughput | vs Tantivy        |
 |-------------------------|------------|------------|-------------------|
-| infino_auto_writer_pool | 42.63 s    | 234.6 K/s  | **tantivy wins, 1.8× faster than infino**  |
-| tantivy_default_threads | 23.71 s    | 421.8 K/s  | —                 |
+| infino_auto_writer_pool | 87.74 s    | 114.0 K/s  | **tantivy wins, 1.9× faster than infino** |
+| tantivy_default_threads | 46.46 s    | 215.2 K/s  | —                 |
 
 *Output cardinality: infino emits `min(writer_pool.threads, total_rows)` superfiles per commit (auto = cpus/2). Tantivy emits one segment per internal worker thread per commit (≈ 8 × N_chunks segments with NoMergePolicy). Override the infino writer-thread count with `INFINO_SUPERTABLE__WRITER_THREADS=N` to match Tantivy's effective output segment count.*
 
@@ -274,13 +274,13 @@ cross-engine match before timing starts.
 
 | Query          | infino     | Tantivy    | Winner                |
 |----------------|------------|------------|-----------------------|
-| single_rare    | 42.33 µs   | 212.53 µs  | **infino wins, 5.0× faster than tantivy**       |
-| single_common  | 57.16 µs   | 2.40 ms    | **infino wins, 41.9× faster than tantivy**      |
-| two_term_or    | 297.03 µs  | 825.50 µs  | **infino wins, 2.8× faster than tantivy**       |
-| three_wide     | 2.19 ms    | 4.95 ms    | **infino wins, 2.3× faster than tantivy**       |
-| three_similar  | 7.92 ms    | 10.82 ms   | **infino wins, 1.4× faster than tantivy**       |
-| five_term      | 14.29 ms   | 23.76 ms   | **infino wins, 1.7× faster than tantivy**       |
-| prefix         | 32.67 ms   | 44.44 ms   | **infino wins, 1.4× faster than tantivy**       |
+| single_rare    | 65.68 µs   | 380.53 µs  | **infino wins, 5.8× faster than tantivy** |
+| single_common  | 98.22 µs   | 6.41 ms    | **infino wins, 65.3× faster than tantivy** |
+| two_term_or    | 652.18 µs  | 1.68 ms    | **infino wins, 2.6× faster than tantivy** |
+| three_wide     | 6.03 ms    | 12.28 ms   | **infino wins, 2.0× faster than tantivy** |
+| three_similar  | 21.17 ms   | 26.27 ms   | **infino wins, 1.2× faster than tantivy** |
+| five_term      | 33.32 ms   | 51.57 ms   | **infino wins, 1.5× faster than tantivy** |
+| prefix         | 76.21 ms   | 109.69 ms  | **infino wins, 1.4× faster than tantivy** |
 
 <!-- END: bench/fts/supertable/search -->
 
@@ -291,8 +291,8 @@ cross-engine match before timing starts.
 
 | Engine | Time | Throughput | vs LanceDB |
 |--------|------|------------|------------|
-| infino | 18.92 s | 52.9 K/s | **infino wins, 1.5× faster than lance** |
-| lance | 28.13 s | 35.6 K/s | — |
+| infino | 18.64 s | 53.6 K/s | **infino wins, 1.7× faster than lance** |
+| lance | 31.60 s | 31.6 K/s | — |
 
 <!-- END: bench/vector/superfile/ingest -->
 
@@ -301,15 +301,15 @@ cross-engine match before timing starts.
 
 | Recall target | infino (probe, refine) | infino p50 | Lance (probe, refine) | Lance p50 | Winner |
 |---------------|------------------------|------------|-----------------------|-----------|--------|
-| 0.90 | (p=1, r=1024) | 4.94 ms | (p=10, r=256) | 9.21 ms | **infino wins, 1.9× faster than lance** |
-| 0.95 | (p=5, r=1024) | 5.02 ms | (p=10, r=256) | 9.56 ms | **infino wins, 1.9× faster than lance** |
-| 0.99 | (p=5, r=1024) | 5.03 ms | (p=10, r=256) | 9.17 ms | **infino wins, 1.8× faster than lance** |
+| 0.90 | (p=1, r=1024) | 100.71 µs | (p=10, r=256) | 11.80 ms | **infino wins, 117.2× faster than lance** |
+| 0.95 | (p=5, r=1024) | 202.25 µs | (p=5, r=256) | 11.74 ms | **infino wins, 58.0× faster than lance** |
+| 0.99 | (p=5, r=1024) | 202.18 µs | (p=5, r=256) | 11.99 ms | **infino wins, 59.3× faster than lance** |
 
 **infino default options** (`nprobe=8, rerank_mult=20` — user-facing latency baseline):
 
 | Metric | Value |
 |--------|-------|
-| infino_default_options_top10 | 4.97 ms |
+| infino_default_options_top10 | 154.08 µs |
 
 <!-- END: bench/vector/superfile/search -->
 
@@ -320,8 +320,8 @@ cross-engine match before timing starts.
 
 | Engine | Time | Throughput | vs LanceDB |
 |--------|------|------------|------------|
-| supertable | 310.17 s | 32.2 K/s | **lance wins, 3.1× faster than infino** |
-| lance | 99.94 s | 100.1 K/s | — |
+| supertable | 356.50 s | 28.1 K/s | **lance wins, 3.4× faster than infino** |
+| lance | 104.80 s | 95.4 K/s | — |
 
 <!-- END: bench/vector/supertable/ingest -->
 
@@ -330,9 +330,9 @@ cross-engine match before timing starts.
 
 | Recall target | supertable (probe/seg, refine) | supertable p50 | Lance (probe, refine) | Lance p50 | Winner |
 |---------------|--------------------------------|----------------|-----------------------|-----------|--------|
-| 0.90 | (p=1, r=4) | 56.07 ms | (p=10, r=256) | 29.08 ms | **lance wins, 1.9× faster than supertable** |
-| 0.95 | (p=12, r=4) | 56.06 ms | (p=25, r=256) | 35.67 ms | **lance wins, 1.6× faster than supertable** |
-| 0.99 | (p=16, r=4) | 55.94 ms | (p=50, r=256) | 44.57 ms | **lance wins, 1.3× faster than supertable** |
+| 0.90 | (p=1, r=4) | 1.56 ms | (p=10, r=256) | 47.40 ms | **supertable wins, 30.4× faster than lance** |
+| 0.95 | (p=2, r=4) | 1.91 ms | (p=25, r=256) | 53.76 ms | **supertable wins, 28.2× faster than lance** |
+| 0.99 | (p=8, r=4) | 2.36 ms | (p=25, r=256) | 53.88 ms | **supertable wins, 22.8× faster than lance** |
 
 <!-- END: bench/vector/supertable/search -->
 
