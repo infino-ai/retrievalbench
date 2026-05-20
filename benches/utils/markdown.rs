@@ -143,14 +143,86 @@ pub fn fmt_winner(lhs_label: &str, lhs_ns: Option<f64>, rhs_label: &str, rhs_ns:
 // ─── estimates.json reader ────────────────────────────────────────────
 
 /// Read criterion's `mean.point_estimate` (in nanoseconds) for a
-/// given group + bench id. Returns `None` if the file doesn't exist
-/// (the bench was filtered out or hasn't run yet) or if the JSON
-/// can't be parsed.
+/// given group + bench id from retrievalbench's own
+/// `target/criterion/` tree. Returns `None` if the file doesn't exist
+/// (the bench was filtered out or hasn't run yet) or the JSON can't
+/// be parsed.
 pub fn read_mean_ns(group: &str, bench: &str) -> Option<f64> {
     let path = format!("target/criterion/{group}/{bench}/new/estimates.json");
     let text = fs::read_to_string(&path).ok()?;
     let v: Value = serde_json::from_str(&text).ok()?;
     v.get("mean")?.get("point_estimate")?.as_f64()
+}
+
+/// Read criterion's `mean.point_estimate` (in nanoseconds) from
+/// **infino's** sibling `target/criterion/` tree. Infino measures
+/// itself in its own bench harness; retrievalbench reads those numbers
+/// here to build head-to-head comparison tables against Lance / Tantivy
+/// without re-measuring infino in this process.
+///
+/// Returns `None` if the file is missing — typically because infino's
+/// bench hasn't been run yet. The bench's markdown emitter shows "—"
+/// in the infino column in that case, which is visible in the rendered
+/// README and the most actionable signal for "run `cargo bench` in
+/// `../infino` first."
+pub fn read_infino_mean_ns(group: &str, bench: &str) -> Option<f64> {
+    let path = format!("../infino/target/criterion/{group}/{bench}/new/estimates.json");
+    let text = fs::read_to_string(&path).ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    v.get("mean")?.get("point_estimate")?.as_f64()
+}
+
+/// Find infino's calibrated `(probe, refine, mean_ns)` for a recall
+/// target by enumerating `../infino/target/criterion/<group>/`.
+/// Infino's vector benches encode the calibrated `(probe, refine)`
+/// into the bench id (e.g. `infino_recall_at_least_90/p=1,r=1024`),
+/// so retrievalbench needs to enumerate to discover which combo infino
+/// settled on for each recall target.
+///
+/// `bench_prefix` is the part of the bench id that precedes the
+/// `/p=N,r=M` variant — e.g. `"infino_recall_at_least_90"` for vector
+/// superfile, `"supertable_recall_at_least_95"` for vector supertable.
+///
+/// Returns `None` if no matching directory exists (infino hasn't run
+/// this group yet) or all matches fail to parse.
+#[allow(dead_code)]
+pub fn read_infino_calibrated(
+    group: &str,
+    bench_prefix: &str,
+) -> Option<(usize, usize, f64)> {
+    let base = format!("../infino/target/criterion/{group}/{bench_prefix}");
+    let entries = fs::read_dir(&base).ok()?;
+    for entry in entries.flatten() {
+        let variant_name = entry.file_name().to_string_lossy().to_string();
+        // Variant subdir name pattern: `p=N,r=M`.
+        let (p, r) = match parse_p_r(&variant_name) {
+            Some(pair) => pair,
+            None => continue,
+        };
+        let est_path = entry.path().join("new").join("estimates.json");
+        let text = match fs::read_to_string(&est_path) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let v: Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let ns = v.get("mean").and_then(|m| m.get("point_estimate")).and_then(|x| x.as_f64());
+        if let Some(ns) = ns {
+            return Some((p, r, ns));
+        }
+    }
+    None
+}
+
+/// Parse criterion variant directory names of the form `p=N,r=M`.
+#[allow(dead_code)]
+fn parse_p_r(name: &str) -> Option<(usize, usize)> {
+    let (p_part, r_part) = name.split_once(',')?;
+    let p = p_part.strip_prefix("p=")?.parse::<usize>().ok()?;
+    let r = r_part.strip_prefix("r=")?.parse::<usize>().ok()?;
+    Some((p, r))
 }
 
 /// Convenience: mean time + throughput (per second) given an
