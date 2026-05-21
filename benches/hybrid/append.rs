@@ -5,7 +5,7 @@
 //! rayon-shard work. Fresh supertable + writer per iter so the
 //! buffer size doesn't compound across iterations.
 
-use crate::hybrid_common::*;
+use crate::common::*;
 use criterion::{Criterion, criterion_group};
 use infino::supertable::Supertable;
 use std::hint::black_box;

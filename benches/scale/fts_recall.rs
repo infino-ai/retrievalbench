@@ -285,7 +285,6 @@ fn assert_top1_ranking_agrees(terms: &[&str], query_str: &str) {
 /// failure can be inspected for "are these the same docs at the same
 /// score, just tie-broken differently?" vs a real ranking divergence.
 
-
 fn diag_three_similar_scores() {
     let inf = infino_top_k_scored(&["term00050", "term00051", "term00052"], 15);
     let tan = tantivy_top_k_scored("term00050 term00051 term00052", 15);
@@ -304,14 +303,23 @@ fn diag_three_similar_scores() {
 /// but both diverge from Tantivy, the bug is in shared infrastructure
 /// (decode, scoring, doc-len lookup).
 
-
 fn diag_three_similar_wand_vs_bmm() {
     let r = infino();
     let wand = r
-        .search_with_algo_for_bench("title", &["term00050", "term00051", "term00052"], 15, OrAlgo::WandBmw)
+        .search_with_algo_for_bench(
+            "title",
+            &["term00050", "term00051", "term00052"],
+            15,
+            OrAlgo::WandBmw,
+        )
         .expect("WAND+BMW search");
     let bmm = r
-        .search_with_algo_for_bench("title", &["term00050", "term00051", "term00052"], 15, OrAlgo::Bmm)
+        .search_with_algo_for_bench(
+            "title",
+            &["term00050", "term00051", "term00052"],
+            15,
+            OrAlgo::Bmm,
+        )
         .expect("MaxScore+BMM search");
     println!("WAND+BMW top-15:");
     for (d, s) in &wand {
@@ -327,7 +335,6 @@ fn diag_three_similar_wand_vs_bmm() {
 /// recall divergence isn't WAND-related — it's tokenization / doc-len /
 /// scoring formula.
 
-
 fn diag_single_term_top10() {
     let inf = infino_top_k_scored(&["term00050"], 10);
     let tan = tantivy_top_k_scored("term00050", 10);
@@ -341,7 +348,6 @@ fn diag_single_term_top10() {
     }
 }
 
-
 fn three_similar_recall_top10() {
     // Three adjacent Zipfian ranks: nearly identical IDF, postings
     // overlap on ~15-20% of all docs each. After the heap fills with
@@ -353,7 +359,6 @@ fn three_similar_recall_top10() {
         10,
     );
 }
-
 
 fn five_similar_recall_top10() {
     // Same overlap regime, deeper query. Five cursors mean even more
@@ -371,7 +376,6 @@ fn five_similar_recall_top10() {
         10,
     );
 }
-
 
 fn three_wide_recall_top10() {
     // Wide UB-spread query (rank 1 + 50 + 100). Pivot stays at rank 1
@@ -393,7 +397,6 @@ fn three_wide_recall_top10() {
 // threshold low and forces more docs to be scored. Both shapes have to
 // be correct.
 
-
 fn three_similar_recall_k1() {
     // Top-1 must be a real top-1, with the same score Tantivy reports.
     assert_top1_ranking_agrees(
@@ -401,7 +404,6 @@ fn three_similar_recall_k1() {
         "term00050 term00051 term00052",
     );
 }
-
 
 fn three_similar_recall_k20() {
     // Larger k pushes the threshold tier deeper into the score
@@ -413,7 +415,6 @@ fn three_similar_recall_k20() {
         20,
     );
 }
-
 
 fn three_similar_recall_k50() {
     // 50 hits dwarfs the heap-fill phase; threshold spends most of the
@@ -431,14 +432,12 @@ fn three_similar_recall_k50() {
 // Single-term goes through `search_single_term_bmw`, a different code
 // path from `run_wand_bmw`. Worth its own coverage.
 
-
 fn single_common_recall_k20() {
     // Long posting list (rank 1 — appears in most docs). BMW skip
     // gates almost every block; an off-by-one in the skip-table
     // logic shows up as missing top-k hits.
     assert_top_k_recall(&["term00001"], "term00001", 20);
 }
-
 
 fn single_rare_recall_top1() {
     // Tail-rank term — short posting list, often single-doc match.
@@ -447,14 +446,12 @@ fn single_rare_recall_top1() {
 
 // ---- Two-term overlap ----------------------------------------------
 
-
 fn two_term_similar_recall_top10() {
     // Two adjacent ranks: maximal overlap, threshold settles where BMW
     // UB tightness matters most. A 2-term version of the original
     // recall regression.
     assert_top_k_recall(&["term00050", "term00051"], "term00050 term00051", 10);
 }
-
 
 fn two_term_dominator_recall_top10() {
     // One common term + one rare term — wide UB spread. Pivot is
@@ -467,7 +464,6 @@ fn two_term_dominator_recall_top10() {
 // Pivot extension and alignment have an inner loop over the prefix;
 // longer queries exercise more pivot-prefix configurations.
 
-
 fn four_term_similar_recall_top10() {
     assert_top_k_recall(
         &["term00050", "term00051", "term00052", "term00053"],
@@ -475,7 +471,6 @@ fn four_term_similar_recall_top10() {
         10,
     );
 }
-
 
 fn six_term_similar_recall_top10() {
     assert_top_k_recall(
@@ -499,7 +494,6 @@ fn six_term_similar_recall_top10() {
 // the BMW skip target. If the suffix cap is wrong, mid-tier hits with
 // the common term in their post body get missed.
 
-
 fn dominator_plus_mid_tier_recall_top10() {
     assert_top_k_recall(
         &["term00001", "term00050", "term00051", "term00052"],
@@ -514,7 +508,6 @@ fn dominator_plus_mid_tier_recall_top10() {
 // idf — its cursor's term_max dominates accum quickly so pivot_j
 // often lands at the rare cursor. Tests the case where pivot_doc
 // sits at the rare cursor's positions, which are sparse.
-
 
 fn one_common_one_mid_one_rare_top10() {
     assert_top_k_recall(
@@ -560,7 +553,6 @@ fn assert_bmm_top_k_recall(terms: &[&str], query_str: &str, k: usize) {
     }
 }
 
-
 fn bmm_three_similar_recall_top10() {
     assert_bmm_top_k_recall(
         &["term00050", "term00051", "term00052"],
@@ -568,7 +560,6 @@ fn bmm_three_similar_recall_top10() {
         10,
     );
 }
-
 
 fn bmm_five_similar_recall_top10() {
     assert_bmm_top_k_recall(
@@ -584,7 +575,6 @@ fn bmm_five_similar_recall_top10() {
     );
 }
 
-
 fn bmm_three_wide_recall_top10() {
     assert_bmm_top_k_recall(
         &["term00001", "term00050", "term00100"],
@@ -593,7 +583,6 @@ fn bmm_three_wide_recall_top10() {
     );
 }
 
-
 fn bmm_dominator_plus_mid_tier_recall_top10() {
     assert_bmm_top_k_recall(
         &["term00001", "term00050", "term00051", "term00052"],
@@ -601,7 +590,6 @@ fn bmm_dominator_plus_mid_tier_recall_top10() {
         10,
     );
 }
-
 
 fn bmm_six_term_similar_recall_top10() {
     assert_bmm_top_k_recall(
@@ -617,7 +605,6 @@ fn bmm_six_term_similar_recall_top10() {
         10,
     );
 }
-
 
 fn top1_ranking_battery() {
     let cases: &[(&[&str], &str)] = &[
@@ -646,7 +633,6 @@ fn top1_ranking_battery() {
         assert_top1_ranking_agrees(terms, query);
     }
 }
-
 
 pub fn run() {
     println!("fts_recall: building corpus + indices (20K docs, Zipf-10K vocab)");
@@ -678,5 +664,7 @@ pub fn run() {
     bmm_six_term_similar_recall_top10();
     top1_ranking_battery();
     println!("fts_recall: all 20 pinned checks passed");
-    println!("fts_recall: (3 diagnostic fns remain in the binary — invoke directly to print scores)");
+    println!(
+        "fts_recall: (3 diagnostic fns remain in the binary — invoke directly to print scores)"
+    );
 }

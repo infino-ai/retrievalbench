@@ -6,9 +6,7 @@ publish = false
 description = "Head-to-head comparison benches and cross-engine oracle tests for infino vs Tantivy and LanceDB"
 
 [lib]
-# No library code — this crate exists only for its benches and
-# integration tests. Disable the auto-generated empty lib target.
-path = "src/lib.rs"
+path = "benches/utils/mod.rs"
 
 [dependencies]
 # The crate under test. Path dep on the sibling `infino` repo

@@ -13,7 +13,6 @@
 //! cargo bench --bench data_structures -- bloom       # criterion regex filter
 //! ```
 
-#[path = "bloom.rs"]
 mod bloom;
 
 criterion::criterion_main!(bloom::benches);

@@ -107,7 +107,7 @@ fn build_reader(corpus: &[Vec<f32>], metric: Metric) -> VectorReader {
     for v in corpus {
         b.add(0, v).expect("add to vector builder");
     }
-    let bytes = b.finish();
+    let bytes = b.finish().expect("VectorBuilder::finish");
     let metric_str = match metric {
         Metric::L2Sq => "l2sq",
         Metric::Cosine => "cosine",
@@ -171,7 +171,6 @@ fn build_query_set(corpus: &[Vec<f32>], seed: u64, normalize_each: bool) -> Vec<
     queries
 }
 
-
 fn recall_l2sq_at_10k_dim384_meets_threshold() {
     let corpus = generate_planted_corpus(1, false);
     let reader = build_reader(&corpus, Metric::L2Sq);
@@ -212,7 +211,6 @@ fn recall_l2sq_at_10k_dim384_meets_threshold() {
     );
 }
 
-
 fn recall_cosine_at_10k_dim384_meets_threshold() {
     let corpus = generate_planted_corpus(2, true);
     let reader = build_reader(&corpus, Metric::Cosine);
@@ -249,7 +247,6 @@ fn recall_cosine_at_10k_dim384_meets_threshold() {
     println!("Cosine @10k×384: recall@10/nprobe=8 = {r10:.3}; recall@10/nprobe=32 = {r10_high:.3}");
 }
 
-
 fn recall_increases_monotonically_with_nprobe() {
     // Sanity property: more nprobe = at least as much recall. A
     // non-monotone result suggests a quantization or rerank bug.
@@ -269,7 +266,6 @@ fn recall_increases_monotonically_with_nprobe() {
         prev = r;
     }
 }
-
 
 fn recall_increases_monotonically_with_rerank_mult() {
     // Same property for rerank_mult: more candidates reranked = at

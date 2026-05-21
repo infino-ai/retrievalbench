@@ -53,10 +53,6 @@ use bytes::Bytes;
 use infino::superfile::builder::{BuilderOptions, FtsConfig, SuperfileBuilder};
 use infino::superfile::fts::reader::BoolMode;
 use infino::superfile::fts::tokenize::Tokenizer;
-use infino::test_helpers::default_tokenizer;
-use infino::supertable::reader_cache::{
-    ColdFetchMode, DiskCacheConfig, DiskCacheStore, LruPolicy,
-};
 use infino::supertable::manifest::bloom::BloomBuilder;
 use infino::supertable::manifest::commit::{self as commit_mod};
 use infino::supertable::manifest::list::{
@@ -64,10 +60,12 @@ use infino::supertable::manifest::list::{
     PartitionStrategy,
 };
 use infino::supertable::manifest::part::{self as part_mod, ContentHash, ManifestPart, PartId};
+use infino::supertable::reader_cache::{ColdFetchMode, DiskCacheConfig, DiskCacheStore, LruPolicy};
 use infino::supertable::storage::{LocalFsStorageProvider, StorageProvider};
 use infino::supertable::{
     FtsSummary, ScalarStatsTable, SuperfileEntry, SuperfileUri, Supertable, SupertableOptions,
 };
+use infino::test_helpers::default_tokenizer;
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -89,9 +87,11 @@ fn unique_term_for(part_idx: usize) -> String {
 }
 
 fn schema_id_title() -> Arc<Schema> {
-    Arc::new(Schema::new(vec![
-        Field::new("title", DataType::LargeUtf8, false),
-    ]))
+    Arc::new(Schema::new(vec![Field::new(
+        "title",
+        DataType::LargeUtf8,
+        false,
+    )]))
 }
 
 fn make_options(storage: Arc<dyn StorageProvider>) -> SupertableOptions {
@@ -115,10 +115,7 @@ fn make_options(storage: Arc<dyn StorageProvider>) -> SupertableOptions {
     .with_storage(storage)
 }
 
-fn make_cache(
-    storage: Arc<dyn StorageProvider>,
-    cache_root: &Path,
-) -> Arc<DiskCacheStore> {
+fn make_cache(storage: Arc<dyn StorageProvider>, cache_root: &Path) -> Arc<DiskCacheStore> {
     let cfg = DiskCacheConfig {
         cache_root: cache_root.to_path_buf(),
         disk_budget_bytes: 1 << 30,
@@ -215,8 +212,7 @@ fn build_synthetic_parts(
             ),
         };
 
-        let mut superfiles: Vec<Arc<SuperfileEntry>> =
-            Vec::with_capacity(n_segments_per_part);
+        let mut superfiles: Vec<Arc<SuperfileEntry>> = Vec::with_capacity(n_segments_per_part);
         for _ in 0..n_segments_per_part {
             let id_min = doc_cursor as i128;
             let id_max = doc_cursor as i128; // 1-doc superfiles
@@ -250,8 +246,7 @@ fn build_synthetic_parts(
         let size_uncompressed = zstd::stream::decode_all(compressed.as_slice())
             .map(|v| v.len() as u64)
             .unwrap_or(size_compressed);
-        let aggregates =
-            infino::supertable::manifest::aggregates::compute(&part.superfiles);
+        let aggregates = infino::supertable::manifest::aggregates::compute(&part.superfiles);
 
         let entry = ManifestListEntry {
             part_id: part.part_id,
@@ -333,10 +328,7 @@ fn open_snapshot(st: &Supertable) -> OpenSnapshot {
     }
 }
 
-async fn phase_a_cold_open(
-    storage: &Arc<dyn StorageProvider>,
-    cache_dir: &Path,
-) -> Supertable {
+async fn phase_a_cold_open(storage: &Arc<dyn StorageProvider>, cache_dir: &Path) -> Supertable {
     let cache = make_cache(Arc::clone(storage), cache_dir);
     let t0 = Instant::now();
     let st = Supertable::open(
@@ -439,10 +431,7 @@ fn phase_d_low_selectivity_query(st: &Supertable) {
     );
 }
 
-async fn phase_e_refresh(
-    consumer: &Supertable,
-    storage: &Arc<dyn StorageProvider>,
-) {
+async fn phase_e_refresh(consumer: &Supertable, storage: &Arc<dyn StorageProvider>) {
     // Sibling: open another handle + commit 1 segment.
     let sibling_cache_dir = TempDir::new().expect("sibling cache");
     let sibling_cache = make_cache(Arc::clone(storage), sibling_cache_dir.path());
@@ -477,7 +466,10 @@ async fn phase_e_refresh(
         advanced,
         post.n_parts_loaded.saturating_sub(pre.n_parts_loaded)
     );
-    assert!(advanced, "refresh must report advancement after sibling commit");
+    assert!(
+        advanced,
+        "refresh must report advancement after sibling commit"
+    );
 }
 
 pub fn run() {
@@ -498,16 +490,14 @@ pub fn run() {
     let cache_dir = TempDir::new().expect("cache tempdir");
 
     rt.block_on(async {
-        let storage: Arc<dyn StorageProvider> = Arc::new(
-            LocalFsStorageProvider::new(storage_dir.path()).expect("provider"),
-        );
+        let storage: Arc<dyn StorageProvider> =
+            Arc::new(LocalFsStorageProvider::new(storage_dir.path()).expect("provider"));
 
         // --- Synthetic corpus build (off the clock) ---
         let shared_uri = SuperfileUri::new_v4();
         let shared_bytes = build_shared_segment_bytes();
         let t_build = Instant::now();
-        let parts_and_entries =
-            build_synthetic_parts(n_parts, n_segs_per_part, shared_uri);
+        let parts_and_entries = build_synthetic_parts(n_parts, n_segs_per_part, shared_uri);
         let build_elapsed = t_build.elapsed();
         eprintln!(
             "[m15d] synthetic corpus built: {} parts × {} superfiles = {} total ({:.2}s)",
@@ -518,14 +508,9 @@ pub fn run() {
         );
 
         let t_persist = Instant::now();
-        persist_synthetic_corpus(
-            &storage,
-            shared_uri,
-            shared_bytes,
-            parts_and_entries,
-        )
-        .await
-        .expect("persist");
+        persist_synthetic_corpus(&storage, shared_uri, shared_bytes, parts_and_entries)
+            .await
+            .expect("persist");
         eprintln!(
             "[m15d] synthetic corpus persisted: {:.2}s",
             t_persist.elapsed().as_secs_f64()

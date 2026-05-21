@@ -42,7 +42,7 @@ use lancedb::index::vector::IvfPqIndexBuilder;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use tokio::runtime::Runtime;
 
-use infino::test_helpers::bench_corpus::{Calibrated, DIM, Hit, p50_micros, recall_at_k};
+use crate::corpus::{Calibrated, DIM, Hit, p50_micros, recall_at_k};
 
 /// Build the Lance table at `path` with an IVF-PQ index, return it
 /// open and ready for queries. Times the whole pipeline (data load

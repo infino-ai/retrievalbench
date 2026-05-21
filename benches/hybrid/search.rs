@@ -2,7 +2,7 @@
 //! vector query types. Builds the supertable once, times each query
 //! shape against the same pre-pinned reader.
 
-use crate::hybrid_common::*;
+use crate::common::*;
 use criterion::{Criterion, criterion_group};
 use infino::superfile::fts::reader::BoolMode;
 use infino::superfile::vector::distance::normalize;
@@ -10,6 +10,7 @@ use infino::supertable::query::vector::VectorSearchOptions;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand_distr::{Distribution, StandardNormal};
+use retrievalbench::corpus;
 use std::hint::black_box;
 
 fn bench_supertable_query(c: &mut Criterion) {
@@ -19,7 +20,7 @@ fn bench_supertable_query(c: &mut Criterion) {
     // Deterministic unit-norm query vector for the vector search shape.
     let mut rng = StdRng::seed_from_u64(101);
     let dist = StandardNormal;
-    let mut q: Vec<f32> = (0..crate::corpus::DIM)
+    let mut q: Vec<f32> = (0..corpus::DIM)
         .map(|_| {
             let s: f64 = dist.sample(&mut rng);
             (s as f32) * 3.0

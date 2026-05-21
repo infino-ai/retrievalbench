@@ -11,15 +11,14 @@
 
 use std::sync::{Arc, OnceLock};
 
-use arrow_array::{
-    Array, FixedSizeListArray, Float32Array, LargeStringArray, RecordBatch,
-};
+use arrow_array::{Array, FixedSizeListArray, Float32Array, LargeStringArray, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use infino::superfile::builder::{FtsConfig, VectorConfig};
 use infino::superfile::fts::tokenize::Tokenizer;
 use infino::superfile::vector::distance::Metric;
-use infino::test_helpers::default_tokenizer;
 use infino::supertable::{Supertable, SupertableOptions};
+use infino::test_helpers::default_tokenizer;
+use retrievalbench::corpus;
 
 /// Number of buffer chunks to use during the build bench. Chosen
 /// to be >= `num_cpus()` on typical laptops, so each writer-pool
@@ -43,11 +42,11 @@ static CORPUS: OnceLock<Corpus> = OnceLock::new();
 
 pub fn corpus() -> &'static Corpus {
     CORPUS.get_or_init(|| {
-        let n = crate::corpus::n_docs();
-        let n_cent = crate::corpus::n_cent(n);
+        let n = corpus::n_docs();
+        let n_cent = corpus::n_cent(n);
         Corpus {
-            titles: crate::corpus::generate_text_corpus(n, 1),
-            vectors: crate::corpus::generate_vector_corpus(n, n_cent, 1, true),
+            titles: corpus::generate_text_corpus(n, 1),
+            vectors: corpus::generate_vector_corpus(n, n_cent, 1, true),
             n_cent,
             n,
         }
@@ -78,7 +77,7 @@ pub fn supertable_schema() -> Arc<Schema> {
             "emb",
             DataType::FixedSizeList(
                 Arc::new(Field::new("item", DataType::Float32, true)),
-                crate::corpus::DIM as i32,
+                corpus::DIM as i32,
             ),
             false,
         ),
@@ -101,7 +100,7 @@ pub fn supertable_options(n_cent: usize, writer_threads: usize) -> SupertableOpt
         }],
         vec![VectorConfig {
             column: "emb".into(),
-            dim: crate::corpus::DIM,
+            dim: corpus::DIM,
             n_cent,
             rot_seed: 7,
             metric: Metric::Cosine,
@@ -127,22 +126,19 @@ fn batch_chunk(corpus: &Corpus, chunk_idx: usize, n_chunks: usize) -> RecordBatc
             .map(String::as_str)
             .collect::<Vec<_>>(),
     );
-    let vec_slice = &corpus.vectors[start * crate::corpus::DIM..end * crate::corpus::DIM];
+    let vec_slice = &corpus.vectors[start * corpus::DIM..end * corpus::DIM];
     let item_field = Arc::new(Field::new("item", DataType::Float32, true));
     let values = Float32Array::from(vec_slice.to_vec());
     let fsl = FixedSizeListArray::try_new(
         item_field,
-        crate::corpus::DIM as i32,
+        corpus::DIM as i32,
         Arc::new(values) as Arc<dyn Array>,
         None,
     )
     .expect("FSL");
-    RecordBatch::try_new(
-        supertable_schema(),
-        vec![Arc::new(titles), Arc::new(fsl)],
-    )
-    .expect("batch")
-    .slice(0, len)
+    RecordBatch::try_new(supertable_schema(), vec![Arc::new(titles), Arc::new(fsl)])
+        .expect("batch")
+        .slice(0, len)
 }
 
 /// Build a supertable end-to-end using the pre-built chunked

@@ -20,21 +20,12 @@
 //! INFINO_BENCH_M15D_FULL=1   cargo bench --bench scale -- 1m_segments        # 1M superfiles
 //! ```
 
-#[path = "../utils/corpus.rs"]
-mod corpus;
-
-#[path = "supertable_100gb_laptop.rs"]
-mod supertable_100gb_laptop;
-#[path = "supertable_1m_segments.rs"]
-mod supertable_1m_segments;
-#[path = "fts_recall.rs"]
 mod fts_recall;
-#[path = "vector_recall.rs"]
-mod vector_recall;
-#[path = "oracle_calibrated_recall_targets_match_lance.rs"]
 mod oracle_calibrated_recall_targets_match_lance;
-#[path = "supertable_ingest_once.rs"]
+mod supertable_100gb_laptop;
+mod supertable_1m_segments;
 mod supertable_ingest_once;
+mod vector_recall;
 
 fn main() {
     let filter = std::env::args().nth(1).unwrap_or_default();
