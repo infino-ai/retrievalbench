@@ -10,7 +10,7 @@
 //! review can spot regressions in the write path's amplification
 //! factor.
 
-use crate::hybrid_common::*;
+use crate::common::*;
 use criterion::{Criterion, Throughput, criterion_group};
 use std::hint::black_box;
 

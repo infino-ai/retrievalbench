@@ -4,7 +4,7 @@
 //! `infino/benches` (read out of `../infino/target/criterion/...` at
 //! emit time). The corpus, queries, and ground truth are shared
 //! between both repos via `infino::test_helpers::bench_corpus`
-//! (re-exported here as `crate::corpus`), so the comparison rows in
+//! (re-exported via `retrievalbench::corpus`), so the comparison rows in
 //! the rendered README are apples-to-apples.
 //!
 //! Pinned to 1M-doc Zipfian (200 tokens/doc, 10K vocab). The
@@ -32,15 +32,14 @@
 //! output is missing.
 
 use criterion::{BenchmarkGroup, Criterion, Throughput, criterion_group, measurement::WallTime};
+use retrievalbench::{corpus, markdown, rss};
 use std::hint::black_box;
 use std::sync::OnceLock;
 use tantivy::Index;
 use tantivy::collector::TopDocs;
 use tantivy::doc;
 use tantivy::query::{Query, QueryParser};
-use tantivy::schema::{
-    INDEXED, IndexRecordOption, STORED, Schema, TextFieldIndexing, TextOptions,
-};
+use tantivy::schema::{INDEXED, IndexRecordOption, STORED, Schema, TextFieldIndexing, TextOptions};
 use tantivy::tokenizer::{LowerCaser, SimpleTokenizer, TextAnalyzer};
 
 // ─── Constants ────────────────────────────────────────────────────────
@@ -67,7 +66,7 @@ static DOCS: OnceLock<Vec<String>> = OnceLock::new();
 static TANTIVY: OnceLock<TantivyHandles> = OnceLock::new();
 
 fn docs() -> &'static [String] {
-    DOCS.get_or_init(|| crate::corpus::generate_text_corpus(N_DOCS, 1))
+    DOCS.get_or_init(|| corpus::generate_text_corpus(N_DOCS, 1))
         .as_slice()
 }
 
@@ -157,6 +156,7 @@ fn bench(c: &mut Criterion) {
         let mut g = c.benchmark_group("superfile_fts_build");
         g.sample_size(10);
         g.throughput(Throughput::Elements(n as u64));
+        let rss_sample = rss::PeakSampler::start_default();
 
         g.bench_function(format!("tantivy_1thread_{n}docs"), |b| {
             b.iter_with_large_drop(|| {
@@ -169,6 +169,17 @@ fn bench(c: &mut Criterion) {
             });
         });
         g.finish();
+        let peak = rss_sample.stop();
+        let _ = rss::write_peak_rss(
+            group_name::SUPERFILE_FTS_BUILD,
+            &format!("tantivy_1thread_{n}docs"),
+            peak,
+        );
+        let _ = rss::write_peak_rss(
+            group_name::SUPERFILE_FTS_BUILD,
+            &format!("tantivy_default_threads_{n}docs"),
+            peak,
+        );
 
         emit_ingest_markdown();
     }
@@ -201,6 +212,7 @@ fn bench(c: &mut Criterion) {
             .expect("parse");
 
         let mut g = c.benchmark_group("superfile_fts_search");
+        let rss_sample = rss::PeakSampler::start_default();
 
         bench_tantivy_only(&mut g, "single_rare", t, q_single_rare.as_ref());
         bench_tantivy_only(&mut g, "single_df1", t, q_single_df1.as_ref());
@@ -215,6 +227,14 @@ fn bench(c: &mut Criterion) {
         bench_tantivy_only(&mut g, "five_term_and", t, q_five_and.as_ref());
 
         g.finish();
+        let peak = rss_sample.stop();
+        for q in QUERY_NAMES_OR.iter().chain(QUERY_NAMES_AND.iter()) {
+            let _ = rss::write_peak_rss(
+                group_name::SUPERFILE_FTS_SEARCH,
+                &format!("{q}_tantivy_top10"),
+                peak,
+            );
+        }
 
         emit_search_markdown();
     }
@@ -222,8 +242,30 @@ fn bench(c: &mut Criterion) {
 
 // ─── Markdown summary emitters ────────────────────────────────────────
 
+mod group_name {
+    pub const SUPERFILE_FTS_BUILD: &str = "superfile_fts_build";
+    pub const SUPERFILE_FTS_SEARCH: &str = "superfile_fts_search";
+}
+
+const QUERY_NAMES_OR: &[&str] = &[
+    "single_rare",
+    "single_df1",
+    "single_common",
+    "two_term_or",
+    "three_wide",
+    "three_similar",
+    "five_term",
+];
+
+const QUERY_NAMES_AND: &[&str] = &[
+    "two_term_and",
+    "three_wide_and",
+    "three_similar_and",
+    "five_term_and",
+];
+
 fn emit_ingest_markdown() {
-    use crate::markdown::{
+    use markdown::{
         MarkdownSection, fmt_throughput, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns,
     };
 
@@ -231,10 +273,10 @@ fn emit_ingest_markdown() {
     body.push_str(&format!(
         "### Superfile FTS — ingest ({N_DOCS} docs, Zipfian, 200 tokens/doc, 10K vocab)\n\n"
     ));
-    body.push_str("| Engine                       | Time       | Throughput | vs Tantivy        |\n");
-    body.push_str("|------------------------------|------------|------------|-------------------|\n");
+    body.push_str("| Engine                       | Time       | Throughput | Peak RSS | vs Tantivy        |\n");
+    body.push_str("|------------------------------|------------|------------|----------|-------------------|\n");
 
-    let group = "superfile_fts_build";
+    let group = group_name::SUPERFILE_FTS_BUILD;
     // Infino numbers come from infino's own bench harness.
     let infino_1t = read_infino_mean_ns(group, &format!("infino_1thread_{N_DOCS}docs"));
     let infino_rayon =
@@ -242,95 +284,128 @@ fn emit_ingest_markdown() {
     // Tantivy numbers come from this bench's own criterion output.
     let tantivy_1t = read_mean_ns(group, &format!("tantivy_1thread_{N_DOCS}docs"));
     let tantivy_def = read_mean_ns(group, &format!("tantivy_default_threads_{N_DOCS}docs"));
+    let infino_1t_rss =
+        rss::read_infino_peak_rss_bytes(group, &format!("infino_1thread_{N_DOCS}docs"));
+    let infino_rayon_rss = rss::read_infino_peak_rss_bytes(
+        group,
+        &format!("infino_rayon_default_threads_{N_DOCS}docs"),
+    );
+    let tantivy_1t_rss = rss::read_peak_rss_bytes(group, &format!("tantivy_1thread_{N_DOCS}docs"));
+    let tantivy_def_rss =
+        rss::read_peak_rss_bytes(group, &format!("tantivy_default_threads_{N_DOCS}docs"));
 
-    let row = |label: &str, ns: Option<f64>, baseline: Option<f64>, is_baseline: bool| -> String {
+    let row = |label: &str,
+               ns: Option<f64>,
+               peak_rss: Option<u64>,
+               baseline: Option<f64>,
+               is_baseline: bool|
+     -> String {
         let time = ns.map(fmt_time).unwrap_or_else(|| "—".into());
         let thrpt = ns
             .map(|n| fmt_throughput((N_DOCS as f64) / (n / 1e9)))
             .unwrap_or_else(|| "—".into());
+        let rss = peak_rss.map(rss::fmt_bytes).unwrap_or_else(|| "—".into());
         let cmp = if is_baseline {
             "—".to_string()
         } else {
             fmt_winner("infino", ns, "tantivy", baseline)
         };
-        format!("| {label:28} | {time:10} | {thrpt:10} | {cmp:17} |\n")
+        format!("| {label:28} | {time:10} | {thrpt:10} | {rss:8} | {cmp:17} |\n")
     };
 
-    body.push_str(&row("infino_1thread", infino_1t, tantivy_1t, false));
-    body.push_str(&row("tantivy_1thread", tantivy_1t, tantivy_1t, true));
+    body.push_str(&row(
+        "infino_1thread",
+        infino_1t,
+        infino_1t_rss,
+        tantivy_1t,
+        false,
+    ));
+    body.push_str(&row(
+        "tantivy_1thread",
+        tantivy_1t,
+        tantivy_1t_rss,
+        tantivy_1t,
+        true,
+    ));
     body.push_str(&row(
         "infino_rayon_default_threads",
         infino_rayon,
+        infino_rayon_rss,
         tantivy_def,
         false,
     ));
-    body.push_str(&row("tantivy_default_threads", tantivy_def, tantivy_def, true));
+    body.push_str(&row(
+        "tantivy_default_threads",
+        tantivy_def,
+        tantivy_def_rss,
+        tantivy_def,
+        true,
+    ));
 
-    crate::markdown::emit(&MarkdownSection {
+    markdown::emit(&MarkdownSection {
         anchor_id: "bench/fts/superfile/ingest".into(),
         body,
     });
 }
 
 fn emit_search_markdown() {
-    use crate::markdown::{MarkdownSection, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns};
+    use markdown::{MarkdownSection, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns};
 
     let mut body = String::new();
     body.push_str(&format!("### Superfile FTS — search ({N_DOCS} docs)\n\n"));
-    body.push_str("| Query          | infino     | Tantivy    | Winner                |\n");
-    body.push_str("|----------------|------------|------------|-----------------------|\n");
+    body.push_str("| Query          | infino     | infino RSS | Tantivy    | Tantivy RSS | Winner                |\n");
+    body.push_str("|----------------|------------|------------|------------|-------------|-----------------------|\n");
 
-    let group = "superfile_fts_search";
-    let queries_or = [
-        "single_rare",
-        "single_df1",
-        "single_common",
-        "two_term_or",
-        "three_wide",
-        "three_similar",
-        "five_term",
-    ];
-    let queries_and = [
-        "two_term_and",
-        "three_wide_and",
-        "three_similar_and",
-        "five_term_and",
-    ];
-
-    body.push_str("**OR queries:**\n\n");
-    for q in queries_or {
+    let group = group_name::SUPERFILE_FTS_SEARCH;
+    let row = |q: &str, body: &mut String| {
         let inf = read_infino_mean_ns(group, &format!("{q}_infino_top10"));
         let tan = read_mean_ns(group, &format!("{q}_tantivy_top10"));
         let inf_s = inf.map(fmt_time).unwrap_or_else(|| "—".into());
         let tan_s = tan.map(fmt_time).unwrap_or_else(|| "—".into());
+        let inf_rss = rss::read_infino_peak_rss_bytes(group, &format!("{q}_infino_top10"))
+            .map(rss::fmt_bytes)
+            .unwrap_or_else(|| "—".into());
+        let tan_rss = rss::read_peak_rss_bytes(group, &format!("{q}_tantivy_top10"))
+            .map(rss::fmt_bytes)
+            .unwrap_or_else(|| "—".into());
         let w = fmt_winner("infino", inf, "tantivy", tan);
-        body.push_str(&format!("| {q:14} | {inf_s:10} | {tan_s:10} | {w:21} |\n"));
+        body.push_str(&format!(
+            "| {q:14} | {inf_s:10} | {inf_rss:10} | {tan_s:10} | {tan_rss:11} | {w:21} |\n"
+        ));
+    };
+
+    body.push_str("**OR queries:**\n\n");
+    for q in QUERY_NAMES_OR {
+        row(q, &mut body);
     }
 
     body.push_str("\n**AND queries:**\n\n");
-    for q in queries_and {
-        let inf = read_infino_mean_ns(group, &format!("{q}_infino_top10"));
-        let tan = read_mean_ns(group, &format!("{q}_tantivy_top10"));
-        let inf_s = inf.map(fmt_time).unwrap_or_else(|| "—".into());
-        let tan_s = tan.map(fmt_time).unwrap_or_else(|| "—".into());
-        let w = fmt_winner("infino", inf, "tantivy", tan);
-        body.push_str(&format!("| {q:14} | {inf_s:10} | {tan_s:10} | {w:21} |\n"));
+    for q in QUERY_NAMES_AND {
+        row(q, &mut body);
     }
 
     body.push('\n');
     body.push_str("**Per-algorithm probes** (infino-only, WAND+BMW vs MaxScore+BMM):\n\n");
-    body.push_str("| Shape         | WAND+BMW   | MaxScore+BMM | Winner                |\n");
-    body.push_str("|---------------|------------|--------------|-----------------------|\n");
+    body.push_str("| Shape         | WAND+BMW   | WAND+BMW RSS | MaxScore+BMM | MaxScore+BMM RSS | Winner                |\n");
+    body.push_str("|---------------|------------|--------------|--------------|------------------|-----------------------|\n");
     for shape in ["wide_3", "similar_3", "similar_5"] {
         let wand = read_infino_mean_ns(group, &format!("{shape}_wand_top10"));
         let bmm = read_infino_mean_ns(group, &format!("{shape}_bmm_top10"));
         let wand_s = wand.map(fmt_time).unwrap_or_else(|| "—".into());
         let bmm_s = bmm.map(fmt_time).unwrap_or_else(|| "—".into());
+        let wand_rss = rss::read_infino_peak_rss_bytes(group, &format!("{shape}_wand_top10"))
+            .map(rss::fmt_bytes)
+            .unwrap_or_else(|| "—".into());
+        let bmm_rss = rss::read_infino_peak_rss_bytes(group, &format!("{shape}_bmm_top10"))
+            .map(rss::fmt_bytes)
+            .unwrap_or_else(|| "—".into());
         let w = fmt_winner("WAND+BMW", wand, "MaxScore+BMM", bmm);
-        body.push_str(&format!("| {shape:13} | {wand_s:10} | {bmm_s:12} | {w:21} |\n"));
+        body.push_str(&format!(
+            "| {shape:13} | {wand_s:10} | {wand_rss:12} | {bmm_s:12} | {bmm_rss:16} | {w:21} |\n"
+        ));
     }
 
-    crate::markdown::emit(&MarkdownSection {
+    markdown::emit(&MarkdownSection {
         anchor_id: "bench/fts/superfile/search".into(),
         body,
     });

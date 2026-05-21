@@ -29,6 +29,7 @@ use std::sync::{Arc, OnceLock};
 use criterion::{Criterion, Throughput, criterion_group};
 use rayon::ThreadPool;
 use rayon::prelude::*;
+use retrievalbench::{corpus, markdown, rss};
 use tantivy::Index;
 use tantivy::Term;
 use tantivy::collector::TopDocs;
@@ -53,7 +54,7 @@ static DOCS: OnceLock<Vec<String>> = OnceLock::new();
 static TANTIVY: OnceLock<TantivyHandles> = OnceLock::new();
 
 fn docs() -> &'static [String] {
-    DOCS.get_or_init(|| crate::corpus::generate_text_corpus(N_DOCS, 1))
+    DOCS.get_or_init(|| corpus::generate_text_corpus(N_DOCS, 1))
         .as_slice()
 }
 
@@ -278,12 +279,19 @@ fn bench_ingest(c: &mut Criterion) {
     let mut g = c.benchmark_group("supertable_fts_build");
     g.sample_size(10);
     g.throughput(Throughput::Elements(N_DOCS as u64));
+    let rss_sample = rss::PeakSampler::start_default();
 
     g.bench_function("tantivy_default_threads", |b| {
         b.iter_with_large_drop(|| build_supertable_tantivy(black_box(docs())));
     });
 
     g.finish();
+    let peak = rss_sample.stop();
+    let _ = rss::write_peak_rss(
+        group_name::SUPERTABLE_FTS_BUILD,
+        "tantivy_default_threads",
+        peak,
+    );
 
     emit_ingest_markdown();
 }
@@ -312,6 +320,7 @@ fn bench_search(c: &mut Criterion) {
 
     let mut g = c.benchmark_group("supertable_fts_search");
     g.sample_size(10);
+    let rss_sample = rss::PeakSampler::start_default();
 
     macro_rules! tantivy_query {
         ($name:literal, $q:expr) => {
@@ -339,41 +348,85 @@ fn bench_search(c: &mut Criterion) {
     });
 
     g.finish();
+    let peak = rss_sample.stop();
+    for q in QUERY_NAMES {
+        let _ = rss::write_peak_rss(
+            group_name::SUPERTABLE_FTS_SEARCH,
+            &format!("{q}_tantivy_top10"),
+            peak,
+        );
+    }
 
     emit_search_markdown();
 }
 
 // ─── Markdown summary emitters ────────────────────────────────────────
 
+mod group_name {
+    pub const SUPERTABLE_FTS_BUILD: &str = "supertable_fts_build";
+    pub const SUPERTABLE_FTS_SEARCH: &str = "supertable_fts_search";
+}
+
+const QUERY_NAMES: &[&str] = &[
+    "single_rare",
+    "single_common",
+    "two_term_or",
+    "three_wide",
+    "three_similar",
+    "five_term",
+    "prefix",
+];
+
 fn emit_ingest_markdown() {
-    use crate::markdown::{
+    use markdown::{
         MarkdownSection, fmt_throughput, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns,
     };
 
-    let group = "supertable_fts_build";
+    let group = group_name::SUPERTABLE_FTS_BUILD;
     let infino_ns = read_infino_mean_ns(group, "infino_auto_writer_pool");
     let tantivy_ns = read_mean_ns(group, "tantivy_default_threads");
+    let infino_rss = rss::read_infino_peak_rss_bytes(group, "infino_auto_writer_pool");
+    let tantivy_rss = rss::read_peak_rss_bytes(group, "tantivy_default_threads");
 
     let mut body = String::new();
     body.push_str(&format!(
         "### Supertable FTS — ingest ({N_DOCS} docs, Zipfian, 200 tokens/doc, 10K vocab)\n\n"
     ));
-    body.push_str("| Engine                  | Time       | Throughput | vs Tantivy        |\n");
-    body.push_str("|-------------------------|------------|------------|-------------------|\n");
-    for (label, ns, baseline_ns, is_baseline) in [
-        ("infino_auto_writer_pool", infino_ns, tantivy_ns, false),
-        ("tantivy_default_threads", tantivy_ns, tantivy_ns, true),
+    body.push_str(
+        "| Engine                  | Time       | Throughput | Peak RSS | vs Tantivy        |\n",
+    );
+    body.push_str(
+        "|-------------------------|------------|------------|----------|-------------------|\n",
+    );
+    for (label, ns, peak_rss, baseline_ns, is_baseline) in [
+        (
+            "infino_auto_writer_pool",
+            infino_ns,
+            infino_rss,
+            tantivy_ns,
+            false,
+        ),
+        (
+            "tantivy_default_threads",
+            tantivy_ns,
+            tantivy_rss,
+            tantivy_ns,
+            true,
+        ),
     ] {
         let time = ns.map(fmt_time).unwrap_or_else(|| "—".into());
         let thrpt = ns
             .map(|n| fmt_throughput((N_DOCS as f64) / (n / 1e9)))
             .unwrap_or_else(|| "—".into());
+        let rss = peak_rss.map(rss::fmt_bytes).unwrap_or_else(|| "—".into());
         let cmp = if is_baseline {
             "—".to_string()
         } else {
             fmt_winner("infino", ns, "tantivy", baseline_ns)
         };
-        body.push_str(&format!("| {label:23} | {time:10} | {thrpt:10} | {cmp:17} |\n"));
+        body.push_str(&format!(
+            "| {label:23} | {time:10} | {thrpt:10} | {rss:8} | {cmp:17} |\n"
+        ));
     }
     body.push_str(
         "\n*Output cardinality: infino emits `min(writer_pool.threads, total_rows)` superfiles \
@@ -383,41 +436,38 @@ fn emit_ingest_markdown() {
          segment count.*\n",
     );
 
-    crate::markdown::emit(&MarkdownSection {
+    markdown::emit(&MarkdownSection {
         anchor_id: "bench/fts/supertable/ingest".into(),
         body,
     });
 }
 
 fn emit_search_markdown() {
-    use crate::markdown::{
-        MarkdownSection, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns,
-    };
+    use markdown::{MarkdownSection, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns};
 
-    let group = "supertable_fts_search";
+    let group = group_name::SUPERTABLE_FTS_SEARCH;
     let mut body = String::new();
     body.push_str(&format!("### Supertable FTS — search ({N_DOCS} docs)\n\n"));
-    body.push_str("| Query          | infino     | Tantivy    | Winner                |\n");
-    body.push_str("|----------------|------------|------------|-----------------------|\n");
-    let queries = [
-        "single_rare",
-        "single_common",
-        "two_term_or",
-        "three_wide",
-        "three_similar",
-        "five_term",
-        "prefix",
-    ];
-    for q in queries {
+    body.push_str("| Query          | infino     | infino RSS | Tantivy    | Tantivy RSS | Winner                |\n");
+    body.push_str("|----------------|------------|------------|------------|-------------|-----------------------|\n");
+    for q in QUERY_NAMES {
         let inf = read_infino_mean_ns(group, &format!("{q}_supertable_top10"));
         let tan = read_mean_ns(group, &format!("{q}_tantivy_top10"));
         let inf_s = inf.map(fmt_time).unwrap_or_else(|| "—".into());
         let tan_s = tan.map(fmt_time).unwrap_or_else(|| "—".into());
+        let inf_rss = rss::read_infino_peak_rss_bytes(group, &format!("{q}_supertable_top10"))
+            .map(rss::fmt_bytes)
+            .unwrap_or_else(|| "—".into());
+        let tan_rss = rss::read_peak_rss_bytes(group, &format!("{q}_tantivy_top10"))
+            .map(rss::fmt_bytes)
+            .unwrap_or_else(|| "—".into());
         let w = fmt_winner("infino", inf, "tantivy", tan);
-        body.push_str(&format!("| {q:14} | {inf_s:10} | {tan_s:10} | {w:21} |\n"));
+        body.push_str(&format!(
+            "| {q:14} | {inf_s:10} | {inf_rss:10} | {tan_s:10} | {tan_rss:11} | {w:21} |\n"
+        ));
     }
 
-    crate::markdown::emit(&MarkdownSection {
+    markdown::emit(&MarkdownSection {
         anchor_id: "bench/fts/supertable/search".into(),
         body,
     });

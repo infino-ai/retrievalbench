@@ -22,10 +22,13 @@ use std::sync::OnceLock;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group};
 use lancedb::Table;
+use retrievalbench::rss;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
-use crate::corpus::{Calibrated, DIM};
+use retrievalbench::corpus::{self, Calibrated, DIM};
+use retrievalbench::lance;
+use retrievalbench::markdown;
 
 // ─── Constants ────────────────────────────────────────────────────────
 
@@ -55,47 +58,29 @@ static LANCE: OnceLock<LanceHandles> = OnceLock::new();
 static CALIBRATIONS: OnceLock<Calibrations> = OnceLock::new();
 
 fn vectors() -> &'static [f32] {
-    VECTORS.get_or_init(|| {
-        crate::corpus::generate_vector_corpus(N_DOCS, crate::corpus::n_cent(N_DOCS), 1, true)
-    })
+    VECTORS.get_or_init(|| corpus::generate_vector_corpus(N_DOCS, corpus::n_cent(N_DOCS), 1, true))
 }
 
 fn queries_correctness() -> &'static [Vec<f32>] {
     QUERIES_CORRECTNESS.get_or_init(|| {
-        crate::corpus::generate_realistic_queries(
-            vectors(),
-            N_DOCS,
-            N_CORRECTNESS_QUERIES,
-            17,
-            true,
-            0.05,
-        )
+        corpus::generate_realistic_queries(vectors(), N_DOCS, N_CORRECTNESS_QUERIES, 17, true, 0.05)
     })
 }
 
 fn queries_calibration() -> &'static [Vec<f32>] {
     QUERIES_CALIBRATION.get_or_init(|| {
-        crate::corpus::generate_realistic_queries(
-            vectors(),
-            N_DOCS,
-            N_CALIBRATION_QUERIES,
-            99,
-            true,
-            0.05,
-        )
+        corpus::generate_realistic_queries(vectors(), N_DOCS, N_CALIBRATION_QUERIES, 99, true, 0.05)
     })
 }
 
 fn ground_truth_correctness() -> &'static [Vec<u32>] {
-    GROUND_TRUTH_CORRECTNESS.get_or_init(|| {
-        crate::corpus::ground_truth(vectors(), N_DOCS, queries_correctness(), TOP_K)
-    })
+    GROUND_TRUTH_CORRECTNESS
+        .get_or_init(|| corpus::ground_truth(vectors(), N_DOCS, queries_correctness(), TOP_K))
 }
 
 fn ground_truth_calibration() -> &'static [Vec<u32>] {
-    GROUND_TRUTH_CALIBRATION.get_or_init(|| {
-        crate::corpus::ground_truth(vectors(), N_DOCS, queries_calibration(), TOP_K)
-    })
+    GROUND_TRUTH_CALIBRATION
+        .get_or_init(|| corpus::ground_truth(vectors(), N_DOCS, queries_calibration(), TOP_K))
 }
 
 fn lance_handles() -> &'static LanceHandles {
@@ -111,24 +96,28 @@ struct LanceHandles {
 }
 
 fn build_lance_handles() -> LanceHandles {
-    let n_cent = crate::corpus::n_cent(N_DOCS) as u32;
+    let n_cent = corpus::n_cent(N_DOCS) as u32;
     let rt = Runtime::new().expect("tokio runtime");
     let dir = TempDir::new().expect("tempdir");
-    let (table, _) = crate::lance::build_lance_table(
+    let (table, _) = lance::build_lance_table(
         &rt,
         dir.path(),
         vectors(),
         N_DOCS,
         n_cent,
-        crate::lance::default_n_sub_vectors(),
+        lance::default_n_sub_vectors(),
     );
-    LanceHandles { table, _dir: dir, rt }
+    LanceHandles {
+        table,
+        _dir: dir,
+        rt,
+    }
 }
 
 // ─── Correctness ──────────────────────────────────────────────────────
 
 fn assert_lance_self_consistent(lh: &LanceHandles) -> f32 {
-    let mean_recall = crate::lance::mean_recall_lance(
+    let mean_recall = lance::mean_recall_lance(
         &lh.rt,
         &lh.table,
         queries_correctness(),
@@ -163,7 +152,7 @@ fn calibrations() -> &'static Calibrations {
         );
         let mut l: [Option<Calibrated>; 3] = [None; 3];
         for (i, &target) in RECALL_TARGETS.iter().enumerate() {
-            l[i] = crate::lance::calibrate_lance(
+            l[i] = lance::calibrate_lance(
                 &lh.rt,
                 &lh.table,
                 qs,
@@ -193,29 +182,36 @@ fn bench(c: &mut Criterion) {
     // ---- Ingest sub-bench (group: supertable_vec_build) ------------
     {
         let v = vectors();
-        let n_cent = crate::corpus::n_cent(N_DOCS) as u32;
+        let n_cent = corpus::n_cent(N_DOCS) as u32;
 
         let mut g = c.benchmark_group("supertable_vec_build");
         g.sample_size(10);
         g.throughput(Throughput::Elements(N_DOCS as u64));
+        let rss_sample = rss::PeakSampler::start_default();
 
         let rt = Runtime::new().expect("tokio runtime");
         g.bench_function(format!("lance_{N_DOCS}docs"), |b| {
             b.iter_with_large_drop(|| {
                 let dir = TempDir::new().expect("tempdir");
-                let (table, _) = crate::lance::build_lance_table(
+                let (table, _) = lance::build_lance_table(
                     &rt,
                     dir.path(),
                     black_box(v),
                     N_DOCS,
                     n_cent,
-                    crate::lance::default_n_sub_vectors(),
+                    lance::default_n_sub_vectors(),
                 );
                 (table, dir)
             });
         });
 
         g.finish();
+        let peak = rss_sample.stop();
+        let _ = rss::write_peak_rss(
+            group_name::SUPERTABLE_VEC_BUILD,
+            &format!("lance_{N_DOCS}docs"),
+            peak,
+        );
 
         emit_ingest_markdown();
     }
@@ -227,6 +223,7 @@ fn bench(c: &mut Criterion) {
 
         let mut g = c.benchmark_group("supertable_vec_search");
         g.sample_size(10);
+        let rss_sample = rss::PeakSampler::start_default();
 
         for (i, &target) in RECALL_TARGETS.iter().enumerate() {
             let label = format!("recall_at_least_{:02}", (target * 100.0) as u32);
@@ -241,8 +238,7 @@ fn bench(c: &mut Criterion) {
                     |b, &(p, r)| {
                         let q = &qs[0];
                         b.iter(|| {
-                            let hits =
-                                crate::lance::search_lance(&lh.rt, &lh.table, q, TOP_K, p, r);
+                            let hits = lance::search_lance(&lh.rt, &lh.table, q, TOP_K, p, r);
                             black_box(hits)
                         });
                     },
@@ -251,6 +247,14 @@ fn bench(c: &mut Criterion) {
         }
 
         g.finish();
+        let peak = rss_sample.stop();
+        for (i, &target) in RECALL_TARGETS.iter().enumerate() {
+            let label = format!("recall_at_least_{:02}", (target * 100.0) as u32);
+            if let Some(c_la) = cal.lance[i] {
+                let bid = format!("lance_{label}/p={},r={}", c_la.probe, c_la.refine as u32);
+                let _ = rss::write_peak_rss(group_name::SUPERTABLE_VEC_SEARCH, &bid, peak);
+            }
+        }
 
         emit_search_markdown();
     }
@@ -258,89 +262,99 @@ fn bench(c: &mut Criterion) {
 
 // ─── Markdown summary emitters ────────────────────────────────────────
 
+mod group_name {
+    pub const SUPERTABLE_VEC_BUILD: &str = "supertable_vec_build";
+    pub const SUPERTABLE_VEC_SEARCH: &str = "supertable_vec_search";
+}
+
 fn emit_ingest_markdown() {
-    use crate::markdown::{
+    use markdown::{
         MarkdownSection, fmt_throughput, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns,
     };
 
-    let group = "supertable_vec_build";
-    let infino_bench = format!(
-        "supertable_{N_DOCS}docs_{n_seg}superfiles",
-        n_seg = 4
-    );
+    let group = group_name::SUPERTABLE_VEC_BUILD;
+    let infino_bench = format!("supertable_{N_DOCS}docs_{n_seg}superfiles", n_seg = 4);
     let infino_ns = read_infino_mean_ns(group, &infino_bench);
     let lance_ns = read_mean_ns(group, &format!("lance_{N_DOCS}docs"));
+    let infino_rss = rss::read_infino_peak_rss_bytes(group, &infino_bench);
+    let lance_rss = rss::read_peak_rss_bytes(group, &format!("lance_{N_DOCS}docs"));
 
     let mut body = String::new();
     body.push_str(&format!(
         "### Supertable vector — ingest ({N_DOCS} docs × dim={DIM}, sharded into 4 superfiles)\n\n"
     ));
-    body.push_str("| Engine | Time | Throughput | vs LanceDB |\n");
-    body.push_str("|--------|------|------------|------------|\n");
-    for (label, ns, baseline, is_baseline) in [
-        ("supertable", infino_ns, lance_ns, false),
-        ("lance", lance_ns, lance_ns, true),
+    body.push_str("| Engine | Time | Throughput | Peak RSS | vs LanceDB |\n");
+    body.push_str("|--------|------|------------|----------|------------|\n");
+    for (label, ns, peak_rss, baseline, is_baseline) in [
+        ("supertable", infino_ns, infino_rss, lance_ns, false),
+        ("lance", lance_ns, lance_rss, lance_ns, true),
     ] {
         let time = ns.map(fmt_time).unwrap_or_else(|| "—".into());
         let thrpt = ns
             .map(|n| fmt_throughput((N_DOCS as f64) / (n / 1e9)))
             .unwrap_or_else(|| "—".into());
+        let rss = peak_rss.map(rss::fmt_bytes).unwrap_or_else(|| "—".into());
         let cmp = if is_baseline {
             "—".to_string()
         } else {
             fmt_winner("infino", ns, "lance", baseline)
         };
-        body.push_str(&format!("| {label} | {time} | {thrpt} | {cmp} |\n"));
+        body.push_str(&format!("| {label} | {time} | {thrpt} | {rss} | {cmp} |\n"));
     }
 
-    crate::markdown::emit(&MarkdownSection {
+    markdown::emit(&MarkdownSection {
         anchor_id: "bench/vector/supertable/ingest".into(),
         body,
     });
 }
 
 fn emit_search_markdown() {
-    use crate::markdown::{
-        MarkdownSection, fmt_time, fmt_winner, read_infino_calibrated, read_mean_ns,
-    };
+    use markdown::{MarkdownSection, fmt_time, fmt_winner, read_infino_calibrated, read_mean_ns};
 
     let cal = calibrations();
-    let group = "supertable_vec_search";
+    let group = group_name::SUPERTABLE_VEC_SEARCH;
 
     let mut body = String::new();
     body.push_str(&format!(
         "### Supertable vector — search ({N_DOCS} docs × dim={DIM}, calibrated at recall targets)\n\n"
     ));
-    body.push_str("| Recall target | supertable (probe/seg, refine) | supertable p50 | Lance (probe, refine) | Lance p50 | Winner |\n");
-    body.push_str("|---------------|--------------------------------|----------------|-----------------------|-----------|--------|\n");
+    body.push_str("| Recall target | supertable (probe/seg, refine) | supertable p50 | supertable RSS | Lance (probe, refine) | Lance p50 | Lance RSS | Winner |\n");
+    body.push_str("|---------------|--------------------------------|----------------|----------------|-----------------------|-----------|-----------|--------|\n");
 
     for (i, &target) in RECALL_TARGETS.iter().enumerate() {
         let recall_label = format!("recall_at_least_{:02}", (target * 100.0) as u32);
         let row_target = format!("{target:.2}");
 
-        let (st_cell, st_ns) =
+        let (st_cell, st_ns, st_rss) =
             match read_infino_calibrated(group, &format!("supertable_{recall_label}")) {
-                Some((p, r, ns)) => (format!("(p={p}, r={r})"), Some(ns)),
-                None => ("—".into(), None),
+                Some((p, r, ns)) => {
+                    let bid = format!("supertable_{recall_label}/p={p},r={r}");
+                    let peak_rss = rss::read_infino_peak_rss_bytes(group, &bid);
+                    (format!("(p={p}, r={r})"), Some(ns), peak_rss)
+                }
+                None => ("—".into(), None, None),
             };
-        let (lan_cell, lan_ns) = match cal.lance[i] {
+        let (lan_cell, lan_ns, lan_rss) = match cal.lance[i] {
             Some(c) => {
                 let r_u32 = c.refine as u32;
                 let bid = format!("lance_{recall_label}/p={},r={}", c.probe, r_u32);
                 let ns = read_mean_ns(group, &bid);
-                (format!("(p={}, r={})", c.probe, r_u32), ns)
+                let peak_rss = rss::read_peak_rss_bytes(group, &bid);
+                (format!("(p={}, r={})", c.probe, r_u32), ns, peak_rss)
             }
-            None => ("—".into(), None),
+            None => ("—".into(), None, None),
         };
         let st_t = st_ns.map(fmt_time).unwrap_or_else(|| "—".into());
         let lan_t = lan_ns.map(fmt_time).unwrap_or_else(|| "—".into());
+        let st_rss = st_rss.map(rss::fmt_bytes).unwrap_or_else(|| "—".into());
+        let lan_rss = lan_rss.map(rss::fmt_bytes).unwrap_or_else(|| "—".into());
         let winner = fmt_winner("supertable", st_ns, "lance", lan_ns);
         body.push_str(&format!(
-            "| {row_target} | {st_cell} | {st_t} | {lan_cell} | {lan_t} | {winner} |\n"
+            "| {row_target} | {st_cell} | {st_t} | {st_rss} | {lan_cell} | {lan_t} | {lan_rss} | {winner} |\n"
         ));
     }
 
-    crate::markdown::emit(&MarkdownSection {
+    markdown::emit(&MarkdownSection {
         anchor_id: "bench/vector/supertable/search".into(),
         body,
     });

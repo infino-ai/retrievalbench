@@ -57,9 +57,9 @@ use rand::rngs::StdRng;
 use infino::superfile::builder::FtsConfig;
 use infino::superfile::fts::reader::BoolMode;
 use infino::superfile::fts::tokenize::Tokenizer;
-use infino::test_helpers::{schema_id_title, default_tokenizer};
 use infino::supertable::query::SuperfileHit;
 use infino::supertable::{Supertable, SupertableOptions};
+use infino::test_helpers::{default_tokenizer, schema_id_title};
 
 use tantivy::collector::TopDocs;
 use tantivy::indexer::NoMergePolicy;
@@ -175,7 +175,6 @@ fn corpus_with_prefix_terms() -> Vec<(u64, String)> {
 
 // ---- Supertable side -----------------------------------------------
 
-
 /// Build a supertable with `n_superfiles` superfiles, dividing the
 /// corpus into equal contiguous chunks. One commit per chunk so
 /// the segment boundaries match the per-engine shard boundaries
@@ -205,8 +204,7 @@ fn build_supertable(corpus: &[(u64, String)], n_superfiles: usize) -> Supertable
     for chunk in corpus.chunks(chunk_size) {
         let titles =
             LargeStringArray::from(chunk.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>());
-        let batch = RecordBatch::try_new(schema_id_title(), vec![Arc::new(titles)])
-            .expect("batch");
+        let batch = RecordBatch::try_new(schema_id_title(), vec![Arc::new(titles)]).expect("batch");
         w.append(&batch).expect("append");
         w.commit().expect("commit");
     }
@@ -227,7 +225,11 @@ fn build_supertable(corpus: &[(u64, String)], n_superfiles: usize) -> Supertable
 /// This mirrors the segment-shape constraint the test fixture
 /// imposes; production callers would carry their own surrogate
 /// key column.
-fn supertable_to_global_ids(st: &Supertable, hits: Vec<SuperfileHit>, chunk_size: usize) -> Vec<u64> {
+fn supertable_to_global_ids(
+    st: &Supertable,
+    hits: Vec<SuperfileHit>,
+    chunk_size: usize,
+) -> Vec<u64> {
     let r = st.reader();
     let manifest = r.manifest();
     hits.into_iter()

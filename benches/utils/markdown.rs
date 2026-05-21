@@ -44,12 +44,13 @@ pub fn emit(section: &MarkdownSection) {
     if std::env::var_os("INFINO_BENCH_UPDATE_README").is_some() {
         let path = resolve_readme_path();
         if let Err(e) = update_readme(&path, section) {
-            eprintln!(
-                "[markdown] failed to update {}: {e}",
-                path.display(),
-            );
+            eprintln!("[markdown] failed to update {}: {e}", path.display(),);
         } else {
-            eprintln!("[markdown] updated {} ({})", path.display(), section.anchor_id);
+            eprintln!(
+                "[markdown] updated {} ({})",
+                path.display(),
+                section.anchor_id
+            );
         }
     }
 }
@@ -125,13 +126,24 @@ pub fn fmt_throughput(elements_per_sec: f64) -> String {
 /// `"—"` if either side is missing. Reads naturally inline in a
 /// table cell — no need for the reader to infer direction from the
 /// row label.
-pub fn fmt_winner(lhs_label: &str, lhs_ns: Option<f64>, rhs_label: &str, rhs_ns: Option<f64>) -> String {
+pub fn fmt_winner(
+    lhs_label: &str,
+    lhs_ns: Option<f64>,
+    rhs_label: &str,
+    rhs_ns: Option<f64>,
+) -> String {
     match (lhs_ns, rhs_ns) {
         (Some(a), Some(b)) if a > 0.0 && b > 0.0 => {
             if a < b {
-                format!("**{lhs_label} wins, {:.1}× faster than {rhs_label}**", b / a)
+                format!(
+                    "**{lhs_label} wins, {:.1}× faster than {rhs_label}**",
+                    b / a
+                )
             } else if b < a {
-                format!("**{rhs_label} wins, {:.1}× faster than {lhs_label}**", a / b)
+                format!(
+                    "**{rhs_label} wins, {:.1}× faster than {lhs_label}**",
+                    a / b
+                )
             } else {
                 "tie".to_string()
             }
@@ -186,10 +198,7 @@ pub fn read_infino_mean_ns(group: &str, bench: &str) -> Option<f64> {
 /// Returns `None` if no matching directory exists (infino hasn't run
 /// this group yet) or all matches fail to parse.
 #[allow(dead_code)]
-pub fn read_infino_calibrated(
-    group: &str,
-    bench_prefix: &str,
-) -> Option<(usize, usize, f64)> {
+pub fn read_infino_calibrated(group: &str, bench_prefix: &str) -> Option<(usize, usize, f64)> {
     let base = format!("../infino/target/criterion/{group}/{bench_prefix}");
     let entries = fs::read_dir(&base).ok()?;
     for entry in entries.flatten() {
@@ -208,7 +217,10 @@ pub fn read_infino_calibrated(
             Ok(v) => v,
             Err(_) => continue,
         };
-        let ns = v.get("mean").and_then(|m| m.get("point_estimate")).and_then(|x| x.as_f64());
+        let ns = v
+            .get("mean")
+            .and_then(|m| m.get("point_estimate"))
+            .and_then(|x| x.as_f64());
         if let Some(ns) = ns {
             return Some((p, r, ns));
         }
@@ -229,11 +241,7 @@ fn parse_p_r(name: &str) -> Option<(usize, usize)> {
 /// element count for the bench. Returns `None` if the bench result
 /// isn't on disk.
 #[allow(dead_code)]
-pub fn read_mean_with_throughput(
-    group: &str,
-    bench: &str,
-    elements: u64,
-) -> Option<(f64, f64)> {
+pub fn read_mean_with_throughput(group: &str, bench: &str, elements: u64) -> Option<(f64, f64)> {
     let ns = read_mean_ns(group, bench)?;
     if ns <= 0.0 {
         return None;

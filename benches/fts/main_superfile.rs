@@ -8,13 +8,6 @@
 //! INFINO_BENCH_UPDATE_README=1 cargo bench --bench fts-superfile
 //! ```
 
-#[path = "../utils/corpus.rs"]
-mod corpus;
-
-#[path = "../utils/markdown.rs"]
-mod markdown;
-
-#[path = "superfile.rs"]
 mod superfile;
 
 criterion::criterion_main!(superfile::benches);

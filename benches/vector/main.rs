@@ -10,17 +10,7 @@
 //! INFINO_BENCH_FULL=1 cargo bench --bench vector -- --quick   # 10M-doc scale (point estimates)
 //! ```
 
-#[path = "../utils/corpus.rs"]
-mod corpus;
-#[path = "../utils/lance.rs"]
-mod lance;
-#[path = "../utils/markdown.rs"]
-mod markdown;
-
-// Single-binary vector bench per topic.
-#[path = "superfile.rs"]
 mod superfile;
-#[path = "supertable.rs"]
 mod supertable;
 
 criterion::criterion_main!(superfile::benches, supertable::benches);
