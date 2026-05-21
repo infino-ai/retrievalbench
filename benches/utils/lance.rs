@@ -22,7 +22,6 @@
 //! infino's *published* numbers (from `../infino/target/criterion/...`)
 //! rather than re-measuring infino in this process.
 
-#![allow(dead_code)]
 #![allow(clippy::too_many_arguments)]
 
 use std::path::Path;

@@ -5,8 +5,6 @@
 //! deterministic workloads for Lance/Tantivy-vs-infino comparisons,
 //! not as part of infino's public or test-helper API surface.
 
-#![allow(dead_code)] // Each bench uses a subset; deny would force per-bench cfg gates.
-
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::Arc;
