@@ -189,6 +189,16 @@ fn bench(c: &mut Criterion) {
         let q_five = parser
             .parse_query("term00050 term00051 term00052 term00053 term00054")
             .expect("parse");
+        let q_two_and = parser.parse_query("+term00001 +term00050").expect("parse");
+        let q_three_wide_and = parser
+            .parse_query("+term00001 +term00050 +term00100")
+            .expect("parse");
+        let q_three_similar_and = parser
+            .parse_query("+term00050 +term00051 +term00052")
+            .expect("parse");
+        let q_five_and = parser
+            .parse_query("+term00050 +term00051 +term00052 +term00053 +term00054")
+            .expect("parse");
 
         let mut g = c.benchmark_group("superfile_fts_search");
 
@@ -199,6 +209,10 @@ fn bench(c: &mut Criterion) {
         bench_tantivy_only(&mut g, "three_wide", t, q_three_wide.as_ref());
         bench_tantivy_only(&mut g, "three_similar", t, q_three_similar.as_ref());
         bench_tantivy_only(&mut g, "five_term", t, q_five.as_ref());
+        bench_tantivy_only(&mut g, "two_term_and", t, q_two_and.as_ref());
+        bench_tantivy_only(&mut g, "three_wide_and", t, q_three_wide_and.as_ref());
+        bench_tantivy_only(&mut g, "three_similar_and", t, q_three_similar_and.as_ref());
+        bench_tantivy_only(&mut g, "five_term_and", t, q_five_and.as_ref());
 
         g.finish();
 
@@ -267,7 +281,7 @@ fn emit_search_markdown() {
     body.push_str("|----------------|------------|------------|-----------------------|\n");
 
     let group = "superfile_fts_search";
-    let queries = [
+    let queries_or = [
         "single_rare",
         "single_df1",
         "single_common",
@@ -276,7 +290,25 @@ fn emit_search_markdown() {
         "three_similar",
         "five_term",
     ];
-    for q in queries {
+    let queries_and = [
+        "two_term_and",
+        "three_wide_and",
+        "three_similar_and",
+        "five_term_and",
+    ];
+
+    body.push_str("**OR queries:**\n\n");
+    for q in queries_or {
+        let inf = read_infino_mean_ns(group, &format!("{q}_infino_top10"));
+        let tan = read_mean_ns(group, &format!("{q}_tantivy_top10"));
+        let inf_s = inf.map(fmt_time).unwrap_or_else(|| "—".into());
+        let tan_s = tan.map(fmt_time).unwrap_or_else(|| "—".into());
+        let w = fmt_winner("infino", inf, "tantivy", tan);
+        body.push_str(&format!("| {q:14} | {inf_s:10} | {tan_s:10} | {w:21} |\n"));
+    }
+
+    body.push_str("\n**AND queries:**\n\n");
+    for q in queries_and {
         let inf = read_infino_mean_ns(group, &format!("{q}_infino_top10"));
         let tan = read_mean_ns(group, &format!("{q}_tantivy_top10"));
         let inf_s = inf.map(fmt_time).unwrap_or_else(|| "—".into());
