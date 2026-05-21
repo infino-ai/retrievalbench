@@ -55,6 +55,16 @@ path = "benches/fts/main.rs"
 harness = false
 
 [[bench]]
+name = "fts-superfile"
+path = "benches/fts/main_superfile.rs"
+harness = false
+
+[[bench]]
+name = "fts-supertable"
+path = "benches/fts/main_supertable.rs"
+harness = false
+
+[[bench]]
 name = "vector"
 path = "benches/vector/main.rs"
 harness = false
