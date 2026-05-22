@@ -22,20 +22,11 @@
 //! INFINO_BENCH_FULL=1 cargo bench --bench hybrid -- --quick # 10M-doc scale (point estimates)
 //! ```
 
-#[path = "../utils/corpus.rs"]
-mod corpus;
-
-#[path = "common.rs"]
-mod hybrid_common;
-
-#[path = "build.rs"]
-mod build;
-#[path = "append.rs"]
 mod append;
-#[path = "search.rs"]
-mod search;
-#[path = "mixed_load.rs"]
+mod build;
+mod common;
 mod mixed_load;
+mod search;
 
 criterion::criterion_main!(
     build::benches,

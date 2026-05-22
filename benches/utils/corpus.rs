@@ -1,20 +1,14 @@
-//! Shared bench helpers: deterministic corpus generators, scale knob,
-//! and pre-baked builders. Included as `mod common;` from each
-//! benchmark binary (criterion benches are independent crates, so the
-//! helpers can't live in the main library — they'd otherwise be
-//! `pub fn`s leaking generator code into the public API).
+//! Private retrievalbench corpus + query + ground-truth helpers.
 //!
-//! Scale strategy:
-//!
-//!   - Default: 1M docs. Runs in single-digit seconds per build bench
-//!     and 1.5 GB peak RAM at dim=384, fits comfortably on a 16 GB
-//!     dev laptop.
-//!   - `INFINO_BENCH_FULL=1`: 10M docs. The plan's target scale.
-//!     Vector at 10M × 384 (f32) = 14.6 GB — needs a 32 GB+ machine.
-//!     Use this for milestone validation; baseline numbers in
-//!     `benches/README.md` cover both scales.
+//! This crate owns the comparison bench harness. The helpers stay
+//! here rather than in public `infino`: they exist to generate
+//! deterministic workloads for Lance/Tantivy-vs-infino comparisons,
+//! not as part of infino's public or test-helper API surface.
 
-#![allow(dead_code)] // Each bench uses a subset; deny would force per-bench cfg gates.
+use std::cmp::Ordering;
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Instant;
 
 use bytes::Bytes;
 use infino::superfile::SuperfileReader;
@@ -22,16 +16,37 @@ use infino::superfile::builder::{
     BuilderOptions, FtsConfig, SuperfileBuilder, VectorConfig as SfVectorConfig,
 };
 use infino::superfile::fts::builder::FtsBuilder;
-use infino::test_helpers::default_tokenizer;
 use infino::superfile::vector::builder::{VectorBuilder, VectorConfig};
 use infino::superfile::vector::distance::{Metric, normalize};
 use infino::superfile::vector::reader::VectorReader;
+use infino::test_helpers::default_tokenizer;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand_distr::{Distribution, StandardNormal};
-use std::sync::Arc;
 
-/// Resolved doc count for the current bench run.
+/// Tokens per doc — chosen to land in the same magnitude as a typical
+/// short article (~200 words). The product `n_docs * tokens_per_doc`
+/// drives FTS posting volume.
+pub const TOKENS_PER_DOC: usize = 200;
+
+/// Vocabulary size — controls term-frequency distribution.
+pub const VOCAB_SIZE: usize = 10_000;
+
+/// Vector dimension — matches modern sentence-embedding models
+/// (all-MiniLM-L6-v2 = 384, BGE-small = 384).
+pub const DIM: usize = 384;
+
+pub type Hit = (u32, f32);
+
+#[derive(Debug, Clone, Copy)]
+pub struct Calibrated {
+    pub probe: usize,
+    pub refine: usize,
+    pub recall: f32,
+    pub p50_micros: f64,
+}
+
+/// Resolved doc count for generic benches.
 pub fn n_docs() -> usize {
     if std::env::var("INFINO_BENCH_FULL").is_ok() {
         10_000_000
@@ -40,28 +55,9 @@ pub fn n_docs() -> usize {
     }
 }
 
-/// Tokens per doc — chosen to land in the same magnitude as a typical
-/// short article (~200 words). The product `n_docs * tokens_per_doc`
-/// drives FTS posting volume.
-pub const TOKENS_PER_DOC: usize = 200;
-
-/// Vocabulary size — controls term-frequency distribution. Small enough
-/// that common terms appear in many docs (exercising long posting
-/// lists); large enough that rare terms exist (exercising the FST
-/// + skip-table cold path).
-pub const VOCAB_SIZE: usize = 10_000;
-
-/// Vector dimension — matches modern sentence-embedding models
-/// (all-MiniLM-L6-v2 = 384, BGE-small = 384).
-pub const DIM: usize = 384;
-
-/// IVF cluster count — `~sqrt(n_docs)` is the conventional setting.
-/// We round to a fixed value so different-scale runs share the same
-/// `n_cent` (cluster size scales with corpus size, which is what
-/// matters for IVF behavior).
+/// IVF cluster count — roughly sqrt(n_docs), rounded to the values
+/// the comparison benches use.
 pub fn n_cent(n_docs: usize) -> usize {
-    // 1M → 1024 clusters (~977 docs each)
-    // 10M → 4096 clusters (~2441 docs each)
     if n_docs >= 5_000_000 {
         4096
     } else if n_docs >= 100_000 {
@@ -71,35 +67,13 @@ pub fn n_cent(n_docs: usize) -> usize {
     }
 }
 
-/// Generate a Zipfian-distributed token corpus. Returns a flat
-/// Returns a `Vec<String>` of length `n_docs`, each entry one document
-/// containing `TOKENS_PER_DOC` body tokens plus one doc-unique
-/// identifier token (`doc<7-digit-id>`).
-///
-/// Word frequency on the body follows Zipf's law (`f(rank) ∝ 1/rank`)
-/// over a closed [`VOCAB_SIZE`] vocabulary, so a few terms dominate
-/// (yielding long posting lists) and tail terms appear in few docs
-/// (yielding short lists). This exercises BlockMaxWAND skipping, FST
-/// tail merging, and the posting-codec's bit-width adaptation.
-///
-/// The per-doc identifier models the universal source of `df=1` terms
-/// in production FTS: every real document carries some token unique to
-/// itself (URL hash, ISBN, primary key, headline number). With a
-/// closed-vocab Zipf body alone the corpus has no singletons — the
-/// rarest body term still has df ≈ N / (V · H_V) ≈ 2000 at 1 M docs ×
-/// 200 tokens × 10 K vocab — which underexercises the format's
-/// singleton path (per-term metadata header pressure, BMW per-term
-/// upper bound for one-doc terms, and the inline-encoding short-circuit
-/// the builder applies when `df = 1`). Adding one doc-unique token per
-/// doc creates a natural singleton long tail proportional to `n_docs`.
+/// Generate a Zipfian-distributed token corpus.
 pub fn generate_text_corpus(n_docs: usize, seed: u64) -> Vec<String> {
     let mut rng = StdRng::seed_from_u64(seed);
     let zipf = ZipfDistribution::new(VOCAB_SIZE);
     let mut out = Vec::with_capacity(n_docs);
     for doc_id in 0..n_docs {
-        // +1 token slot for the doc-unique identifier prefix.
         let mut doc = String::with_capacity((TOKENS_PER_DOC + 1) * 8);
-        // Doc-unique identifier — `df = 1` by construction.
         doc.push_str(&format!("doc{doc_id:07}"));
         for _ in 0..TOKENS_PER_DOC {
             let idx = zipf.sample(&mut rng);
@@ -111,11 +85,8 @@ pub fn generate_text_corpus(n_docs: usize, seed: u64) -> Vec<String> {
     out
 }
 
-/// Deterministic Zipfian sampler over `[1, n]`. Inverse-CDF sampler;
-/// O(log n) per draw. Replaces `rand_distr::Zipf` to avoid pulling
-/// the `f64` parameter overhead — we just want integer ranks.
+/// Deterministic Zipfian sampler over `[1, n]`.
 pub struct ZipfDistribution {
-    /// Cumulative `1/i` weights up to rank `n`. Index 0 == rank 1.
     cum_weights: Vec<f64>,
 }
 
@@ -134,35 +105,16 @@ impl ZipfDistribution {
         use rand::RngExt;
         let total = *self.cum_weights.last().expect("non-empty");
         let target = rng.random::<f64>() * total;
-        // Binary search; index of first weight ≥ target = rank-1.
         match self
             .cum_weights
-            .binary_search_by(|p| p.partial_cmp(&target).unwrap_or(std::cmp::Ordering::Equal))
+            .binary_search_by(|p| p.partial_cmp(&target).unwrap_or(Ordering::Equal))
         {
             Ok(i) | Err(i) => i.min(self.cum_weights.len() - 1) + 1,
         }
     }
 }
 
-/// Generate `n_docs` planted-cluster vectors of `DIM` dimensions,
-/// optionally per-doc normalized for cosine. `n_cent` planted
-/// centers; each doc lives near a center with `sigma = 0.3` per-dim
-/// Gaussian noise.
-///
-/// **Centers are intentionally NOT normalized.** Centers are drawn
-/// from `3·N(0, 1)` per dim, giving `||c|| ≈ 3·√DIM ≈ 58` at
-/// `DIM=384`. The per-doc noise norm is `0.3·√DIM ≈ 5.9` — about
-/// 10% of the center magnitude, so docs sit tightly around their
-/// planted center direction. If centers were unit-normalized first
-/// (`||c|| = 1`), the same per-dim noise of 0.3 would dominate
-/// (`||noise|| ≈ 5.9 ≫ ||c|| = 1`), and per-doc normalization would
-/// then destroy the cluster signal — IVF + RaBitQ trained on that
-/// data can't recover any meaningful cluster structure even at
-/// full sweep + maximal rerank. Discovered via the M17 LanceDB
-/// head-to-head: a Lance-equivalent corpus generator
-/// (`tests/recall.rs::generate_planted_corpus`) keeps cluster
-/// signal under cosine; the earlier double-normalize version of
-/// this generator did not.
+/// Generate planted-cluster vectors of [`DIM`] dimensions.
 pub fn generate_vector_corpus(
     n_docs: usize,
     n_cent: usize,
@@ -172,7 +124,6 @@ pub fn generate_vector_corpus(
     let mut rng = StdRng::seed_from_u64(seed);
     let dist = StandardNormal;
 
-    // Centers — kept un-normalized; see fn-doc.
     let centers: Vec<Vec<f32>> = (0..n_cent)
         .map(|_| {
             (0..DIM)
@@ -202,6 +153,90 @@ pub fn generate_vector_corpus(
     out
 }
 
+pub fn generate_realistic_queries(
+    vectors: &[f32],
+    n_docs: usize,
+    n_queries: usize,
+    seed: u64,
+    normalize_each: bool,
+    sigma: f32,
+) -> Vec<Vec<f32>> {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let dist = StandardNormal;
+    let mut out = Vec::with_capacity(n_queries);
+    for i in 0..n_queries {
+        let base_idx = (i * 7919) % n_docs;
+        let off = base_idx * DIM;
+        let mut q: Vec<f32> = (0..DIM)
+            .map(|d| {
+                let s: f64 = dist.sample(&mut rng);
+                vectors[off + d] + (s as f32) * sigma
+            })
+            .collect();
+        if normalize_each {
+            normalize(&mut q);
+        }
+        out.push(q);
+    }
+    out
+}
+
+pub fn brute_force_topk_cosine(
+    vectors: &[f32],
+    n_docs: usize,
+    query: &[f32],
+    k: usize,
+) -> Vec<u32> {
+    let mut scored: Vec<(u32, f32)> = (0..n_docs as u32)
+        .map(|i| {
+            let off = (i as usize) * DIM;
+            let mut dot = 0f32;
+            for d in 0..DIM {
+                dot += vectors[off + d] * query[d];
+            }
+            (i, -dot)
+        })
+        .collect();
+    scored.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+    scored.truncate(k);
+    scored.into_iter().map(|(i, _)| i).collect()
+}
+
+pub fn ground_truth(
+    vectors: &[f32],
+    n_docs: usize,
+    queries: &[Vec<f32>],
+    k: usize,
+) -> Vec<Vec<u32>> {
+    queries
+        .iter()
+        .map(|q| brute_force_topk_cosine(vectors, n_docs, q, k))
+        .collect()
+}
+
+pub fn recall_at_k(predicted: &[Hit], truth: &[u32]) -> f32 {
+    if truth.is_empty() {
+        return 1.0;
+    }
+    let truth_set: HashSet<u32> = truth.iter().copied().collect();
+    let hits = predicted
+        .iter()
+        .filter(|(id, _)| truth_set.contains(id))
+        .count();
+    hits as f32 / truth.len() as f32
+}
+
+pub fn p50_micros<F: FnMut()>(mut f: F, iters: usize) -> f64 {
+    let mut samples = Vec::with_capacity(iters);
+    for _ in 0..iters {
+        let t0 = Instant::now();
+        f();
+        samples.push(t0.elapsed().as_secs_f64() * 1_000_000.0);
+    }
+    samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    samples[samples.len() / 2]
+}
+
 /// Build a stand-alone FTS index from a token corpus.
 pub fn build_fts_index(docs: &[String]) -> FtsBuilder {
     let mut b = FtsBuilder::new(default_tokenizer());
@@ -213,7 +248,8 @@ pub fn build_fts_index(docs: &[String]) -> FtsBuilder {
     b
 }
 
-/// Build a stand-alone vector index. `vectors` is flat `n_docs * DIM`.
+/// Build a stand-alone vector index. `vectors` is flat
+/// `n_docs * DIM`.
 pub fn build_vector_index(
     vectors: &[f32],
     n_docs: usize,
@@ -279,8 +315,7 @@ pub fn build_superfile(docs: &[String], vectors: &[f32], n_cent: usize) -> Vec<u
     let mut b = SuperfileBuilder::new(opts).expect("new SuperfileBuilder");
     let ids = UInt64Array::from((0..n as u64).collect::<Vec<_>>());
     let titles = LargeStringArray::from(docs.iter().map(String::as_str).collect::<Vec<_>>());
-    let batch = RecordBatch::try_new(schema, vec![Arc::new(ids), Arc::new(titles)])
-        .expect("build RecordBatch");
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(ids), Arc::new(titles)]).expect("batch");
     b.add_batch(&batch, &[vectors]).expect("add_batch");
     b.finish().expect("finish builder")
 }

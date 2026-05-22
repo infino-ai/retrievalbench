@@ -73,18 +73,16 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use arrow_array::{
-    Array, FixedSizeListArray, Float32Array, LargeStringArray, RecordBatch,
-};
+use arrow_array::{Array, FixedSizeListArray, Float32Array, LargeStringArray, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use infino::superfile::builder::{FtsConfig, VectorConfig};
 use infino::superfile::fts::tokenize::Tokenizer;
-use infino::test_helpers::default_tokenizer;
 use infino::superfile::vector::distance::Metric;
 use infino::supertable::storage::{LocalFsStorageProvider, StorageProvider};
 use infino::supertable::{Supertable, SupertableOptions};
+use infino::test_helpers::default_tokenizer;
+use retrievalbench::corpus;
 use tempfile::TempDir;
-
 
 /// Buffer chunk size: emit one commit per `CHUNK_DOCS`
 /// docs. Larger chunks = fewer commits = lower per-commit
@@ -98,7 +96,9 @@ const CHUNK_DOCS: usize = 1_000_000;
 
 fn resolve_n_docs() -> usize {
     if let Ok(s) = std::env::var("INFINO_BENCH_M14_N_DOCS") {
-        return s.parse().expect("INFINO_BENCH_M14_N_DOCS must be an integer");
+        return s
+            .parse()
+            .expect("INFINO_BENCH_M14_N_DOCS must be an integer");
     }
     if std::env::var("INFINO_BENCH_100GB").is_ok() {
         // Plan target: ~100 GB on-disk index at the measured
@@ -118,7 +118,7 @@ fn schema() -> Arc<Schema> {
             "emb",
             DataType::FixedSizeList(
                 Arc::new(Field::new("item", DataType::Float32, true)),
-                crate::corpus::DIM as i32,
+                corpus::DIM as i32,
             ),
             false,
         ),
@@ -145,7 +145,7 @@ fn build_options(
         }],
         vec![VectorConfig {
             column: "emb".into(),
-            dim: crate::corpus::DIM,
+            dim: corpus::DIM,
             n_cent,
             rot_seed: 7,
             metric: Metric::Cosine,
@@ -167,21 +167,20 @@ fn generate_chunk(_start_id: u64, n: usize, n_cent: usize, chunk_seed: u64) -> R
     // distinct content per chunk while staying reproducible
     // across runs. ids are auto-injected by the supertable at
     // append time.
-    let titles = crate::corpus::generate_text_corpus(n, chunk_seed);
-    let vectors = crate::corpus::generate_vector_corpus(n, n_cent, chunk_seed, /*normalize=*/ true);
+    let titles = corpus::generate_text_corpus(n, chunk_seed);
+    let vectors = corpus::generate_vector_corpus(n, n_cent, chunk_seed, /*normalize=*/ true);
 
     let titles_arr = LargeStringArray::from(titles.iter().map(String::as_str).collect::<Vec<_>>());
     let item_field = Arc::new(Field::new("item", DataType::Float32, true));
     let values = Float32Array::from(vectors);
     let fsl = FixedSizeListArray::try_new(
         item_field,
-        crate::corpus::DIM as i32,
+        corpus::DIM as i32,
         Arc::new(values) as Arc<dyn Array>,
         None,
     )
     .expect("FSL");
-    RecordBatch::try_new(schema(), vec![Arc::new(titles_arr), Arc::new(fsl)])
-        .expect("batch")
+    RecordBatch::try_new(schema(), vec![Arc::new(titles_arr), Arc::new(fsl)]).expect("batch")
 }
 
 /// Recursive `du -s --bytes <path>` equivalent. Used to
@@ -227,14 +226,10 @@ fn fmt_bytes(n: u64) -> String {
 /// `LocalFsStorageProvider` per commit.
 ///
 /// Reports: chunks, total docs, wall time, docs/sec.
-fn run_build_phase(
-    storage_root: &Path,
-    n_docs: usize,
-    writer_threads: usize,
-) -> Supertable {
+fn run_build_phase(storage_root: &Path, n_docs: usize, writer_threads: usize) -> Supertable {
     let storage: Arc<dyn StorageProvider> =
         Arc::new(LocalFsStorageProvider::new(storage_root).expect("local fs provider"));
-    let n_cent = crate::corpus::n_cent(n_docs);
+    let n_cent = corpus::n_cent(n_docs);
     let st = Supertable::create(build_options(Arc::clone(&storage), n_cent, writer_threads));
 
     let n_chunks = n_docs.div_ceil(CHUNK_DOCS);
@@ -301,14 +296,10 @@ fn run_build_phase(
 /// stress) will measure open wall time on a manifest list
 /// at the 1M-segment regime. The 100GB phase here is the
 /// middle ground — full-data scale, clean-drop "crash."
-async fn run_crash_recover_phase(
-    storage_root: &Path,
-    n_docs: usize,
-    pre_drop: PreDropSnapshot,
-) {
+async fn run_crash_recover_phase(storage_root: &Path, n_docs: usize, pre_drop: PreDropSnapshot) {
     let storage: Arc<dyn StorageProvider> =
         Arc::new(LocalFsStorageProvider::new(storage_root).expect("local fs provider"));
-    let n_cent = crate::corpus::n_cent(n_docs);
+    let n_cent = corpus::n_cent(n_docs);
     let opts = build_options(Arc::clone(&storage), n_cent, 1);
 
     let t0 = Instant::now();
@@ -371,7 +362,7 @@ struct PreDropSnapshot {
 async fn run_cold_query_phase(storage_root: &Path, n_docs: usize) {
     let storage: Arc<dyn StorageProvider> =
         Arc::new(LocalFsStorageProvider::new(storage_root).expect("local fs provider"));
-    let n_cent = crate::corpus::n_cent(n_docs);
+    let n_cent = corpus::n_cent(n_docs);
 
     // Cache the consumer in a separate tempdir so it really
     // starts cold (no carry-over from any prior bench run).
@@ -382,8 +373,7 @@ async fn run_cold_query_phase(storage_root: &Path, n_docs: usize) {
     // runs inside it (the bench's main rt.block_on), so
     // Supertable::open just .awaits cleanly.
     let consumer = Supertable::open(
-        build_options(Arc::clone(&storage), n_cent, 1)
-            .with_disk_cache(Arc::clone(&cache)),
+        build_options(Arc::clone(&storage), n_cent, 1).with_disk_cache(Arc::clone(&cache)),
     )
     .await
     .expect("open for cold-query");
@@ -457,8 +447,7 @@ fn build_disk_cache(
         eviction: Box::new(LruPolicy::new()),
         verify_crc_on_open: true,
     };
-    let pinned_fn: Arc<dyn Fn() -> HashSet<_> + Send + Sync> =
-        Arc::new(HashSet::new);
+    let pinned_fn: Arc<dyn Fn() -> HashSet<_> + Send + Sync> = Arc::new(HashSet::new);
     DiskCacheStore::new(storage, cfg, pinned_fn).expect("disk cache")
 }
 
@@ -486,9 +475,8 @@ fn run_steady_state_phase(_storage_root: &Path, _n_docs: usize) {
     // recall — values don't need to match the build's.
     let n_cent: usize = 16;
     let storage_dir = TempDir::new().expect("phase storage tempdir");
-    let storage: Arc<dyn StorageProvider> = Arc::new(
-        LocalFsStorageProvider::new(storage_dir.path()).expect("phase provider"),
-    );
+    let storage: Arc<dyn StorageProvider> =
+        Arc::new(LocalFsStorageProvider::new(storage_dir.path()).expect("phase provider"));
     let cache_dir = TempDir::new().expect("phase cache tempdir");
     let cache = build_disk_cache(Arc::clone(&storage), cache_dir.path());
 
@@ -498,8 +486,7 @@ fn run_steady_state_phase(_storage_root: &Path, _n_docs: usize) {
     // commit keeps the IVF clustering happy + the
     // per-commit segment count predictable.
     let st = Supertable::create(
-        build_options(Arc::clone(&storage), n_cent, 1)
-            .with_disk_cache(Arc::clone(&cache)),
+        build_options(Arc::clone(&storage), n_cent, 1).with_disk_cache(Arc::clone(&cache)),
     );
 
     let duration = std::time::Duration::from_secs(10);
@@ -543,8 +530,7 @@ fn run_steady_state_phase(_storage_root: &Path, _n_docs: usize) {
             .name(format!("m14-reader-{i}"))
             .spawn(move || {
                 let mut hist =
-                    Histogram::<u64>::new_with_bounds(1_000, 60_000_000_000, 3)
-                        .expect("hist");
+                    Histogram::<u64>::new_with_bounds(1_000, 60_000_000_000, 3).expect("hist");
                 let mut n_queries: u64 = 0;
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                     let t0 = Instant::now();
@@ -568,8 +554,8 @@ fn run_steady_state_phase(_storage_root: &Path, _n_docs: usize) {
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
 
     let commit_count = writer_thread.join().expect("writer thread");
-    let mut combined = Histogram::<u64>::new_with_bounds(1_000, 60_000_000_000, 3)
-        .expect("combined hist");
+    let mut combined =
+        Histogram::<u64>::new_with_bounds(1_000, 60_000_000_000, 3).expect("combined hist");
     let mut total_reader_queries: u64 = 0;
     for h in reader_handles {
         let (hist, n) = h.join().expect("reader thread");
@@ -628,7 +614,7 @@ fn run_steady_state_phase(_storage_root: &Path, _n_docs: usize) {
 async fn run_memory_pressure_phase(storage_root: &Path, n_docs: usize) {
     let storage: Arc<dyn StorageProvider> =
         Arc::new(LocalFsStorageProvider::new(storage_root).expect("local fs provider"));
-    let n_cent = crate::corpus::n_cent(n_docs);
+    let n_cent = corpus::n_cent(n_docs);
     let cache_dir = TempDir::new().expect("cache tempdir");
     let cache = build_disk_cache(Arc::clone(&storage), cache_dir.path());
 

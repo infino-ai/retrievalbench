@@ -31,7 +31,7 @@ use tantivy::schema::{
 use tantivy::tokenizer::{LowerCaser, SimpleTokenizer, TextAnalyzer};
 use tantivy::{Index, doc};
 
-use super::corpus;
+use retrievalbench::corpus;
 
 /// Doc count for the single-run ingest measurement. Matches the
 /// supertable FTS bench's `N_DOCS` so the numbers are directly
@@ -89,8 +89,7 @@ fn build_supertable_once(docs: &[String]) -> (Supertable, std::time::Duration) {
 
     let t0 = Instant::now();
     for chunk in docs.chunks(chunk_size) {
-        let titles =
-            LargeStringArray::from(chunk.iter().map(String::as_str).collect::<Vec<_>>());
+        let titles = LargeStringArray::from(chunk.iter().map(String::as_str).collect::<Vec<_>>());
         let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(titles)]).expect("batch");
         w.append(&batch).expect("append");
     }
@@ -149,7 +148,10 @@ pub fn run() {
 
     let t_corpus = Instant::now();
     let docs = corpus::generate_text_corpus(N_DOCS, 1);
-    println!("  corpus generated in {:.2} s", t_corpus.elapsed().as_secs_f64());
+    println!(
+        "  corpus generated in {:.2} s",
+        t_corpus.elapsed().as_secs_f64()
+    );
 
     let (st, t_infino) = build_supertable_once(&docs);
     let n_superfiles = st.reader().n_superfiles();
@@ -173,14 +175,8 @@ pub fn run() {
 
     let ratio = t_infino.as_secs_f64() / t_tantivy.as_secs_f64();
     if ratio > 1.0 {
-        println!(
-            "  ratio: infino {:.2}× slower than Tantivy",
-            ratio,
-        );
+        println!("  ratio: infino {:.2}× slower than Tantivy", ratio,);
     } else {
-        println!(
-            "  ratio: infino {:.2}× faster than Tantivy",
-            1.0 / ratio,
-        );
+        println!("  ratio: infino {:.2}× faster than Tantivy", 1.0 / ratio,);
     }
 }

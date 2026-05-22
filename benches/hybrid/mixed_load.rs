@@ -11,7 +11,7 @@
 //! Wraps in a no-op `criterion_group` so it slots into the bundle's
 //! `criterion_main!`; the actual work prints to stderr.
 
-use crate::hybrid_common::*;
+use crate::common::*;
 use criterion::{Criterion, criterion_group};
 use hdrhistogram::Histogram;
 use infino::superfile::fts::reader::BoolMode;
@@ -20,6 +20,7 @@ use infino::supertable::query::vector::VectorSearchOptions;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand_distr::{Distribution, StandardNormal};
+use retrievalbench::corpus;
 use std::sync::{Arc, atomic::AtomicBool};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -65,7 +66,7 @@ fn mixed_load_p99_ns(writer_threads: usize, n_queries: usize) -> u64 {
     // Build query inputs once.
     let mut rng = StdRng::seed_from_u64(202);
     let dist = StandardNormal;
-    let mut q: Vec<f32> = (0..crate::corpus::DIM)
+    let mut q: Vec<f32> = (0..corpus::DIM)
         .map(|_| {
             let s: f64 = dist.sample(&mut rng);
             (s as f32) * 3.0

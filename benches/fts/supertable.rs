@@ -1,59 +1,41 @@
-//! Single-binary FTS bench for the supertable layer:
+//! Tantivy head-to-head FTS bench for the supertable layer.
 //!
-//!   ingest head-to-head infino vs Tantivy (10M docs)
-//! + 7-query search head-to-head (parallel mode — both engines on
-//!   a shared `num_cpus` rayon pool)
-//! + correctness gates (df=1 cross-engine match, infino self-
-//!   consistency)
+//! Measures Tantivy only — infino's own numbers come from
+//! `infino/benches` (read out of `../infino/target/criterion/...` at
+//! emit time). The corpus is shared between both repos via
+//! `infino::test_helpers::bench_corpus`.
 //!
-//! Multi-segment shape: both engines shard the same 10M-doc Zipfian
-//! corpus into [`SEGMENTS`] commits. Tantivy's auto-merge is disabled
-//! (`NoMergePolicy`) so per-segment IDF stays apples-to-apples with
-//! the supertable's per-superfile scoring. Infino's `commit()`
-//! row-shards into `min(writer_pool.threads, total_rows)` superfiles
-//! — the writer-pool size doubles as the output-cardinality dial
-//! (auto = `cpus/2` by default; override with
-//! `INFINO_SUPERTABLE__WRITER_THREADS=N`).
+//! Tantivy's auto-merge is disabled (`NoMergePolicy`) so per-segment
+//! IDF stays apples-to-apples with the supertable's per-superfile
+//! scoring at the same chunk count.
 //!
-//! ## Search threading
-//!
-//! Both engines share the same `num_cpus`-sized rayon pool so
-//! neither gets a CPU budget the other doesn't. Tantivy gets manual
+//! Both engines share the same `num_cpus`-sized rayon pool so neither
+//! gets a CPU budget the other doesn't. Tantivy gets manual
 //! cross-segment parallelism via `par_iter` over `SegmentReader`s +
-//! `weight.for_each_pruning` (BMW), matching what infino's
-//! supertable reader pool does natively.
+//! `weight.for_each_pruning` (BMW), matching what infino's supertable
+//! reader pool does natively.
 //!
 //! ## Invocation
 //!
 //! ```text
-//! cargo bench --bench fts -- supertable_fts                      # both supertable groups
+//! cargo bench --bench fts -- supertable_fts                      # both groups
 //! cargo bench --bench fts -- supertable_fts_build                # ingest only
-//! cargo bench --bench fts -- supertable_fts_search                # search only
-//! INFINO_SUPERTABLE__WRITER_THREADS=32 cargo bench --bench fts -- supertable_fts_build
-//!     # ingest at 32 superfiles (matches Tantivy's 32-segment effective output)
+//! cargo bench --bench fts -- supertable_fts_search               # search only
 //! ```
 
 use std::hint::black_box;
 use std::sync::{Arc, OnceLock};
 
-use arrow_array::{LargeStringArray, RecordBatch};
-use arrow_schema::{DataType, Field, Schema};
 use criterion::{Criterion, Throughput, criterion_group};
-use infino::superfile::builder::FtsConfig;
-use infino::superfile::fts::reader::BoolMode;
-use infino::superfile::fts::tokenize::Tokenizer;
-use infino::supertable::{Supertable, SupertableOptions};
-use infino::test_helpers::default_tokenizer;
 use rayon::ThreadPool;
 use rayon::prelude::*;
+use retrievalbench::{corpus, markdown, rss};
 use tantivy::Index;
 use tantivy::Term;
 use tantivy::collector::TopDocs;
 use tantivy::doc;
 use tantivy::indexer::NoMergePolicy;
-use tantivy::query::{
-    BooleanQuery, EnableScoring, Occur, Query, QueryParser, TermQuery,
-};
+use tantivy::query::{BooleanQuery, EnableScoring, Occur, Query, QueryParser, TermQuery};
 use tantivy::schema::{
     INDEXED, IndexRecordOption, STORED, Schema as TSchema, TextFieldIndexing, TextOptions,
 };
@@ -61,38 +43,19 @@ use tantivy::tokenizer::{LowerCaser, SimpleTokenizer, TextAnalyzer};
 
 // ─── Constants ────────────────────────────────────────────────────────
 
-/// Doc count for every FTS-supertable bench. Pinned to 10M — the
-/// supertable shape is "scale-out via superfiles," so the right
-/// scale to measure is well above the single-superfile floor (1M).
 const N_DOCS: usize = 10_000_000;
-
-/// Input chunk count for both engines. Drives Tantivy's per-commit
-/// cycle (it emits N segments per commit at default thread count);
-/// infino's output superfile count is governed by writer_pool
-/// threads, not by this knob, so this only sets the
-/// `append()`-batching shape.
 const SEGMENTS: usize = 4;
-
 const TOP_K: usize = 10;
-
-/// Heap budget for the Tantivy IndexWriter. At 10M-doc scale the
-/// inverted-index posting volume is large; well above what fits
-/// without spilling mid-commit.
 const TANTIVY_HEAP_BYTES: usize = 2_000_000_000;
 
-// ─── Fixtures (built once, reused across criterion samples) ────────────
+// ─── Fixtures ────────────────────────────────────────────────────────
 
 static DOCS: OnceLock<Vec<String>> = OnceLock::new();
-static INFINO_PARALLEL: OnceLock<Supertable> = OnceLock::new();
 static TANTIVY: OnceLock<TantivyHandles> = OnceLock::new();
 
 fn docs() -> &'static [String] {
-    DOCS.get_or_init(|| crate::corpus::generate_text_corpus(N_DOCS, 1))
+    DOCS.get_or_init(|| corpus::generate_text_corpus(N_DOCS, 1))
         .as_slice()
-}
-
-fn infino_parallel() -> &'static Supertable {
-    INFINO_PARALLEL.get_or_init(|| build_supertable_infino(docs(), parallel_pool()))
 }
 
 fn tantivy_handles() -> &'static TantivyHandles {
@@ -101,10 +64,8 @@ fn tantivy_handles() -> &'static TantivyHandles {
 
 // ─── Shared rayon pool ────────────────────────────────────────────────
 
-/// num_cpus-sized pool **shared** between infino (as its reader
-/// pool) and the parallel-mode Tantivy helper (as the pool that
-/// `par_iter` over `SegmentReader`s runs on). Sharing ensures both
-/// engines compete for the same N threads.
+/// `num_cpus`-sized pool — Tantivy's `par_iter` over SegmentReaders
+/// installs on it.
 fn parallel_pool() -> Arc<ThreadPool> {
     static POOL: OnceLock<Arc<ThreadPool>> = OnceLock::new();
     POOL.get_or_init(|| {
@@ -119,77 +80,13 @@ fn parallel_pool() -> Arc<ThreadPool> {
     .clone()
 }
 
-// ─── Builders — infino ────────────────────────────────────────────────
-
-fn schema_id_title() -> Arc<Schema> {
-    Arc::new(Schema::new(vec![Field::new(
-        "title",
-        DataType::LargeUtf8,
-        false,
-    )]))
-}
-
-fn supertable_options(reader_pool: Arc<ThreadPool>) -> SupertableOptions {
-    let tk: Arc<dyn Tokenizer> = default_tokenizer();
-    SupertableOptions::new(
-        schema_id_title(),
-        vec![FtsConfig {
-            column: "title".into(),
-        }],
-        vec![],
-        Some(tk),
-    )
-    .expect("opts")
-    // Writer pool intentionally left at the SupertableOptions auto
-    // default (= cpus/2). Override via
-    // `INFINO_SUPERTABLE__WRITER_THREADS=N` if you want to control
-    // the output superfile cardinality from the env.
-    .with_reader_pool(reader_pool)
-    // Bench raises the commit-threshold sky-high so `append()`
-    // doesn't auto-flush mid-build. With a 1 GiB default at
-    // ~4.5 GB / chunk, default options would auto-commit after
-    // every single append — and the supertable's `commit()` runs
-    // per-shard work in parallel only **within** a commit. By
-    // buffering all chunks before the explicit final commit
-    // below, we let `commit()` row-shard across all writer-pool
-    // threads in one go.
-    .with_commit_threshold_size_mb(0)
-}
-
-/// Build an FTS-only supertable from `docs`.
-///
-/// **Append-many-then-commit-once pattern**: each chunk is appended
-/// to the writer's buffer (auto-flush disabled via
-/// `commit_threshold_size_mb=0`); a single `commit()` at the end
-/// drains the buffer and row-shards across the writer pool. The
-/// number of output superfiles is `min(writer_pool.threads,
-/// total_rows)` — driven by infino's commit-time row-sharding, not
-/// by the number of `append()` calls or the [`SEGMENTS`] constant.
-fn build_supertable_infino(docs: &[String], reader_pool: Arc<ThreadPool>) -> Supertable {
-    let st = Supertable::create(supertable_options(reader_pool));
-    let mut w = st.writer().expect("writer");
-    let chunk_size = docs.len().div_ceil(SEGMENTS);
-    for chunk in docs.chunks(chunk_size) {
-        let titles = LargeStringArray::from(chunk.iter().map(String::as_str).collect::<Vec<_>>());
-        let batch = RecordBatch::try_new(schema_id_title(), vec![Arc::new(titles)])
-            .expect("batch");
-        w.append(&batch).expect("append");
-    }
-    w.commit().expect("commit");
-    drop(w);
-    st
-}
-
-// ─── Builders — Tantivy ───────────────────────────────────────────────
+// ─── Tantivy builder + search ─────────────────────────────────────────
 
 struct TantivyHandles {
     index: Index,
     title_field: tantivy::schema::Field,
 }
 
-/// Build a Tantivy index with `NoMergePolicy` so segments stay
-/// at the per-commit count. `WithFreqs` (no positions) matches
-/// infino's `(doc_id, tf)`-only posting layout.
 fn build_supertable_tantivy(docs: &[String]) -> TantivyHandles {
     let mut sb = TSchema::builder();
     let id_field = sb.add_u64_field("doc_id", INDEXED | STORED);
@@ -230,14 +127,10 @@ fn build_supertable_tantivy(docs: &[String]) -> TantivyHandles {
     TantivyHandles { index, title_field }
 }
 
-/// Tantivy's default-API search — `Searcher::search` walks all
-/// segments **sequentially**. This is what a Tantivy user gets out
-/// of the box.
-fn tantivy_search_serial(
-    handles: &TantivyHandles,
-    q: &dyn Query,
-    k: usize,
-) -> Vec<(u32, f32)> {
+/// Sequential Tantivy search — used for the df=1 lookup. Cross-segment
+/// parallelism for the timed search loop goes through
+/// `tantivy_search_parallel` instead.
+fn tantivy_search_serial(handles: &TantivyHandles, q: &dyn Query, k: usize) -> Vec<(u32, f32)> {
     let reader = handles.index.reader().expect("reader");
     let searcher = reader.searcher();
     let top = searcher
@@ -248,16 +141,13 @@ fn tantivy_search_serial(
         .collect()
 }
 
-/// Tantivy + manual cross-segment parallelism using rayon
-/// `par_iter` over `SegmentReader`s on the supplied pool. Uses
-/// `weight.for_each_pruning` to match what `TopDocs::order_by_score`
-/// does serially — BooleanWeight overrides this with `block_wand`
-/// (BMW), the same skip-pruning class infino uses. Without this
-/// match, the parallel helper would use the default `for_each`
-/// (exhaustive walk over the union), which on rare-term unions
-/// accidentally beats BMW's per-block bookkeeping overhead — an
-/// algorithm asymmetry that flatters Tantivy in heavy-query parallel
-/// timings vs infino's BMW path.
+/// Tantivy + manual cross-segment parallelism via rayon `par_iter`
+/// over `SegmentReader`s. Uses `weight.for_each_pruning` to invoke
+/// BooleanWeight's `block_wand` (BMW) — the same skip-pruning class
+/// infino uses. Without this, the default `for_each` runs an
+/// exhaustive walk that accidentally beats BMW's per-block bookkeeping
+/// on rare-term unions, flattering Tantivy in heavy-query parallel
+/// timings.
 fn tantivy_search_parallel(
     handles: &TantivyHandles,
     q: &dyn Query,
@@ -330,76 +220,7 @@ fn tantivy_search_parallel(
     all.into_iter().map(|(score, doc)| (doc, score)).collect()
 }
 
-// ─── Correctness ──────────────────────────────────────────────────────
-
-/// Self-consistency on the built supertable: the corpus's df=1
-/// identifier `doc<id:07>` returns exactly one hit; a Zipfian-common
-/// term fills top-10 in score-desc order.
-fn assert_infino_self_consistent(st: &Supertable) {
-    let r = st.reader();
-    let probe_doc_id = (N_DOCS / 2) as u32;
-    let probe_token = format!("doc{probe_doc_id:07}");
-    let hits = r
-        .bm25_search("title", &probe_token, 10, BoolMode::Or)
-        .expect("bm25");
-    assert_eq!(
-        hits.len(),
-        1,
-        "df=1 token {probe_token:?} should return exactly one hit; got {}",
-        hits.len()
-    );
-    assert!(
-        hits[0].score > 0.0,
-        "df=1 score must be positive; got {}",
-        hits[0].score
-    );
-
-    let hits = r
-        .bm25_search("title", "term00001", 10, BoolMode::Or)
-        .expect("bm25");
-    assert_eq!(hits.len(), 10, "common term should fill top-10");
-    for w in hits.windows(2) {
-        assert!(
-            w[0].score >= w[1].score,
-            "results must be sorted by score desc; got {} then {}",
-            w[0].score,
-            w[1].score
-        );
-    }
-}
-
-/// Cross-engine sanity at the supertable scale: the corpus's per-doc
-/// unique identifier has df=1 across all superfiles. Both engines
-/// must return exactly one hit. Strict top-K agreement at 10M-doc
-/// Zipfian scale is unreliable (deeply tied score pools); strict
-/// oracle correctness lives in
-/// `tests/supertable/query/against_tantivy.rs` (planted-truth) and
-/// `benches/scale/fts_recall.rs` (20K-doc strict).
-fn assert_cross_engine_df1_match(st: &Supertable, t: &TantivyHandles) -> usize {
-    let r = st.reader();
-    let probe_doc_id = (N_DOCS / 2) as u32;
-    let probe_token = format!("doc{probe_doc_id:07}");
-
-    let inf_hits = r
-        .bm25_search("title", &probe_token, 10, BoolMode::Or)
-        .expect("infino bm25");
-    let parser = QueryParser::for_index(&t.index, vec![t.title_field]);
-    let parsed = parser.parse_query(&probe_token).expect("parse");
-    let tan_ids: Vec<u32> = tantivy_search_serial(t, parsed.as_ref(), 10)
-        .into_iter()
-        .map(|(doc, _)| doc)
-        .collect();
-
-    assert_eq!(inf_hits.len(), 1, "df=1 infino: expected one hit");
-    assert_eq!(tan_ids.len(), 1, "df=1 tantivy: expected one hit");
-    assert!(
-        inf_hits[0].score > 0.0,
-        "df=1 infino score must be positive"
-    );
-    1
-}
-
-// ─── Query battery (shared between serial + parallel modes) ───────────
+// ─── Query battery ────────────────────────────────────────────────────
 
 struct Battery {
     q_single_rare: Box<dyn Query>,
@@ -426,8 +247,6 @@ fn battery(t: &TantivyHandles) -> Battery {
         .parse_query("term00050 term00051 term00052 term00053 term00054")
         .expect("parse");
 
-    // Manual prefix-expansion: `term0009*` → term00090..term00099.
-    // Tantivy 0.26's QueryParser doesn't expand inline wildcards.
     let prefix_terms: Vec<String> = (90..100).map(|i| format!("term{i:05}")).collect();
     let prefix_subqueries: Vec<(Occur, Box<dyn Query>)> = prefix_terms
         .iter()
@@ -453,111 +272,74 @@ fn battery(t: &TantivyHandles) -> Battery {
 // ─── Bench: ingest (group: supertable_fts_build) ──────────────────────
 
 fn bench_ingest(c: &mut Criterion) {
-    // ---- Correctness phase ----------------------------------------
-    eprintln!(
-        "[supertable_fts_build] correctness: building infino + Tantivy ({N_DOCS} docs)..."
-    );
-    let infino = build_supertable_infino(docs(), parallel_pool());
-    assert_infino_self_consistent(&infino);
-    let tantivy = tantivy_handles();
-    let n_df1 = assert_cross_engine_df1_match(&infino, tantivy);
-    eprintln!(
-        "[supertable_fts_build] correctness OK: infino self-consistent + {n_df1} df=1 \
-         cross-engine match (strict top-K oracle is in tests/supertable/query/against_tantivy.rs)"
-    );
-    drop(infino);
+    eprintln!("[supertable_fts_build] building Tantivy ({N_DOCS} docs)...");
+    let _ = tantivy_handles();
+    eprintln!("[supertable_fts_build] Tantivy ready");
 
-    // ---- Timing phase ---------------------------------------------
     let mut g = c.benchmark_group("supertable_fts_build");
     g.sample_size(10);
     g.throughput(Throughput::Elements(N_DOCS as u64));
-
-    g.bench_function("infino_auto_writer_pool", |b| {
-        b.iter_with_large_drop(|| build_supertable_infino(black_box(docs()), parallel_pool()));
-    });
+    let rss_sample = rss::PeakSampler::start_default();
 
     g.bench_function("tantivy_default_threads", |b| {
         b.iter_with_large_drop(|| build_supertable_tantivy(black_box(docs())));
     });
 
     g.finish();
+    let peak = rss_sample.stop();
+    let _ = rss::write_peak_rss(
+        group_name::SUPERTABLE_FTS_BUILD,
+        "tantivy_default_threads",
+        peak,
+    );
 
     emit_ingest_markdown();
 }
 
-// ─── Bench: search-parallel (group: supertable_fts_search) ───
+// ─── Bench: search (group: supertable_fts_search) ─────────────────────
 
 fn bench_search(c: &mut Criterion) {
-    let st = infino_parallel();
     let t = tantivy_handles();
     let pool = parallel_pool();
+    let qs = battery(t);
 
-    eprintln!("[supertable_fts_search] correctness check...");
-    assert_infino_self_consistent(st);
-    let n_df1 = assert_cross_engine_df1_match(st, t);
+    // Quick df=1 sanity using serial Tantivy search.
+    let probe_doc_id = (N_DOCS / 2) as u32;
+    let probe_token = format!("doc{probe_doc_id:07}");
+    let parser = QueryParser::for_index(&t.index, vec![t.title_field]);
+    let parsed = parser.parse_query(&probe_token).expect("parse");
+    let hits: Vec<u32> = tantivy_search_serial(t, parsed.as_ref(), 10)
+        .into_iter()
+        .map(|(doc, _)| doc)
+        .collect();
+    assert_eq!(hits.len(), 1, "df=1 sanity: expected one Tantivy hit");
     eprintln!(
-        "[supertable_fts_search] correctness OK: infino self-consistent + {n_df1} df=1 \
-         cross-engine match (rayon pool: {} threads)",
+        "[supertable_fts_search] df=1 sanity OK (rayon pool: {} threads)",
         pool.current_num_threads()
     );
 
-    let r = st.reader();
-    let qs = battery(t);
-
     let mut g = c.benchmark_group("supertable_fts_search");
     g.sample_size(10);
+    let rss_sample = rss::PeakSampler::start_default();
 
-    macro_rules! pair {
-        ($name:literal, $infino_query:expr, $tantivy_query:expr) => {
-            g.bench_function(concat!($name, "_supertable_top10"), |b| {
-                b.iter(|| {
-                    let hits = r
-                        .bm25_search(
-                            black_box("title"),
-                            black_box($infino_query),
-                            TOP_K,
-                            BoolMode::Or,
-                        )
-                        .expect("bm25");
-                    black_box(hits)
-                });
-            });
+    macro_rules! tantivy_query {
+        ($name:literal, $q:expr) => {
             g.bench_function(concat!($name, "_tantivy_top10"), |b| {
                 b.iter(|| {
-                    let hits = tantivy_search_parallel(t, $tantivy_query, TOP_K, &pool);
+                    let hits = tantivy_search_parallel(t, $q, TOP_K, &pool);
                     black_box(hits)
                 });
             });
         };
     }
 
-    pair!("single_rare", "term09999", qs.q_single_rare.as_ref());
-    pair!("single_common", "term00001", qs.q_single_common.as_ref());
-    pair!("two_term_or", "term00001 term00050", qs.q_two.as_ref());
-    pair!(
-        "three_wide",
-        "term00001 term00050 term00100",
-        qs.q_three_wide.as_ref()
-    );
-    pair!(
-        "three_similar",
-        "term00050 term00051 term00052",
-        qs.q_three_similar.as_ref()
-    );
-    pair!(
-        "five_term",
-        "term00050 term00051 term00052 term00053 term00054",
-        qs.q_five.as_ref()
-    );
+    tantivy_query!("single_rare", qs.q_single_rare.as_ref());
+    tantivy_query!("single_common", qs.q_single_common.as_ref());
+    tantivy_query!("two_term_or", qs.q_two.as_ref());
+    tantivy_query!("three_wide", qs.q_three_wide.as_ref());
+    tantivy_query!("three_similar", qs.q_three_similar.as_ref());
+    tantivy_query!("five_term", qs.q_five.as_ref());
 
-    g.bench_function("prefix_supertable_top10", |b| {
-        b.iter(|| {
-            let hits = r
-                .bm25_search_prefix(black_box("title"), black_box("term0009"), TOP_K)
-                .expect("bm25_prefix");
-            black_box(hits)
-        });
-    });
     g.bench_function("prefix_tantivy_top10", |b| {
         b.iter(|| {
             let hits = tantivy_search_parallel(t, &qs.q_prefix, TOP_K, &pool);
@@ -566,43 +348,85 @@ fn bench_search(c: &mut Criterion) {
     });
 
     g.finish();
+    let peak = rss_sample.stop();
+    for q in QUERY_NAMES {
+        let _ = rss::write_peak_rss(
+            group_name::SUPERTABLE_FTS_SEARCH,
+            &format!("{q}_tantivy_top10"),
+            peak,
+        );
+    }
 
     emit_search_markdown();
 }
 
 // ─── Markdown summary emitters ────────────────────────────────────────
 
-fn emit_ingest_markdown() {
-    use crate::markdown::{MarkdownSection, fmt_throughput, fmt_time, fmt_winner, read_mean_ns};
+mod group_name {
+    pub const SUPERTABLE_FTS_BUILD: &str = "supertable_fts_build";
+    pub const SUPERTABLE_FTS_SEARCH: &str = "supertable_fts_search";
+}
 
-    let group = "supertable_fts_build";
-    let infino_ns = read_mean_ns(group, "infino_auto_writer_pool");
+const QUERY_NAMES: &[&str] = &[
+    "single_rare",
+    "single_common",
+    "two_term_or",
+    "three_wide",
+    "three_similar",
+    "five_term",
+    "prefix",
+];
+
+fn emit_ingest_markdown() {
+    use markdown::{
+        MarkdownSection, fmt_throughput, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns,
+    };
+
+    let group = group_name::SUPERTABLE_FTS_BUILD;
+    let infino_ns = read_infino_mean_ns(group, "infino_auto_writer_pool");
     let tantivy_ns = read_mean_ns(group, "tantivy_default_threads");
+    let infino_rss = rss::read_infino_peak_rss_bytes(group, "infino_auto_writer_pool");
+    let tantivy_rss = rss::read_peak_rss_bytes(group, "tantivy_default_threads");
 
     let mut body = String::new();
     body.push_str(&format!(
         "### Supertable FTS — ingest ({N_DOCS} docs, Zipfian, 200 tokens/doc, 10K vocab)\n\n"
     ));
     body.push_str(
-        "| Engine                  | Time       | Throughput | vs Tantivy        |\n",
+        "| Engine                  | Time       | Throughput | Peak RSS | vs Tantivy        |\n",
     );
     body.push_str(
-        "|-------------------------|------------|------------|-------------------|\n",
+        "|-------------------------|------------|------------|----------|-------------------|\n",
     );
-    for (label, ns, baseline_ns, is_baseline) in [
-        ("infino_auto_writer_pool", infino_ns, tantivy_ns, false),
-        ("tantivy_default_threads", tantivy_ns, tantivy_ns, true),
+    for (label, ns, peak_rss, baseline_ns, is_baseline) in [
+        (
+            "infino_auto_writer_pool",
+            infino_ns,
+            infino_rss,
+            tantivy_ns,
+            false,
+        ),
+        (
+            "tantivy_default_threads",
+            tantivy_ns,
+            tantivy_rss,
+            tantivy_ns,
+            true,
+        ),
     ] {
         let time = ns.map(fmt_time).unwrap_or_else(|| "—".into());
         let thrpt = ns
             .map(|n| fmt_throughput((N_DOCS as f64) / (n / 1e9)))
             .unwrap_or_else(|| "—".into());
+        let rss = peak_rss.map(rss::fmt_bytes).unwrap_or_else(|| "—".into());
         let cmp = if is_baseline {
             "—".to_string()
         } else {
             fmt_winner("infino", ns, "tantivy", baseline_ns)
         };
-        body.push_str(&format!("| {label:23} | {time:10} | {thrpt:10} | {cmp:17} |\n"));
+        body.push_str(&format!(
+            "| {label:23} | {time:10} | {thrpt:10} | {rss:8} | {cmp:17} |\n"
+        ));
     }
     body.push_str(
         "\n*Output cardinality: infino emits `min(writer_pool.threads, total_rows)` superfiles \
@@ -612,39 +436,38 @@ fn emit_ingest_markdown() {
          segment count.*\n",
     );
 
-    crate::markdown::emit(&MarkdownSection {
+    markdown::emit(&MarkdownSection {
         anchor_id: "bench/fts/supertable/ingest".into(),
         body,
     });
 }
 
 fn emit_search_markdown() {
-    use crate::markdown::{MarkdownSection, fmt_time, fmt_winner, read_mean_ns};
+    use markdown::{MarkdownSection, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns};
 
-    let group = "supertable_fts_search";
+    let group = group_name::SUPERTABLE_FTS_SEARCH;
     let mut body = String::new();
     body.push_str(&format!("### Supertable FTS — search ({N_DOCS} docs)\n\n"));
-    body.push_str("| Query          | infino     | Tantivy    | Winner                |\n");
-    body.push_str("|----------------|------------|------------|-----------------------|\n");
-    let queries = [
-        "single_rare",
-        "single_common",
-        "two_term_or",
-        "three_wide",
-        "three_similar",
-        "five_term",
-        "prefix",
-    ];
-    for q in queries {
-        let inf = read_mean_ns(group, &format!("{q}_supertable_top10"));
+    body.push_str("| Query          | infino     | infino RSS | Tantivy    | Tantivy RSS | Winner                |\n");
+    body.push_str("|----------------|------------|------------|------------|-------------|-----------------------|\n");
+    for q in QUERY_NAMES {
+        let inf = read_infino_mean_ns(group, &format!("{q}_supertable_top10"));
         let tan = read_mean_ns(group, &format!("{q}_tantivy_top10"));
         let inf_s = inf.map(fmt_time).unwrap_or_else(|| "—".into());
         let tan_s = tan.map(fmt_time).unwrap_or_else(|| "—".into());
+        let inf_rss = rss::read_infino_peak_rss_bytes(group, &format!("{q}_supertable_top10"))
+            .map(rss::fmt_bytes)
+            .unwrap_or_else(|| "—".into());
+        let tan_rss = rss::read_peak_rss_bytes(group, &format!("{q}_tantivy_top10"))
+            .map(rss::fmt_bytes)
+            .unwrap_or_else(|| "—".into());
         let w = fmt_winner("infino", inf, "tantivy", tan);
-        body.push_str(&format!("| {q:14} | {inf_s:10} | {tan_s:10} | {w:21} |\n"));
+        body.push_str(&format!(
+            "| {q:14} | {inf_s:10} | {inf_rss:10} | {tan_s:10} | {tan_rss:11} | {w:21} |\n"
+        ));
     }
 
-    crate::markdown::emit(&MarkdownSection {
+    markdown::emit(&MarkdownSection {
         anchor_id: "bench/fts/supertable/search".into(),
         body,
     });

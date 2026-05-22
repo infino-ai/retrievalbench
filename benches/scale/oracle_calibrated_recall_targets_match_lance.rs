@@ -195,16 +195,14 @@ fn jaccard(a: &[u32], b: &[u32]) -> f32 {
 // ---- Supertable side -------------------------------------------------
 
 fn supertable_schema() -> Arc<Schema> {
-    Arc::new(Schema::new(vec![
-        Field::new(
-            "emb",
-            DataType::FixedSizeList(
-                Arc::new(Field::new("item", DataType::Float32, true)),
-                DIM as i32,
-            ),
-            false,
+    Arc::new(Schema::new(vec![Field::new(
+        "emb",
+        DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Float32, true)),
+            DIM as i32,
         ),
-    ]))
+        false,
+    )]))
 }
 
 fn build_supertable(vectors: &[f32]) -> Supertable {
@@ -245,8 +243,7 @@ fn build_supertable(vectors: &[f32]) -> Supertable {
             None,
         )
         .expect("FSL");
-        let batch = RecordBatch::try_new(supertable_schema(), vec![Arc::new(fsl)])
-            .expect("batch");
+        let batch = RecordBatch::try_new(supertable_schema(), vec![Arc::new(fsl)]).expect("batch");
         w.append(&batch).expect("append");
         w.commit().expect("commit");
     }
