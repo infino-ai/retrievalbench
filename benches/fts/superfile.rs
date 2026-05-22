@@ -397,7 +397,9 @@ fn emit_search_markdown() {
     body.push_str("**Per-algorithm probes** (infino-only, WAND+BMW vs MaxScore+BMM):\n\n");
     body.push_str("| Shape         | WAND+BMW   | WAND+BMW RSS | MaxScore+BMM | MaxScore+BMM RSS | Winner                |\n");
     body.push_str("|---------------|------------|--------------|--------------|------------------|-----------------------|\n");
-    for shape in ["wide_3", "similar_3", "similar_5"] {
+    // Per-algo probe labels carry the `_or` suffix in infino's bench
+    // output (e.g. `wide_3_or_wand_top10`) — the lookup key matches.
+    for shape in ["wide_3_or", "similar_3_or", "similar_5_or"] {
         let wand = read_infino_mean_ns(group, &format!("{shape}_wand_top10"));
         let bmm = read_infino_mean_ns(group, &format!("{shape}_bmm_top10"));
         let wand_s = wand.map(fmt_time).unwrap_or_else(|| "—".into());

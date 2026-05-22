@@ -336,9 +336,11 @@ fn bench_search(c: &mut Criterion) {
     tantivy_query!("single_rare", qs.q_single_rare.as_ref());
     tantivy_query!("single_common", qs.q_single_common.as_ref());
     tantivy_query!("two_term_or", qs.q_two.as_ref());
-    tantivy_query!("three_wide", qs.q_three_wide.as_ref());
-    tantivy_query!("three_similar", qs.q_three_similar.as_ref());
-    tantivy_query!("five_term", qs.q_five.as_ref());
+    // OR labels carry the `_or` suffix to match infino's supertable
+    // bench output, which retrievalbench reads from disk.
+    tantivy_query!("three_wide_or", qs.q_three_wide.as_ref());
+    tantivy_query!("three_similar_or", qs.q_three_similar.as_ref());
+    tantivy_query!("five_term_or", qs.q_five.as_ref());
 
     g.bench_function("prefix_tantivy_top10", |b| {
         b.iter(|| {
@@ -371,9 +373,9 @@ const QUERY_NAMES: &[&str] = &[
     "single_rare",
     "single_common",
     "two_term_or",
-    "three_wide",
-    "three_similar",
-    "five_term",
+    "three_wide_or",
+    "three_similar_or",
+    "five_term_or",
     "prefix",
 ];
 
