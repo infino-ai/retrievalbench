@@ -31,16 +31,20 @@
 //! The comparison column shows "—" for infino if infino's criterion
 //! output is missing.
 
-use criterion::{BenchmarkGroup, Criterion, Throughput, criterion_group, measurement::WallTime};
+use criterion::{criterion_group, measurement::WallTime, BenchmarkGroup, Criterion, Throughput};
 use retrievalbench::{corpus, markdown, rss};
 use std::hint::black_box;
 use std::sync::OnceLock;
-use tantivy::Index;
+use tantivy::collector::Collector;
 use tantivy::collector::TopDocs;
 use tantivy::doc;
 use tantivy::query::{Query, QueryParser};
-use tantivy::schema::{INDEXED, IndexRecordOption, STORED, Schema, TextFieldIndexing, TextOptions};
+use tantivy::schema::{IndexRecordOption, Schema, TextFieldIndexing, TextOptions, INDEXED, STORED};
 use tantivy::tokenizer::{LowerCaser, SimpleTokenizer, TextAnalyzer};
+use tantivy::DocAddress;
+use tantivy::Index;
+use tantivy::Score;
+use tantivy::Searcher;
 
 // ─── Constants ────────────────────────────────────────────────────────
 
@@ -115,12 +119,11 @@ fn build_tantivy(docs: &[String], threads: TantivyThreads) -> TantivyHandles {
     TantivyHandles { index, title_field }
 }
 
-fn tantivy_search_scored(handles: &TantivyHandles, q: &dyn Query, k: usize) -> Vec<(u32, f32)> {
-    let reader = handles.index.reader().expect("reader");
-    let searcher = reader.searcher();
-    let top = searcher
-        .search(q, &TopDocs::with_limit(k).order_by_score())
-        .expect("search");
+fn tantivy_search_scored<T>(searcher: &Searcher, q: &dyn Query, collector: &T) -> Vec<(u32, f32)>
+where
+    T: Collector<Fruit = Vec<(Score, DocAddress)>>,
+{
+    let top = searcher.search(q, collector).expect("search");
     top.into_iter()
         .map(|(score, addr)| (addr.doc_id, score))
         .collect()
@@ -135,8 +138,11 @@ fn bench_tantivy_only(
     tantivy_query: &dyn Query,
 ) {
     g.bench_function(format!("{name}_tantivy_top10"), |b| {
+        let reader = t.index.reader().expect("reader");
+        let searcher = reader.searcher();
+        let collector = TopDocs::with_limit(10).order_by_score();
         b.iter(|| {
-            let hits = tantivy_search_scored(t, tantivy_query, black_box(10));
+            let hits = tantivy_search_scored(&searcher, tantivy_query, &collector);
             black_box(hits)
         });
     });
@@ -266,7 +272,7 @@ const QUERY_NAMES_AND: &[&str] = &[
 
 fn emit_ingest_markdown() {
     use markdown::{
-        MarkdownSection, fmt_throughput, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns,
+        fmt_throughput, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns, MarkdownSection,
     };
 
     let mut body = String::new();
@@ -349,7 +355,7 @@ fn emit_ingest_markdown() {
 }
 
 fn emit_search_markdown() {
-    use markdown::{MarkdownSection, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns};
+    use markdown::{fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns, MarkdownSection};
 
     let mut body = String::new();
     body.push_str(&format!("### Superfile FTS — search ({N_DOCS} docs)\n\n"));
