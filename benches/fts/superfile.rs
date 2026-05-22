@@ -362,8 +362,6 @@ fn emit_search_markdown() {
 
     let mut body = String::new();
     body.push_str(&format!("### Superfile FTS — search ({N_DOCS} docs)\n\n"));
-    body.push_str("| Query          | infino     | infino RSS | Tantivy    | Tantivy RSS | Winner                |\n");
-    body.push_str("|----------------|------------|------------|------------|-------------|-----------------------|\n");
 
     let group = group_name::SUPERFILE_FTS_SEARCH;
     let row = |q: &str, body: &mut String| {
@@ -379,19 +377,24 @@ fn emit_search_markdown() {
             .unwrap_or_else(|| "—".into());
         let w = fmt_winner("infino", inf, "tantivy", tan);
         body.push_str(&format!(
-            "| {q:14} | {inf_s:10} | {inf_rss:10} | {tan_s:10} | {tan_rss:11} | {w:21} |\n"
+            "| {q:17} | {inf_s:10} | {inf_rss:10} | {tan_s:10} | {tan_rss:11} | {w:21} |\n"
         ));
     };
+    // Each section emits its own header + separator so the OR / AND
+    // groups render as two valid markdown tables rather than one big
+    // table with a bold heading injected mid-rows.
+    let emit_section = |heading: &str, queries: &[&str], body: &mut String| {
+        body.push_str(&format!("**{heading}:**\n\n"));
+        body.push_str("| Query             | infino     | infino RSS | Tantivy    | Tantivy RSS | Winner                |\n");
+        body.push_str("|-------------------|------------|------------|------------|-------------|-----------------------|\n");
+        for q in queries {
+            row(q, body);
+        }
+        body.push('\n');
+    };
 
-    body.push_str("**OR queries:**\n\n");
-    for q in QUERY_NAMES_OR {
-        row(q, &mut body);
-    }
-
-    body.push_str("\n**AND queries:**\n\n");
-    for q in QUERY_NAMES_AND {
-        row(q, &mut body);
-    }
+    emit_section("OR queries", QUERY_NAMES_OR, &mut body);
+    emit_section("AND queries", QUERY_NAMES_AND, &mut body);
 
     body.push('\n');
     body.push_str("**Per-algorithm probes** (infino-only, WAND+BMW vs MaxScore+BMM):\n\n");

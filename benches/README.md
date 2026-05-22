@@ -223,35 +223,47 @@ cross-engine match before timing starts.
 <!-- BEGIN: bench/fts/superfile/ingest -->
 ### Superfile FTS — ingest (1000000 docs, Zipfian, 200 tokens/doc, 10K vocab)
 
-| Engine                       | Time       | Throughput | vs Tantivy        |
-|------------------------------|------------|------------|-------------------|
-| infino_1thread               | 10.51 s    | 95.2 K/s   | **infino wins, 1.3× faster than tantivy** |
-| tantivy_1thread              | 14.05 s    | 71.2 K/s   | —                 |
-| infino_rayon_default_threads | 1.10 s     | 911.4 K/s  | **infino wins, 1.9× faster than tantivy** |
-| tantivy_default_threads      | 2.06 s     | 485.0 K/s  | —                 |
+| Engine                       | Time       | Throughput | Peak RSS | vs Tantivy        |
+|------------------------------|------------|------------|----------|-------------------|
+| infino_1thread               | 9.30 s     | 107.5 K/s  | —        | **infino wins, 1.4× faster than tantivy** |
+| tantivy_1thread              | 13.36 s    | 74.8 K/s   | 0 B      | —                 |
+| infino_rayon_default_threads | 815.44 ms  | 1.23 M/s   | —        | **infino wins, 2.3× faster than tantivy** |
+| tantivy_default_threads      | 1.88 s     | 531.6 K/s  | 0 B      | —                 |
 
 <!-- END: bench/fts/superfile/ingest -->
 
 <!-- BEGIN: bench/fts/superfile/search -->
 ### Superfile FTS — search (1000000 docs)
 
-| Query          | infino     | Tantivy    | Winner                |
-|----------------|------------|------------|-----------------------|
-| single_rare    | 275 ns     | 11.09 µs   | **infino wins, 40.2× faster than tantivy** |
-| single_df1     | 122 ns     | 6.72 µs    | **infino wins, 55.1× faster than tantivy** |
-| single_common  | 6.06 µs    | 76.82 µs   | **infino wins, 12.7× faster than tantivy** |
-| two_term_or    | 106.96 µs  | 444.55 µs  | **infino wins, 4.2× faster than tantivy** |
-| three_wide     | 1.30 ms    | 3.16 ms    | **infino wins, 2.4× faster than tantivy** |
-| three_similar  | 6.23 ms    | 8.34 ms    | **infino wins, 1.3× faster than tantivy** |
-| five_term      | 10.65 ms   | 18.33 ms   | **infino wins, 1.7× faster than tantivy** |
+**OR queries:**
+
+| Query             | infino     | infino RSS | Tantivy    | Tantivy RSS | Winner                |
+|-------------------|------------|------------|------------|-------------|-----------------------|
+| single_rare       | 260 ns     | —          | 4.43 µs    | 0 B         | **infino wins, 17.0× faster than tantivy** |
+| single_df1        | 119 ns     | —          | 664 ns     | 0 B         | **infino wins, 5.6× faster than tantivy** |
+| single_common     | 14.83 µs   | —          | 68.04 µs   | 0 B         | **infino wins, 4.6× faster than tantivy** |
+| two_term_or       | 106.07 µs  | —          | 419.55 µs  | 0 B         | **infino wins, 4.0× faster than tantivy** |
+| three_wide_or     | 1.61 ms    | —          | 3.05 ms    | 0 B         | **infino wins, 1.9× faster than tantivy** |
+| three_similar_or  | 9.07 ms    | —          | 7.94 ms    | 0 B         | **tantivy wins, 1.1× faster than infino** |
+| five_term_or      | 15.69 ms   | —          | 17.61 ms   | 0 B         | **infino wins, 1.1× faster than tantivy** |
+
+**AND queries:**
+
+| Query             | infino     | infino RSS | Tantivy    | Tantivy RSS | Winner                |
+|-------------------|------------|------------|------------|-------------|-----------------------|
+| two_term_and      | 4.44 ms    | —          | 3.80 ms    | 0 B         | **tantivy wins, 1.2× faster than infino** |
+| three_wide_and    | 3.33 ms    | —          | 2.91 ms    | 0 B         | **tantivy wins, 1.1× faster than infino** |
+| three_similar_and | 4.58 ms    | —          | 4.93 ms    | 0 B         | **infino wins, 1.1× faster than tantivy** |
+| five_term_and     | 5.11 ms    | —          | 4.97 ms    | 0 B         | **tantivy wins, 1.0× faster than infino** |
+
 
 **Per-algorithm probes** (infino-only, WAND+BMW vs MaxScore+BMM):
 
-| Shape         | WAND+BMW   | MaxScore+BMM | Winner                |
-|---------------|------------|--------------|-----------------------|
-| wide_3        | 5.03 ms    | 1.32 ms      | **MaxScore+BMM wins, 3.8× faster than WAND+BMW** |
-| similar_3     | 9.60 ms    | 6.16 ms      | **MaxScore+BMM wins, 1.6× faster than WAND+BMW** |
-| similar_5     | 27.09 ms   | 10.62 ms     | **MaxScore+BMM wins, 2.5× faster than WAND+BMW** |
+| Shape         | WAND+BMW   | WAND+BMW RSS | MaxScore+BMM | MaxScore+BMM RSS | Winner                |
+|---------------|------------|--------------|--------------|------------------|-----------------------|
+| wide_3_or     | 4.80 ms    | —            | 1.34 ms      | —                | **MaxScore+BMM wins, 3.6× faster than WAND+BMW** |
+| similar_3_or  | 9.17 ms    | —            | 5.98 ms      | —                | **MaxScore+BMM wins, 1.5× faster than WAND+BMW** |
+| similar_5_or  | 26.35 ms   | —            | 10.07 ms     | —                | **MaxScore+BMM wins, 2.6× faster than WAND+BMW** |
 
 <!-- END: bench/fts/superfile/search -->
 
@@ -260,10 +272,10 @@ cross-engine match before timing starts.
 <!-- BEGIN: bench/fts/supertable/ingest -->
 ### Supertable FTS — ingest (10000000 docs, Zipfian, 200 tokens/doc, 10K vocab)
 
-| Engine                  | Time       | Throughput | vs Tantivy        |
-|-------------------------|------------|------------|-------------------|
-| infino_auto_writer_pool | 87.74 s    | 114.0 K/s  | **tantivy wins, 1.9× faster than infino** |
-| tantivy_default_threads | 46.46 s    | 215.2 K/s  | —                 |
+| Engine                  | Time       | Throughput | Peak RSS | vs Tantivy        |
+|-------------------------|------------|------------|----------|-------------------|
+| infino_auto_writer_pool | 41.97 s    | 238.3 K/s  | —        | **tantivy wins, 1.9× faster than infino** |
+| tantivy_default_threads | 22.57 s    | 443.0 K/s  | 0 B      | —                 |
 
 *Output cardinality: infino emits `min(writer_pool.threads, total_rows)` superfiles per commit (auto = cpus/2). Tantivy emits one segment per internal worker thread per commit (≈ 8 × N_chunks segments with NoMergePolicy). Override the infino writer-thread count with `INFINO_SUPERTABLE__WRITER_THREADS=N` to match Tantivy's effective output segment count.*
 
@@ -272,15 +284,15 @@ cross-engine match before timing starts.
 <!-- BEGIN: bench/fts/supertable/search -->
 ### Supertable FTS — search (10000000 docs)
 
-| Query          | infino     | Tantivy    | Winner                |
-|----------------|------------|------------|-----------------------|
-| single_rare    | 65.68 µs   | 380.53 µs  | **infino wins, 5.8× faster than tantivy** |
-| single_common  | 98.22 µs   | 6.41 ms    | **infino wins, 65.3× faster than tantivy** |
-| two_term_or    | 652.18 µs  | 1.68 ms    | **infino wins, 2.6× faster than tantivy** |
-| three_wide     | 6.03 ms    | 12.28 ms   | **infino wins, 2.0× faster than tantivy** |
-| three_similar  | 21.17 ms   | 26.27 ms   | **infino wins, 1.2× faster than tantivy** |
-| five_term      | 33.32 ms   | 51.57 ms   | **infino wins, 1.5× faster than tantivy** |
-| prefix         | 76.21 ms   | 109.69 ms  | **infino wins, 1.4× faster than tantivy** |
+| Query          | infino     | infino RSS | Tantivy    | Tantivy RSS | Winner                |
+|----------------|------------|------------|------------|-------------|-----------------------|
+| single_rare    | 42.69 µs   | —          | 230.05 µs  | 0 B         | **infino wins, 5.4× faster than tantivy** |
+| single_common  | 57.57 µs   | —          | 2.66 ms    | 0 B         | **infino wins, 46.3× faster than tantivy** |
+| two_term_or    | 301.85 µs  | —          | 907.38 µs  | 0 B         | **infino wins, 3.0× faster than tantivy** |
+| three_wide_or  | 2.67 ms    | —          | 5.25 ms    | 0 B         | **infino wins, 2.0× faster than tantivy** |
+| three_similar_or | 8.32 ms    | —          | 11.34 ms   | 0 B         | **infino wins, 1.4× faster than tantivy** |
+| five_term_or   | 14.18 ms   | —          | 24.21 ms   | 0 B         | **infino wins, 1.7× faster than tantivy** |
+| prefix         | 33.19 ms   | —          | 45.12 ms   | 0 B         | **infino wins, 1.4× faster than tantivy** |
 
 <!-- END: bench/fts/supertable/search -->
 
