@@ -330,13 +330,18 @@ fn assert_cross_engine_df1_match(reader: &FtsReader, t: &TantivyHandles) -> usiz
 
 // ─── Bench helpers ────────────────────────────────────────────────────
 
-/// Add a head-to-head pair (infino + tantivy) for a query shape.
+/// Add a head-to-head pair (infino + tantivy) for a query shape. The
+/// caller supplies the bool mode for infino and the matching Tantivy
+/// query — for AND shapes, the Tantivy query must be built from a
+/// conjunctive parser (or `BooleanQuery` of `Occur::Must` clauses) so
+/// both sides actually compute the same intersection.
 fn bench_pair(
     g: &mut BenchmarkGroup<WallTime>,
     name: &str,
     r: &FtsReader,
     t: &TantivyHandles,
     infino_terms: &'static [&'static str],
+    infino_mode: BoolMode,
     tantivy_query: &dyn Query,
 ) {
     g.bench_function(format!("{name}_infino_top10"), |b| {
@@ -346,7 +351,7 @@ fn bench_pair(
                     black_box("title"),
                     black_box(infino_terms),
                     black_box(10),
-                    BoolMode::Or,
+                    infino_mode,
                 )
                 .expect("infino search");
             black_box(hits)
@@ -463,37 +468,98 @@ fn bench(c: &mut Criterion) {
             .parse_query("term00050 term00051 term00052 term00053 term00054")
             .expect("parse");
 
+        // AND-mode Tantivy queries: same parser, conjunction-by-default
+        // so `"term00001 term00050"` is parsed as `+term00001 +term00050`.
+        // Matches infino's `BoolMode::And` semantic exactly.
+        let mut and_parser = QueryParser::for_index(&t.index, vec![t.title_field]);
+        and_parser.set_conjunction_by_default();
+        let q_two_term_and = and_parser
+            .parse_query("term00001 term00050")
+            .expect("parse AND");
+        let q_three_wide_and = and_parser
+            .parse_query("term00001 term00050 term00100")
+            .expect("parse AND");
+        let q_three_similar_and = and_parser
+            .parse_query("term00050 term00051 term00052")
+            .expect("parse AND");
+        let q_five_and = and_parser
+            .parse_query("term00050 term00051 term00052 term00053 term00054")
+            .expect("parse AND");
+
         let mut g = c.benchmark_group("superfile_fts_search");
 
-        bench_pair(&mut g, "single_rare", &r, t, &["term09999"], q_single_rare.as_ref());
-        bench_pair(&mut g, "single_df1", &r, t, &["doc0500000"], q_single_df1.as_ref());
-        bench_pair(&mut g, "single_common", &r, t, &["term00001"], q_single_common.as_ref());
-        bench_pair(&mut g, "two_term_or", &r, t, &["term00001", "term00050"], q_two_term.as_ref());
+        bench_pair(&mut g, "single_rare", &r, t, &["term09999"], BoolMode::Or, q_single_rare.as_ref());
+        bench_pair(&mut g, "single_df1", &r, t, &["doc0500000"], BoolMode::Or, q_single_df1.as_ref());
+        bench_pair(&mut g, "single_common", &r, t, &["term00001"], BoolMode::Or, q_single_common.as_ref());
+        bench_pair(&mut g, "two_term_or", &r, t, &["term00001", "term00050"], BoolMode::Or, q_two_term.as_ref());
         bench_pair(
             &mut g,
-            "three_wide",
+            "three_wide_or",
             &r,
             t,
             &["term00001", "term00050", "term00100"],
+            BoolMode::Or,
             q_three_wide.as_ref(),
         );
         bench_pair(
             &mut g,
-            "three_similar",
+            "three_similar_or",
             &r,
             t,
             &["term00050", "term00051", "term00052"],
+            BoolMode::Or,
             q_three_similar.as_ref(),
         );
         bench_pair(
             &mut g,
-            "five_term",
+            "five_term_or",
             &r,
             t,
             &[
                 "term00050", "term00051", "term00052", "term00053", "term00054",
             ],
+            BoolMode::Or,
             q_five.as_ref(),
+        );
+
+        // AND-mode head-to-head pairs.
+        bench_pair(
+            &mut g,
+            "two_term_and",
+            &r,
+            t,
+            &["term00001", "term00050"],
+            BoolMode::And,
+            q_two_term_and.as_ref(),
+        );
+        bench_pair(
+            &mut g,
+            "three_wide_and",
+            &r,
+            t,
+            &["term00001", "term00050", "term00100"],
+            BoolMode::And,
+            q_three_wide_and.as_ref(),
+        );
+        bench_pair(
+            &mut g,
+            "three_similar_and",
+            &r,
+            t,
+            &["term00050", "term00051", "term00052"],
+            BoolMode::And,
+            q_three_similar_and.as_ref(),
+        );
+        bench_pair(
+            &mut g,
+            "five_term_and",
+            &r,
+            t,
+            &[
+                "term00050", "term00051", "term00052", "term00053", "term00054",
+            ],
+            BoolMode::And,
+            q_five_and.as_ref(),
         );
 
         // Per-algo probes (infino-only)
@@ -576,33 +642,50 @@ fn emit_ingest_markdown() {
 fn emit_search_markdown() {
     use crate::markdown::{MarkdownSection, fmt_time, fmt_winner, read_mean_ns};
 
+    let group = "superfile_fts_search";
+
     let mut body = String::new();
     body.push_str(&format!("### Superfile FTS — search ({N_DOCS} docs)\n\n"));
-    body.push_str("| Query          | infino     | Tantivy    | Winner                |\n");
-    body.push_str("|----------------|------------|------------|-----------------------|\n");
 
-    let group = "superfile_fts_search";
-    let queries = [
-        "single_rare",
-        "single_df1",
-        "single_common",
-        "two_term_or",
-        "three_wide",
-        "three_similar",
-        "five_term",
-    ];
-    for q in queries {
-        let inf = read_mean_ns(group, &format!("{q}_infino_top10"));
-        let tan = read_mean_ns(group, &format!("{q}_tantivy_top10"));
-        let inf_s = inf.map(fmt_time).unwrap_or_else(|| "—".into());
-        let tan_s = tan.map(fmt_time).unwrap_or_else(|| "—".into());
-        let w = fmt_winner("infino", inf, "tantivy", tan);
-        body.push_str(&format!(
-            "| {q:14} | {inf_s:10} | {tan_s:10} | {w:21} |\n"
-        ));
-    }
+    let mut emit_table = |heading: &str, queries: &[&str]| {
+        body.push_str(&format!("**{heading}:**\n\n"));
+        body.push_str("| Query             | infino     | Tantivy    | Winner                |\n");
+        body.push_str("|-------------------|------------|------------|-----------------------|\n");
+        for q in queries {
+            let inf = read_mean_ns(group, &format!("{q}_infino_top10"));
+            let tan = read_mean_ns(group, &format!("{q}_tantivy_top10"));
+            let inf_s = inf.map(fmt_time).unwrap_or_else(|| "—".into());
+            let tan_s = tan.map(fmt_time).unwrap_or_else(|| "—".into());
+            let w = fmt_winner("infino", inf, "tantivy", tan);
+            body.push_str(&format!(
+                "| {q:17} | {inf_s:10} | {tan_s:10} | {w:21} |\n"
+            ));
+        }
+        body.push('\n');
+    };
 
-    body.push_str("\n");
+    emit_table(
+        "OR queries",
+        &[
+            "single_rare",
+            "single_df1",
+            "single_common",
+            "two_term_or",
+            "three_wide_or",
+            "three_similar_or",
+            "five_term_or",
+        ],
+    );
+    emit_table(
+        "AND queries",
+        &[
+            "two_term_and",
+            "three_wide_and",
+            "three_similar_and",
+            "five_term_and",
+        ],
+    );
+
     body.push_str("**Per-algorithm probes** (infino-only, WAND+BMW vs MaxScore+BMM):\n\n");
     body.push_str("| Shape         | WAND+BMW   | MaxScore+BMM | Winner                |\n");
     body.push_str("|---------------|------------|--------------|-----------------------|\n");

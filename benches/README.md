@@ -235,23 +235,34 @@ cross-engine match before timing starts.
 <!-- BEGIN: bench/fts/superfile/search -->
 ### Superfile FTS — search (1000000 docs)
 
-| Query          | infino     | Tantivy    | Winner                |
-|----------------|------------|------------|-----------------------|
-| single_rare    | 275 ns     | 11.09 µs   | **infino wins, 40.2× faster than tantivy** |
-| single_df1     | 122 ns     | 6.72 µs    | **infino wins, 55.1× faster than tantivy** |
-| single_common  | 6.06 µs    | 76.82 µs   | **infino wins, 12.7× faster than tantivy** |
-| two_term_or    | 106.96 µs  | 444.55 µs  | **infino wins, 4.2× faster than tantivy** |
-| three_wide     | 1.30 ms    | 3.16 ms    | **infino wins, 2.4× faster than tantivy** |
-| three_similar  | 6.23 ms    | 8.34 ms    | **infino wins, 1.3× faster than tantivy** |
-| five_term      | 10.65 ms   | 18.33 ms   | **infino wins, 1.7× faster than tantivy** |
+**OR queries:**
+
+| Query             | infino     | Tantivy    | Winner                |
+|-------------------|------------|------------|-----------------------|
+| single_rare       | 260 ns     | 10.85 µs   | **infino wins, 41.7× faster than tantivy** |
+| single_df1        | 118 ns     | 6.51 µs    | **infino wins, 55.1× faster than tantivy** |
+| single_common     | 5.79 µs    | 74.18 µs   | **infino wins, 12.8× faster than tantivy** |
+| two_term_or       | 101.95 µs  | 431.71 µs  | **infino wins, 4.2× faster than tantivy** |
+| three_wide_or     | 1.28 ms    | 3.06 ms    | **infino wins, 2.4× faster than tantivy** |
+| three_similar_or  | 5.89 ms    | 8.04 ms    | **infino wins, 1.4× faster than tantivy** |
+| five_term_or      | 10.02 ms   | 17.70 ms   | **infino wins, 1.8× faster than tantivy** |
+
+**AND queries:**
+
+| Query             | infino     | Tantivy    | Winner                |
+|-------------------|------------|------------|-----------------------|
+| two_term_and      | 4.21 ms    | 3.86 ms    | **tantivy wins, 1.1× faster than infino** |
+| three_wide_and    | 3.19 ms    | 3.02 ms    | **tantivy wins, 1.1× faster than infino** |
+| three_similar_and | 4.28 ms    | 5.11 ms    | **infino wins, 1.2× faster than tantivy** |
+| five_term_and     | 4.77 ms    | 5.17 ms    | **infino wins, 1.1× faster than tantivy** |
 
 **Per-algorithm probes** (infino-only, WAND+BMW vs MaxScore+BMM):
 
 | Shape         | WAND+BMW   | MaxScore+BMM | Winner                |
 |---------------|------------|--------------|-----------------------|
-| wide_3        | 5.03 ms    | 1.32 ms      | **MaxScore+BMM wins, 3.8× faster than WAND+BMW** |
-| similar_3     | 9.60 ms    | 6.16 ms      | **MaxScore+BMM wins, 1.6× faster than WAND+BMW** |
-| similar_5     | 27.09 ms   | 10.62 ms     | **MaxScore+BMM wins, 2.5× faster than WAND+BMW** |
+| wide_3        | 4.85 ms    | 1.23 ms      | **MaxScore+BMM wins, 3.9× faster than WAND+BMW** |
+| similar_3     | 9.18 ms    | 5.83 ms      | **MaxScore+BMM wins, 1.6× faster than WAND+BMW** |
+| similar_5     | 26.17 ms   | 10.01 ms     | **MaxScore+BMM wins, 2.6× faster than WAND+BMW** |
 
 <!-- END: bench/fts/superfile/search -->
 
