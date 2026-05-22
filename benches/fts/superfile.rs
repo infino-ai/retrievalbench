@@ -218,9 +218,12 @@ fn bench(c: &mut Criterion) {
         bench_tantivy_only(&mut g, "single_df1", t, q_single_df1.as_ref());
         bench_tantivy_only(&mut g, "single_common", t, q_single_common.as_ref());
         bench_tantivy_only(&mut g, "two_term_or", t, q_two.as_ref());
-        bench_tantivy_only(&mut g, "three_wide", t, q_three_wide.as_ref());
-        bench_tantivy_only(&mut g, "three_similar", t, q_three_similar.as_ref());
-        bench_tantivy_only(&mut g, "five_term", t, q_five.as_ref());
+        // OR labels carry the `_or` suffix to match infino's bench
+        // labels — retrievalbench reads infino's criterion output by
+        // name, and infino writes e.g. `three_wide_or_infino_top10`.
+        bench_tantivy_only(&mut g, "three_wide_or", t, q_three_wide.as_ref());
+        bench_tantivy_only(&mut g, "three_similar_or", t, q_three_similar.as_ref());
+        bench_tantivy_only(&mut g, "five_term_or", t, q_five.as_ref());
         bench_tantivy_only(&mut g, "two_term_and", t, q_two_and.as_ref());
         bench_tantivy_only(&mut g, "three_wide_and", t, q_three_wide_and.as_ref());
         bench_tantivy_only(&mut g, "three_similar_and", t, q_three_similar_and.as_ref());
@@ -252,9 +255,9 @@ const QUERY_NAMES_OR: &[&str] = &[
     "single_df1",
     "single_common",
     "two_term_or",
-    "three_wide",
-    "three_similar",
-    "five_term",
+    "three_wide_or",
+    "three_similar_or",
+    "five_term_or",
 ];
 
 const QUERY_NAMES_AND: &[&str] = &[
