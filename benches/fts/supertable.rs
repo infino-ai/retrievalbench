@@ -26,20 +26,25 @@
 use std::hint::black_box;
 use std::sync::{Arc, OnceLock};
 
-use criterion::{Criterion, Throughput, criterion_group};
-use rayon::ThreadPool;
+use criterion::{criterion_group, Criterion, Throughput};
 use rayon::prelude::*;
+use rayon::ThreadPool;
 use retrievalbench::{corpus, markdown, rss};
-use tantivy::Index;
-use tantivy::Term;
+use tantivy::collector::Collector;
 use tantivy::collector::TopDocs;
 use tantivy::doc;
 use tantivy::indexer::NoMergePolicy;
+use tantivy::query::Weight;
 use tantivy::query::{BooleanQuery, EnableScoring, Occur, Query, QueryParser, TermQuery};
 use tantivy::schema::{
-    INDEXED, IndexRecordOption, STORED, Schema as TSchema, TextFieldIndexing, TextOptions,
+    IndexRecordOption, Schema as TSchema, TextFieldIndexing, TextOptions, INDEXED, STORED,
 };
 use tantivy::tokenizer::{LowerCaser, SimpleTokenizer, TextAnalyzer};
+use tantivy::DocAddress;
+use tantivy::Index;
+use tantivy::Score;
+use tantivy::Searcher;
+use tantivy::Term;
 
 // ─── Constants ────────────────────────────────────────────────────────
 
@@ -130,12 +135,11 @@ fn build_supertable_tantivy(docs: &[String]) -> TantivyHandles {
 /// Sequential Tantivy search — used for the df=1 lookup. Cross-segment
 /// parallelism for the timed search loop goes through
 /// `tantivy_search_parallel` instead.
-fn tantivy_search_serial(handles: &TantivyHandles, q: &dyn Query, k: usize) -> Vec<(u32, f32)> {
-    let reader = handles.index.reader().expect("reader");
-    let searcher = reader.searcher();
-    let top = searcher
-        .search(q, &TopDocs::with_limit(k).order_by_score())
-        .expect("search");
+fn tantivy_search_serial<T>(searcher: &Searcher, q: &dyn Query, collector: &T) -> Vec<(u32, f32)>
+where
+    T: Collector<Fruit = Vec<(Score, DocAddress)>>,
+{
+    let top = searcher.search(q, collector).expect("search");
     top.into_iter()
         .map(|(score, addr)| (addr.doc_id, score))
         .collect()
@@ -149,19 +153,13 @@ fn tantivy_search_serial(handles: &TantivyHandles, q: &dyn Query, k: usize) -> V
 /// on rare-term unions, flattering Tantivy in heavy-query parallel
 /// timings.
 fn tantivy_search_parallel(
-    handles: &TantivyHandles,
-    q: &dyn Query,
     k: usize,
     pool: &ThreadPool,
+    searcher: &Searcher,
+    weight: Box<dyn Weight>,
 ) -> Vec<(u32, f32)> {
     use std::cmp::Ordering;
     use std::collections::BinaryHeap;
-
-    let reader = handles.index.reader().expect("reader");
-    let searcher = reader.searcher();
-    let weight = q
-        .weight(EnableScoring::enabled_from_searcher(&searcher))
-        .expect("weight");
 
     #[derive(Clone, Copy)]
     struct HeapEntry(f32, u32);
@@ -308,7 +306,10 @@ fn bench_search(c: &mut Criterion) {
     let probe_token = format!("doc{probe_doc_id:07}");
     let parser = QueryParser::for_index(&t.index, vec![t.title_field]);
     let parsed = parser.parse_query(&probe_token).expect("parse");
-    let hits: Vec<u32> = tantivy_search_serial(t, parsed.as_ref(), 10)
+    let reader = t.index.reader().expect("reader");
+    let searcher = reader.searcher();
+    let collector = TopDocs::with_limit(10).order_by_score();
+    let hits: Vec<u32> = tantivy_search_serial(&searcher, parsed.as_ref(), &collector)
         .into_iter()
         .map(|(doc, _)| doc)
         .collect();
@@ -325,8 +326,14 @@ fn bench_search(c: &mut Criterion) {
     macro_rules! tantivy_query {
         ($name:literal, $q:expr) => {
             g.bench_function(concat!($name, "_tantivy_top10"), |b| {
+                let reader = t.index.reader().expect("reader");
+                let searcher = reader.searcher();
                 b.iter(|| {
-                    let hits = tantivy_search_parallel(t, $q, TOP_K, &pool);
+                    let weight = black_box(
+                        $q.weight(EnableScoring::enabled_from_searcher(&searcher))
+                            .expect("weight"),
+                    );
+                    let hits = tantivy_search_parallel(TOP_K, &pool, &searcher, weight);
                     black_box(hits)
                 });
             });
@@ -341,8 +348,15 @@ fn bench_search(c: &mut Criterion) {
     tantivy_query!("five_term", qs.q_five.as_ref());
 
     g.bench_function("prefix_tantivy_top10", |b| {
+        let reader = t.index.reader().expect("reader");
+        let searcher = reader.searcher();
         b.iter(|| {
-            let hits = tantivy_search_parallel(t, &qs.q_prefix, TOP_K, &pool);
+            let weight = black_box(
+                qs.q_prefix
+                    .weight(EnableScoring::enabled_from_searcher(&searcher))
+                    .expect("weight"),
+            );
+            let hits = tantivy_search_parallel(TOP_K, &pool, &searcher, weight);
             black_box(hits)
         });
     });
@@ -379,7 +393,7 @@ const QUERY_NAMES: &[&str] = &[
 
 fn emit_ingest_markdown() {
     use markdown::{
-        MarkdownSection, fmt_throughput, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns,
+        fmt_throughput, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns, MarkdownSection,
     };
 
     let group = group_name::SUPERTABLE_FTS_BUILD;
@@ -443,7 +457,7 @@ fn emit_ingest_markdown() {
 }
 
 fn emit_search_markdown() {
-    use markdown::{MarkdownSection, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns};
+    use markdown::{fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns, MarkdownSection};
 
     let group = group_name::SUPERTABLE_FTS_SEARCH;
     let mut body = String::new();
