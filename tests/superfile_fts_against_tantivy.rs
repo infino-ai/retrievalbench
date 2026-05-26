@@ -334,6 +334,112 @@ fn oracle_no_match_query_returns_empty() {
     );
 }
 
+// ─── AND-mode oracles vs Tantivy ──────────────────────────────────────
+
+/// Tantivy AND search: use a query parser configured to default to
+/// conjunction, so a bare `"rust async"` is interpreted as
+/// `+rust +async` (every term required), matching infino's
+/// `BoolMode::And` semantic.
+fn tantivy_top_k_and(
+    index: &Index,
+    title_field: tantivy::schema::Field,
+    query: &str,
+    k: usize,
+) -> Vec<u64> {
+    let reader = index.reader().expect("open Tantivy reader");
+    let searcher = reader.searcher();
+    let mut parser = QueryParser::for_index(index, vec![title_field]);
+    parser.set_conjunction_by_default();
+    let q = parser.parse_query(query).expect("parse Tantivy AND query");
+    let top = searcher
+        .search(&q, &TopDocs::with_limit(k).order_by_score())
+        .expect("search");
+    let id_field = index.schema().get_field("doc_id").expect("get field");
+    top.into_iter()
+        .map(|(_score, addr)| {
+            let doc: tantivy::TantivyDocument = searcher.doc(addr).expect("fetch tantivy doc");
+            doc.get_first(id_field)
+                .expect("get first field")
+                .as_u64()
+                .expect("as u64")
+        })
+        .collect()
+}
+
+fn infino_top_k_and(reader: &SuperfileReader, query: &str, k: usize) -> Vec<u64> {
+    let hits = reader
+        .bm25_search("title", query, k, BoolMode::And)
+        .expect("AND BM25 search");
+    hits.into_iter().map(|(d, _)| d as u64).collect()
+}
+
+fn assert_top_k_and_set_matches(
+    infino: &SuperfileReader,
+    tantivy_idx: &Index,
+    title_field: tantivy::schema::Field,
+    query: &str,
+    k: usize,
+) {
+    let infino_hits = infino_top_k_and(infino, query, k);
+    let tantivy_hits = tantivy_top_k_and(tantivy_idx, title_field, query, k);
+    let infino_set: HashSet<u64> = infino_hits.iter().copied().collect();
+    let tantivy_set: HashSet<u64> = tantivy_hits.iter().copied().collect();
+    assert_eq!(
+        infino_set, tantivy_set,
+        "AND query {query:?}: top-{k} sets disagree — infino={infino_hits:?} tantivy={tantivy_hits:?}"
+    );
+}
+
+#[test]
+fn oracle_and_two_term_overlap_matches_tantivy() {
+    // "rust" + "async" co-occur in docs {0, 20, 22}. Both engines must
+    // return exactly that set under AND semantics.
+    let corp = corpus();
+    let infino = build_infino_superfile(&corp);
+    let (tan, tf) = build_tantivy_index(&corp);
+    assert_top_k_and_set_matches(&infino, &tan, tf, "rust async", 10);
+    let want: HashSet<u64> = [0u64, 20, 22].into_iter().collect();
+    let infino_set: HashSet<u64> = infino_top_k_and(&infino, "rust async", 10).into_iter().collect();
+    assert_eq!(infino_set, want, "infino AND(rust, async) must be {{0,20,22}}");
+}
+
+#[test]
+fn oracle_and_three_term_singleton_matches_tantivy() {
+    // "rust async tokio" intersect only at docs {0, 20} (doc 0 has all
+    // three; doc 20 has rust+async+tokio too — "rust async tokio await
+    // futures"). Both engines must agree on this set.
+    let corp = corpus();
+    let infino = build_infino_superfile(&corp);
+    let (tan, tf) = build_tantivy_index(&corp);
+    assert_top_k_and_set_matches(&infino, &tan, tf, "rust async tokio", 10);
+}
+
+#[test]
+fn oracle_and_missing_term_returns_empty_in_both() {
+    // A term that isn't in the corpus must short-circuit AND to empty
+    // in both engines.
+    let corp = corpus();
+    let infino = build_infino_superfile(&corp);
+    let (tan, tf) = build_tantivy_index(&corp);
+    let infino_hits = infino_top_k_and(&infino, "rust definitelynotpresent", 10);
+    let tantivy_hits = tantivy_top_k_and(&tan, tf, "rust definitelynotpresent", 10);
+    assert!(infino_hits.is_empty(), "infino got {infino_hits:?}");
+    assert!(tantivy_hits.is_empty(), "tantivy got {tantivy_hits:?}");
+}
+
+#[test]
+fn oracle_and_disjoint_terms_return_empty_in_both() {
+    // Both terms exist in the corpus but never co-occur ("python" in
+    // docs 2,3; "kafka" in doc 15). Both engines must return empty.
+    let corp = corpus();
+    let infino = build_infino_superfile(&corp);
+    let (tan, tf) = build_tantivy_index(&corp);
+    let infino_hits = infino_top_k_and(&infino, "python kafka", 10);
+    let tantivy_hits = tantivy_top_k_and(&tan, tf, "python kafka", 10);
+    assert!(infino_hits.is_empty(), "infino got {infino_hits:?}");
+    assert!(tantivy_hits.is_empty(), "tantivy got {tantivy_hits:?}");
+}
+
 #[test]
 fn oracle_long_doc_vs_short_doc_dl_norm() {
     // BM25's dl-norm should make short docs that contain a term rank

@@ -224,9 +224,12 @@ fn bench(c: &mut Criterion) {
         bench_tantivy_only(&mut g, "single_df1", t, q_single_df1.as_ref());
         bench_tantivy_only(&mut g, "single_common", t, q_single_common.as_ref());
         bench_tantivy_only(&mut g, "two_term_or", t, q_two.as_ref());
-        bench_tantivy_only(&mut g, "three_wide", t, q_three_wide.as_ref());
-        bench_tantivy_only(&mut g, "three_similar", t, q_three_similar.as_ref());
-        bench_tantivy_only(&mut g, "five_term", t, q_five.as_ref());
+        // OR labels carry the `_or` suffix to match infino's bench
+        // labels — retrievalbench reads infino's criterion output by
+        // name, and infino writes e.g. `three_wide_or_infino_top10`.
+        bench_tantivy_only(&mut g, "three_wide_or", t, q_three_wide.as_ref());
+        bench_tantivy_only(&mut g, "three_similar_or", t, q_three_similar.as_ref());
+        bench_tantivy_only(&mut g, "five_term_or", t, q_five.as_ref());
         bench_tantivy_only(&mut g, "two_term_and", t, q_two_and.as_ref());
         bench_tantivy_only(&mut g, "three_wide_and", t, q_three_wide_and.as_ref());
         bench_tantivy_only(&mut g, "three_similar_and", t, q_three_similar_and.as_ref());
@@ -258,9 +261,9 @@ const QUERY_NAMES_OR: &[&str] = &[
     "single_df1",
     "single_common",
     "two_term_or",
-    "three_wide",
-    "three_similar",
-    "five_term",
+    "three_wide_or",
+    "three_similar_or",
+    "five_term_or",
 ];
 
 const QUERY_NAMES_AND: &[&str] = &[
@@ -359,8 +362,6 @@ fn emit_search_markdown() {
 
     let mut body = String::new();
     body.push_str(&format!("### Superfile FTS — search ({N_DOCS} docs)\n\n"));
-    body.push_str("| Query          | infino     | infino RSS | Tantivy    | Tantivy RSS | Winner                |\n");
-    body.push_str("|----------------|------------|------------|------------|-------------|-----------------------|\n");
 
     let group = group_name::SUPERFILE_FTS_SEARCH;
     let row = |q: &str, body: &mut String| {
@@ -376,25 +377,32 @@ fn emit_search_markdown() {
             .unwrap_or_else(|| "—".into());
         let w = fmt_winner("infino", inf, "tantivy", tan);
         body.push_str(&format!(
-            "| {q:14} | {inf_s:10} | {inf_rss:10} | {tan_s:10} | {tan_rss:11} | {w:21} |\n"
+            "| {q:17} | {inf_s:10} | {inf_rss:10} | {tan_s:10} | {tan_rss:11} | {w:21} |\n"
         ));
     };
+    // Each section emits its own header + separator so the OR / AND
+    // groups render as two valid markdown tables rather than one big
+    // table with a bold heading injected mid-rows.
+    let emit_section = |heading: &str, queries: &[&str], body: &mut String| {
+        body.push_str(&format!("**{heading}:**\n\n"));
+        body.push_str("| Query             | infino     | infino RSS | Tantivy    | Tantivy RSS | Winner                |\n");
+        body.push_str("|-------------------|------------|------------|------------|-------------|-----------------------|\n");
+        for q in queries {
+            row(q, body);
+        }
+        body.push('\n');
+    };
 
-    body.push_str("**OR queries:**\n\n");
-    for q in QUERY_NAMES_OR {
-        row(q, &mut body);
-    }
-
-    body.push_str("\n**AND queries:**\n\n");
-    for q in QUERY_NAMES_AND {
-        row(q, &mut body);
-    }
+    emit_section("OR queries", QUERY_NAMES_OR, &mut body);
+    emit_section("AND queries", QUERY_NAMES_AND, &mut body);
 
     body.push('\n');
     body.push_str("**Per-algorithm probes** (infino-only, WAND+BMW vs MaxScore+BMM):\n\n");
     body.push_str("| Shape         | WAND+BMW   | WAND+BMW RSS | MaxScore+BMM | MaxScore+BMM RSS | Winner                |\n");
     body.push_str("|---------------|------------|--------------|--------------|------------------|-----------------------|\n");
-    for shape in ["wide_3", "similar_3", "similar_5"] {
+    // Per-algo probe labels carry the `_or` suffix in infino's bench
+    // output (e.g. `wide_3_or_wand_top10`) — the lookup key matches.
+    for shape in ["wide_3_or", "similar_3_or", "similar_5_or"] {
         let wand = read_infino_mean_ns(group, &format!("{shape}_wand_top10"));
         let bmm = read_infino_mean_ns(group, &format!("{shape}_bmm_top10"));
         let wand_s = wand.map(fmt_time).unwrap_or_else(|| "—".into());
