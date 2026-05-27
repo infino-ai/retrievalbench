@@ -19,6 +19,7 @@ use infino::superfile::fts::builder::FtsBuilder;
 use infino::superfile::vector::builder::{VectorBuilder, VectorConfig};
 use infino::superfile::vector::distance::{Metric, normalize};
 use infino::superfile::vector::reader::VectorReader;
+use infino::superfile::vector::rerank_codec::RerankCodec;
 use infino::test_helpers::default_tokenizer;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -258,11 +259,12 @@ pub fn build_vector_index(
 ) -> VectorBuilder {
     let mut b = VectorBuilder::new();
     b.register_column(VectorConfig {
-        name: "v".into(),
+        column: "v".into(),
         dim: DIM,
         n_cent,
         rot_seed: 7,
         metric,
+        rerank_codec: RerankCodec::Fp32,
     })
     .expect("register column");
     for i in 0..n_docs {
@@ -281,7 +283,7 @@ pub fn open_vector_reader(blob: Vec<u8>, n_cent: usize, metric: Metric) -> Vecto
         Metric::NegDot => "negdot",
     };
     let json = format!(
-        r#"[{{"name":"v","dim":{DIM},"n_cent":{n_cent},"rot_seed":7,"metric":"{metric_str}"}}]"#
+        r#"[{{"column":"v","dim":{DIM},"n_cent":{n_cent},"rot_seed":7,"metric":"{metric_str}"}}]"#
     );
     VectorReader::open(Bytes::from(blob), &json).expect("open VectorReader")
 }
@@ -308,6 +310,7 @@ pub fn build_superfile(docs: &[String], vectors: &[f32], n_cent: usize) -> Vec<u
             n_cent,
             rot_seed: 7,
             metric: Metric::Cosine,
+            rerank_codec: RerankCodec::Fp32,
         }],
         Some(default_tokenizer()),
     );

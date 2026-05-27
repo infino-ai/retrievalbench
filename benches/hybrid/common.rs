@@ -16,6 +16,7 @@ use arrow_schema::{DataType, Field, Schema};
 use infino::superfile::builder::{FtsConfig, VectorConfig};
 use infino::superfile::fts::tokenize::Tokenizer;
 use infino::superfile::vector::distance::Metric;
+use infino::superfile::vector::rerank_codec::RerankCodec;
 use infino::supertable::{Supertable, SupertableOptions};
 use infino::test_helpers::default_tokenizer;
 use retrievalbench::corpus;
@@ -104,6 +105,7 @@ pub fn supertable_options(n_cent: usize, writer_threads: usize) -> SupertableOpt
             n_cent,
             rot_seed: 7,
             metric: Metric::Cosine,
+            rerank_codec: RerankCodec::Fp32,
         }],
         Some(tk),
     )
