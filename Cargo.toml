@@ -5,6 +5,9 @@ edition = "2024"
 publish = false
 description = "Head-to-head comparison benches and cross-engine oracle tests for infino vs Tantivy and LanceDB"
 
+[net]
+git-fetch-with-cli = true
+
 [lib]
 path = "benches/utils/mod.rs"
 
@@ -23,6 +26,7 @@ tantivy = "0.26"
 lancedb = { version = "=0.27.2", default-features = false }
 arrow-array-lance = { package = "arrow-array", version = "=57.3.0" }
 arrow-schema-lance = { package = "arrow-schema", version = "=57.3.0" }
+coredb = { git="ssh://git@github.com/infinohq/infino.git", branch="main" } # rev=<commitid> doesnt work
 
 # Shared with infino — pinned versions match infino's deps so the
 # RecordBatches we construct here are interchangeable with infino's.

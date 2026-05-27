@@ -31,6 +31,11 @@
 //! The comparison column shows "—" for infino if infino's criterion
 //! output is missing.
 
+use coredb::event_manager::event_reference::EventReference;
+use coredb::event_manager::event_reference::FieldReference;
+use coredb::event_manager::event_reference::FieldType;
+use coredb::index_manager::metadata::static_metadata::StaticMetadata;
+use coredb::segment_manager::segment::Segment;
 use criterion::{criterion_group, measurement::WallTime, BenchmarkGroup, Criterion, Throughput};
 use retrievalbench::{corpus, markdown, rss};
 use std::hint::black_box;
@@ -51,8 +56,15 @@ use tantivy::Searcher;
 /// Tantivy heap budget for the indexer at 1M docs.
 const TANTIVY_HEAP_BYTES: usize = 500_000_000;
 
+/// CoreDB Segment Config
+const COREDB_SEGMENT_EVENT_THRESHOLD: usize = 1_000_000;
+const COREDB_NUM_SEGMENTS_IN_MEMORY: usize = 5;
+const COREDB_INDEX_NAME: &str = "benchmarkindex";
+
 /// Doc count. Pinned to 1M — the supertable shape is what scales out.
 const N_DOCS: usize = 1_000_000;
+
+const TOP_N: usize = 10;
 
 enum TantivyThreads {
     Single,
@@ -64,10 +76,15 @@ struct TantivyHandles {
     title_field: tantivy::schema::Field,
 }
 
+struct CoreDBHandles {
+    pub segment: Segment,
+}
+
 // ─── Fixtures ────────────────────────────────────────────────────────
 
 static DOCS: OnceLock<Vec<String>> = OnceLock::new();
 static TANTIVY: OnceLock<TantivyHandles> = OnceLock::new();
+static COREDB: OnceLock<CoreDBHandles> = OnceLock::new();
 
 fn docs() -> &'static [String] {
     DOCS.get_or_init(|| corpus::generate_text_corpus(N_DOCS, 1))
@@ -76,6 +93,10 @@ fn docs() -> &'static [String] {
 
 fn tantivy_handles() -> &'static TantivyHandles {
     TANTIVY.get_or_init(|| build_tantivy(docs(), TantivyThreads::Single))
+}
+
+fn coredb_handles() -> &'static CoreDBHandles {
+    COREDB.get_or_init(|| build_coredb(docs()))
 }
 
 // ─── Tantivy builder + search ─────────────────────────────────────────
@@ -119,6 +140,54 @@ fn build_tantivy(docs: &[String], threads: TantivyThreads) -> TantivyHandles {
     TantivyHandles { index, title_field }
 }
 
+fn build_coredb(docs: &[String]) -> CoreDBHandles {
+    let metadata = StaticMetadata::new(
+        COREDB_INDEX_NAME,
+        COREDB_SEGMENT_EVENT_THRESHOLD as u32,
+        COREDB_SEGMENT_EVENT_THRESHOLD as u32,
+        COREDB_NUM_SEGMENTS_IN_MEMORY as u32,
+        // Is this tokenizer the same as the one used in tantivy and infino-ai benchmarks?
+        "*".to_string(),
+        0,
+        None,
+        0,
+        None,
+    );
+    let segment_id = Segment::create_new_id();
+    let tempdir = tempfile::tempdir().expect("should create tempdir");
+    let wal_path = tempdir
+        .path()
+        .join(format!("{}.wal", COREDB_INDEX_NAME))
+        .to_string_lossy()
+        .to_string();
+    let segment_dir_path = tempdir
+        .path()
+        .join(segment_id.clone())
+        .to_string_lossy()
+        .to_string();
+
+    let segment = Segment::new(
+        &segment_id,
+        segment_dir_path.as_str(),
+        wal_path.as_str(),
+        &metadata.get_segment_type().get_segment_component_flags(),
+        COREDB_INDEX_NAME,
+        None,
+    );
+
+    for (i, doc) in docs.iter().enumerate() {
+        let field_reference =
+            FieldReference::new_from_string_value("title", doc.to_string(), FieldType::String);
+        let message = EventReference::new_with_params(vec![field_reference]);
+        segment
+            .store_event(i as u32, i as u64, &message, None, "*", None)
+            .expect("should append");
+    }
+
+    // For term queries, we dont need to commit the segment
+    CoreDBHandles { segment: segment }
+}
+
 fn tantivy_search_scored<T>(searcher: &Searcher, q: &dyn Query, collector: &T) -> Vec<(u32, f32)>
 where
     T: Collector<Fruit = Vec<(Score, DocAddress)>>,
@@ -140,9 +209,28 @@ fn bench_tantivy_only(
     g.bench_function(format!("{name}_tantivy_top10"), |b| {
         let reader = t.index.reader().expect("reader");
         let searcher = reader.searcher();
-        let collector = TopDocs::with_limit(10).order_by_score();
+        let collector = TopDocs::with_limit(TOP_N).order_by_score();
         b.iter(|| {
             let hits = tantivy_search_scored(&searcher, tantivy_query, &collector);
+            black_box(hits)
+        });
+    });
+}
+
+fn bench_coredb_only(
+    g: &mut BenchmarkGroup<WallTime>,
+    name: &str,
+    coredb: &CoreDBHandles,
+    terms: Vec<String>,
+    term_operator: &str,
+    max_size: usize,
+) {
+    g.bench_function(format!("{name}_coredb_top10"), |b| {
+        b.iter(|| {
+            let hits = coredb
+                .segment
+                .search_inverted_index(black_box(terms.clone()), term_operator, max_size)
+                .expect("should search");
             black_box(hits)
         });
     });
@@ -154,6 +242,9 @@ fn bench(c: &mut Criterion) {
     eprintln!("[fts/superfile] building Tantivy ({N_DOCS} docs)...");
     let t = tantivy_handles();
     eprintln!("[fts/superfile] Tantivy ready");
+
+    let coredb = coredb_handles();
+    eprintln!("[fts/superfile] CoreDB ready");
 
     // ---- Ingest sub-bench (group: superfile_fts_build) -------------
     {
@@ -174,6 +265,9 @@ fn bench(c: &mut Criterion) {
                 build_tantivy(black_box(docs_for_ingest), TantivyThreads::Default)
             });
         });
+        g.bench_function(format!("coredb_{n}docs"), |b| {
+            b.iter_with_large_drop(|| build_coredb(black_box(docs_for_ingest)));
+        });
         g.finish();
         let peak = rss_sample.stop();
         let _ = rss::write_peak_rss(
@@ -192,48 +286,205 @@ fn bench(c: &mut Criterion) {
 
     // ---- Search sub-bench (group: superfile_fts_search) ------------
     {
+        let q_single_rare_terms = vec!["term09999".to_string()];
+        let q_single_df1_terms = vec!["doc0500000".to_string()];
+        let q_single_common_terms = vec!["term00001".to_string()];
+        let q_two_terms = vec!["term00001".to_string(), "term00050".to_string()];
+        let q_three_wide_terms = vec![
+            "term00001".to_string(),
+            "term00050".to_string(),
+            "term00100".to_string(),
+        ];
+        let q_three_similar_terms = vec![
+            "term00050".to_string(),
+            "term00051".to_string(),
+            "term00052".to_string(),
+        ];
+        let q_five_terms = vec![
+            "term00050".to_string(),
+            "term00051".to_string(),
+            "term00052".to_string(),
+            "term00053".to_string(),
+            "term00054".to_string(),
+        ];
+
         let parser = QueryParser::for_index(&t.index, vec![t.title_field]);
-        let q_single_rare = parser.parse_query("term09999").expect("parse");
-        let q_single_df1 = parser.parse_query("doc0500000").expect("parse");
-        let q_single_common = parser.parse_query("term00001").expect("parse");
-        let q_two = parser.parse_query("term00001 term00050").expect("parse");
+        let q_single_rare = parser
+            .parse_query(q_single_rare_terms.join(" ").as_str())
+            .expect("parse");
+        let q_single_df1 = parser
+            .parse_query(q_single_df1_terms.join(" ").as_str())
+            .expect("parse");
+        let q_single_common = parser
+            .parse_query(q_single_common_terms.join(" ").as_str())
+            .expect("parse");
+        let q_two = parser
+            .parse_query(q_two_terms.join(" ").as_str())
+            .expect("parse");
         let q_three_wide = parser
-            .parse_query("term00001 term00050 term00100")
+            .parse_query(q_three_wide_terms.join(" ").as_str())
             .expect("parse");
         let q_three_similar = parser
-            .parse_query("term00050 term00051 term00052")
+            .parse_query(q_three_similar_terms.join(" ").as_str())
             .expect("parse");
         let q_five = parser
-            .parse_query("term00050 term00051 term00052 term00053 term00054")
+            .parse_query(q_five_terms.join(" ").as_str())
             .expect("parse");
-        let q_two_and = parser.parse_query("+term00001 +term00050").expect("parse");
+        let q_two_and = parser
+            .parse_query(
+                q_two_terms
+                    .iter()
+                    .map(|t| format!("+{}", t))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .as_str(),
+            )
+            .expect("parse");
         let q_three_wide_and = parser
-            .parse_query("+term00001 +term00050 +term00100")
+            .parse_query(
+                q_three_wide_terms
+                    .iter()
+                    .map(|t| format!("+{}", t))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .as_str(),
+            )
             .expect("parse");
         let q_three_similar_and = parser
-            .parse_query("+term00050 +term00051 +term00052")
+            .parse_query(
+                q_three_similar_terms
+                    .iter()
+                    .map(|t| format!("+{}", t))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .as_str(),
+            )
             .expect("parse");
         let q_five_and = parser
-            .parse_query("+term00050 +term00051 +term00052 +term00053 +term00054")
+            .parse_query(
+                q_five_terms
+                    .iter()
+                    .map(|t| format!("+{}", t))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .as_str(),
+            )
             .expect("parse");
 
         let mut g = c.benchmark_group("superfile_fts_search");
         let rss_sample = rss::PeakSampler::start_default();
 
         bench_tantivy_only(&mut g, "single_rare", t, q_single_rare.as_ref());
+        bench_coredb_only(
+            &mut g,
+            "single_rare",
+            coredb,
+            q_single_rare_terms.clone(),
+            "OR",
+            TOP_N,
+        );
+
         bench_tantivy_only(&mut g, "single_df1", t, q_single_df1.as_ref());
+        bench_coredb_only(
+            &mut g,
+            "single_df1",
+            coredb,
+            q_single_df1_terms.clone(),
+            "OR",
+            TOP_N,
+        );
+
         bench_tantivy_only(&mut g, "single_common", t, q_single_common.as_ref());
+        bench_coredb_only(
+            &mut g,
+            "single_common",
+            coredb,
+            q_single_common_terms.clone(),
+            "OR",
+            TOP_N,
+        );
+
         bench_tantivy_only(&mut g, "two_term_or", t, q_two.as_ref());
+        bench_coredb_only(
+            &mut g,
+            "two_term_or",
+            coredb,
+            q_two_terms.clone(),
+            "OR",
+            TOP_N,
+        );
+
         // OR labels carry the `_or` suffix to match infino's bench
         // labels — retrievalbench reads infino's criterion output by
         // name, and infino writes e.g. `three_wide_or_infino_top10`.
         bench_tantivy_only(&mut g, "three_wide_or", t, q_three_wide.as_ref());
+        bench_coredb_only(
+            &mut g,
+            "three_wide_or",
+            coredb,
+            q_three_wide_terms.clone(),
+            "OR",
+            TOP_N,
+        );
+
         bench_tantivy_only(&mut g, "three_similar_or", t, q_three_similar.as_ref());
+        bench_coredb_only(
+            &mut g,
+            "three_similar_or",
+            coredb,
+            q_three_similar_terms.clone(),
+            "OR",
+            TOP_N,
+        );
+
         bench_tantivy_only(&mut g, "five_term_or", t, q_five.as_ref());
+        bench_coredb_only(
+            &mut g,
+            "five_term_or",
+            coredb,
+            q_five_terms.clone(),
+            "OR",
+            TOP_N,
+        );
+
         bench_tantivy_only(&mut g, "two_term_and", t, q_two_and.as_ref());
+        bench_coredb_only(
+            &mut g,
+            "two_term_and",
+            coredb,
+            q_two_terms.clone(),
+            "AND",
+            TOP_N,
+        );
+
         bench_tantivy_only(&mut g, "three_wide_and", t, q_three_wide_and.as_ref());
+        bench_coredb_only(
+            &mut g,
+            "three_wide_and",
+            coredb,
+            q_three_wide_terms.clone(),
+            "AND",
+            TOP_N,
+        );
         bench_tantivy_only(&mut g, "three_similar_and", t, q_three_similar_and.as_ref());
+        bench_coredb_only(
+            &mut g,
+            "three_similar_and",
+            coredb,
+            q_three_similar_terms.clone(),
+            "AND",
+            TOP_N,
+        );
+
         bench_tantivy_only(&mut g, "five_term_and", t, q_five_and.as_ref());
+        bench_coredb_only(
+            &mut g,
+            "five_term_and",
+            coredb,
+            q_five_terms.clone(),
+            "AND",
+            TOP_N,
+        );
 
         g.finish();
         let peak = rss_sample.stop();
@@ -303,6 +554,9 @@ fn emit_ingest_markdown() {
     let tantivy_def_rss =
         rss::read_peak_rss_bytes(group, &format!("tantivy_default_threads_{N_DOCS}docs"));
 
+    let coredb_ingestion_time = read_mean_ns(group, &format!("coredb_{N_DOCS}docs"));
+    let coredb_ingestion_rss = rss::read_peak_rss_bytes(group, &format!("coredb_{N_DOCS}docs"));
+
     let row = |label: &str,
                ns: Option<f64>,
                peak_rss: Option<u64>,
@@ -317,6 +571,7 @@ fn emit_ingest_markdown() {
         let cmp = if is_baseline {
             "—".to_string()
         } else {
+            // TODO: Add support for CoreDB winner/comparisions
             fmt_winner("infino", ns, "tantivy", baseline)
         };
         format!("| {label:28} | {time:10} | {thrpt:10} | {rss:8} | {cmp:17} |\n")
@@ -350,6 +605,13 @@ fn emit_ingest_markdown() {
         tantivy_def,
         true,
     ));
+    body.push_str(&row(
+        "coredb",
+        coredb_ingestion_time,
+        coredb_ingestion_rss,
+        coredb_ingestion_time,
+        true,
+    ));
 
     markdown::emit(&MarkdownSection {
         anchor_id: "bench/fts/superfile/ingest".into(),
@@ -367,17 +629,23 @@ fn emit_search_markdown() {
     let row = |q: &str, body: &mut String| {
         let inf = read_infino_mean_ns(group, &format!("{q}_infino_top10"));
         let tan = read_mean_ns(group, &format!("{q}_tantivy_top10"));
+        let coredb = read_mean_ns(group, &format!("{q}_coredb_top10"));
         let inf_s = inf.map(fmt_time).unwrap_or_else(|| "—".into());
         let tan_s = tan.map(fmt_time).unwrap_or_else(|| "—".into());
+        let coredb_s = coredb.map(fmt_time).unwrap_or_else(|| "—".into());
         let inf_rss = rss::read_infino_peak_rss_bytes(group, &format!("{q}_infino_top10"))
             .map(rss::fmt_bytes)
             .unwrap_or_else(|| "—".into());
         let tan_rss = rss::read_peak_rss_bytes(group, &format!("{q}_tantivy_top10"))
             .map(rss::fmt_bytes)
             .unwrap_or_else(|| "—".into());
+        let coredb_rss = rss::read_peak_rss_bytes(group, &format!("{q}_coredb_top10"))
+            .map(rss::fmt_bytes)
+            .unwrap_or_else(|| "—".into());
+        // TODO: Add support for CoreDB winner/comparisions
         let w = fmt_winner("infino", inf, "tantivy", tan);
         body.push_str(&format!(
-            "| {q:17} | {inf_s:10} | {inf_rss:10} | {tan_s:10} | {tan_rss:11} | {w:21} |\n"
+            "| {q:17} | {inf_s:10} | {inf_rss:10} | {tan_s:10} | {tan_rss:11} | {coredb_s:10} | {coredb_rss:10} | {w:21} |\n"
         ));
     };
     // Each section emits its own header + separator so the OR / AND
@@ -385,8 +653,8 @@ fn emit_search_markdown() {
     // table with a bold heading injected mid-rows.
     let emit_section = |heading: &str, queries: &[&str], body: &mut String| {
         body.push_str(&format!("**{heading}:**\n\n"));
-        body.push_str("| Query             | infino     | infino RSS | Tantivy    | Tantivy RSS | Winner                |\n");
-        body.push_str("|-------------------|------------|------------|------------|-------------|-----------------------|\n");
+        body.push_str("| Query             | infino     | infino RSS | Tantivy    | Tantivy RSS | CoreDB    | CoreDB RSS  | Winner                |\n");
+        body.push_str("|-------------------|------------|------------|------------|-------------|------------|------------|-----------------------|\n");
         for q in queries {
             row(q, body);
         }
