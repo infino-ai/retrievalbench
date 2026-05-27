@@ -37,7 +37,7 @@ use coredb::event_manager::event_reference::FieldType;
 use coredb::index_manager::metadata::static_metadata::StaticMetadata;
 use coredb::segment_manager::segment::Segment;
 use criterion::{criterion_group, measurement::WallTime, BenchmarkGroup, Criterion, Throughput};
-use retrievalbench::{corpus, markdown, rss};
+use retrievalbench::{corpus, markdown, results, rss};
 use std::hint::black_box;
 use std::sync::OnceLock;
 use tantivy::collector::Collector;
@@ -497,6 +497,93 @@ fn bench(c: &mut Criterion) {
         }
 
         emit_search_markdown();
+    }
+
+    emit_json_results();
+}
+
+// ─── JSON results emitter ─────────────────────────────────────────────
+
+fn emit_json_results() {
+    let mut collector = results::ResultsCollector::new();
+
+    // Collect build benchmark results
+    collector.add_from_criterion(
+        group_name::SUPERFILE_FTS_BUILD,
+        &format!("tantivy_1thread_{N_DOCS}docs"),
+        Some("tantivy_1thread"),
+    );
+    collector.add_from_criterion(
+        group_name::SUPERFILE_FTS_BUILD,
+        &format!("tantivy_default_threads_{N_DOCS}docs"),
+        Some("tantivy_default_threads"),
+    );
+    collector.add_from_criterion(
+        group_name::SUPERFILE_FTS_BUILD,
+        &format!("coredb_{N_DOCS}docs"),
+        Some("coredb"),
+    );
+
+    // Collect search benchmark results - separate groups per query
+    // Note: criterion stores results under "superfile_fts_search", but we organize them by query in results
+    for q in QUERY_NAMES_OR {
+        let search_group = format!("superfile_fts_search_{q}");
+        collector.add_from_criterion_with_group(
+            group_name::SUPERFILE_FTS_SEARCH,
+            &search_group,
+            &format!("{q}_tantivy_top10"),
+            Some("tantivy"),
+        );
+        collector.add_from_criterion_with_group(
+            group_name::SUPERFILE_FTS_SEARCH,
+            &search_group,
+            &format!("{q}_coredb_top10"),
+            Some("coredb"),
+        );
+        collector.add_from_infino_with_group(
+            group_name::SUPERFILE_FTS_SEARCH,
+            &search_group,
+            &format!("{q}_infino_top10"),
+            Some("infino"),
+        );
+    }
+
+    for q in QUERY_NAMES_AND {
+        let search_group = format!("superfile_fts_search_{q}");
+        collector.add_from_criterion_with_group(
+            group_name::SUPERFILE_FTS_SEARCH,
+            &search_group,
+            &format!("{q}_tantivy_top10"),
+            Some("tantivy"),
+        );
+        collector.add_from_criterion_with_group(
+            group_name::SUPERFILE_FTS_SEARCH,
+            &search_group,
+            &format!("{q}_coredb_top10"),
+            Some("coredb"),
+        );
+        collector.add_from_infino_with_group(
+            group_name::SUPERFILE_FTS_SEARCH,
+            &search_group,
+            &format!("{q}_infino_top10"),
+            Some("infino"),
+        );
+    }
+
+    // Also collect infino ingest results if available
+    collector.add_from_infino(
+        group_name::SUPERFILE_FTS_BUILD,
+        &format!("infino_1thread_{N_DOCS}docs"),
+        Some("infino_1thread"),
+    );
+    collector.add_from_infino(
+        group_name::SUPERFILE_FTS_BUILD,
+        &format!("infino_rayon_default_threads_{N_DOCS}docs"),
+        Some("infino_rayon_default_threads"),
+    );
+
+    if let Err(e) = collector.emit() {
+        eprintln!("[results] failed to emit JSON results: {e}");
     }
 }
 
