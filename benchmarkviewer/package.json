@@ -1,0 +1,10 @@
+{
+  "name": "benchmarkviewer",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run server.ts",
+    "start": "bun server.ts"
+  },
+  "dependencies": {}
+}

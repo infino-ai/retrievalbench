@@ -1,0 +1,296 @@
+{
+  "timestamp": 1779893216,
+  "iso_timestamp": "2026-05-27_14-46-56",
+  "results": {
+    "superfile_fts_search_single_df1": {
+      "single_df1_tantivy_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 685.4042549607819,
+        "peak_rss_bytes": 0,
+        "database": "tantivy"
+      },
+      "single_df1_coredb_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 135.2060710687535,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      },
+      "single_df1_infino_top10_infino": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 129.7207867158644,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    },
+    "superfile_fts_search_three_wide_or": {
+      "three_wide_or_tantivy_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 3081873.337058823,
+        "peak_rss_bytes": 0,
+        "database": "tantivy"
+      },
+      "three_wide_or_infino_top10_infino": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 1335354.8075829295,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "three_wide_or_coredb_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 100073.9711257838,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      }
+    },
+    "superfile_fts_search_three_similar_and": {
+      "three_similar_and_coredb_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 73113.14088089729,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      },
+      "three_similar_and_tantivy_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 5073167.792999999,
+        "peak_rss_bytes": 0,
+        "database": "tantivy"
+      },
+      "three_similar_and_infino_top10_infino": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 3980826.373846154,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    },
+    "superfile_fts_search_two_term_or": {
+      "two_term_or_infino_top10_infino": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 104092.63436448804,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "two_term_or_coredb_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 83856.8103243725,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      },
+      "two_term_or_tantivy_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 426262.84583277785,
+        "peak_rss_bytes": 0,
+        "database": "tantivy"
+      }
+    },
+    "superfile_fts_search_five_term_or": {
+      "five_term_or_infino_top10_infino": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 10016652.834,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "five_term_or_coredb_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 122695.92519141594,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      },
+      "five_term_or_tantivy_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 17745746.54333333,
+        "peak_rss_bytes": 0,
+        "database": "tantivy"
+      }
+    },
+    "superfile_fts_search_three_similar_or": {
+      "three_similar_or_infino_top10_infino": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 5801384.355555553,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "three_similar_or_coredb_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 72650.02875450056,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      },
+      "three_similar_or_tantivy_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 8135807.385714284,
+        "peak_rss_bytes": 0,
+        "database": "tantivy"
+      }
+    },
+    "superfile_fts_search_single_rare": {
+      "single_rare_coredb_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 349.92552507355146,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      },
+      "single_rare_infino_top10_infino": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 278.2894087712714,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "single_rare_tantivy_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 4486.7686799287985,
+        "peak_rss_bytes": 0,
+        "database": "tantivy"
+      }
+    },
+    "superfile_fts_search_three_wide_and": {
+      "three_wide_and_tantivy_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 2968976.004705882,
+        "peak_rss_bytes": 0,
+        "database": "tantivy"
+      },
+      "three_wide_and_infino_top10_infino": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 3075822.747647058,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "three_wide_and_coredb_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 98878.64420877324,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      }
+    },
+    "superfile_fts_build": {
+      "infino_rayon_default_threads_1000000docs_infino": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 1611364637.5,
+        "peak_rss_bytes": null,
+        "database": "infino_rayon_default_threads"
+      },
+      "coredb_1000000docs": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 69526156862.6,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      },
+      "tantivy_default_threads_1000000docs": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 4384118279.2,
+        "peak_rss_bytes": 0,
+        "database": "tantivy_default_threads"
+      },
+      "tantivy_1thread_1000000docs": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 13763854825.0,
+        "peak_rss_bytes": 0,
+        "database": "tantivy_1thread"
+      },
+      "infino_1thread_1000000docs_infino": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 10774592671.1,
+        "peak_rss_bytes": null,
+        "database": "infino_1thread"
+      }
+    },
+    "superfile_fts_search_two_term_and": {
+      "two_term_and_infino_top10_infino": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 3919376.9238461554,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "two_term_and_tantivy_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 3841791.248571427,
+        "peak_rss_bytes": 0,
+        "database": "tantivy"
+      },
+      "two_term_and_coredb_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 85590.3160859444,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      }
+    },
+    "superfile_fts_search_five_term_and": {
+      "five_term_and_coredb_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 122100.09498622734,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      },
+      "five_term_and_infino_top10_infino": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 4476393.608333333,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "five_term_and_tantivy_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 5240227.740000002,
+        "peak_rss_bytes": 0,
+        "database": "tantivy"
+      }
+    },
+    "superfile_fts_search_single_common": {
+      "single_common_coredb_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 57971.32674713195,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      },
+      "single_common_tantivy_top10": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 68783.92388944254,
+        "peak_rss_bytes": 0,
+        "database": "tantivy"
+      },
+      "single_common_infino_top10_infino": {
+        "commit_hash": "dcb7639",
+        "os": "macos",
+        "mean_ns": 14646.359019432655,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    }
+  }
+}
