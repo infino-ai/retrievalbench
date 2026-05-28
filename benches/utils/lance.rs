@@ -300,12 +300,10 @@ pub fn build_lance_fts_table(
     (table, t0.elapsed())
 }
 
-/// Execute a pre-built `FullTextSearchQuery`. Callers construct the query
-/// once outside `b.iter()` and `.clone()` it per iteration so that query
-/// object allocation is not part of the measured time — same pattern as
-/// Tantivy where `parser.parse_query(...)` is called before the bench
-/// group and a `&dyn Query` reference is reused across iterations.
-/// `FullTextSearchQuery` and all `FtsQuery` variants derive `Clone`.
+/// Execute a pre-built `FullTextSearchQuery` and return the raw result rows
+/// as `(id, score)` pairs. Used for correctness checks and calibration
+/// outside the benchmark hot path. For benchmarking use
+/// `bench_lance_fts_query` instead, which excludes result deserialization.
 pub fn search_lance_fts_query(
     rt: &Runtime,
     table: &Table,
@@ -340,6 +338,32 @@ pub fn search_lance_fts_query(
             }
         }
         out
+    })
+}
+
+/// Benchmark-only variant: executes the query and collects the Arrow stream
+/// but does **not** deserialize the RecordBatch columns into `(id, score)`
+/// pairs. Returns the total number of result rows so the compiler cannot
+/// elide the work. Result deserialization is Arrow overhead unrelated to
+/// search engine performance — keeping it off the hot path matches how
+/// Tantivy bench functions return raw `Vec<(Score, DocAddress)>` without
+/// further field extraction.
+pub fn bench_lance_fts_query(
+    rt: &Runtime,
+    table: &Table,
+    fts_query: FullTextSearchQuery,
+    k: usize,
+) -> usize {
+    rt.block_on(async move {
+        let stream = table
+            .query()
+            .full_text_search(fts_query)
+            .limit(k)
+            .execute()
+            .await
+            .expect("await async result");
+        let batches: Vec<RecordBatch> = stream.try_collect().await.expect("collect stream");
+        batches.iter().map(|b| b.num_rows()).sum()
     })
 }
 
