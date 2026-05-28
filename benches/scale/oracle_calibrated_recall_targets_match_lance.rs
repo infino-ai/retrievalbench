@@ -63,6 +63,7 @@ use tokio::runtime::Runtime;
 
 use infino::superfile::builder::VectorConfig;
 use infino::superfile::vector::distance::{Metric, normalize};
+use infino::superfile::vector::rerank_codec::RerankCodec;
 use infino::supertable::query::SuperfileHit;
 use infino::supertable::query::vector::VectorSearchOptions;
 use infino::supertable::{Supertable, SupertableOptions};
@@ -221,6 +222,7 @@ fn build_supertable(vectors: &[f32]) -> Supertable {
             n_cent: N_CENT_PER_SEGMENT,
             rot_seed: 7,
             metric: Metric::Cosine,
+            rerank_codec: RerankCodec::Fp32,
         }],
         None,
     )

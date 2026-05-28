@@ -62,6 +62,7 @@ use futures::TryStreamExt;
 use infino::superfile::vector::builder::{VectorBuilder, VectorConfig};
 use infino::superfile::vector::distance::{Metric, normalize};
 use infino::superfile::vector::reader::VectorReader;
+use infino::superfile::vector::rerank_codec::RerankCodec;
 use lancedb::DistanceType;
 use lancedb::Table;
 use lancedb::index::Index;
@@ -136,11 +137,12 @@ fn corpus(seed: u64) -> Vec<f32> {
 fn build_infino(vectors: &[f32]) -> VectorReader {
     let mut b = VectorBuilder::new();
     b.register_column(VectorConfig {
-        name: "v".into(),
+        column: "v".into(),
         dim: DIM,
         n_cent: N_CENT,
         rot_seed: 7,
         metric: Metric::Cosine,
+        rerank_codec: RerankCodec::Fp32,
     })
     .expect("register column");
     for i in 0..N_DOCS {
@@ -148,9 +150,10 @@ fn build_infino(vectors: &[f32]) -> VectorReader {
         b.add(0, &vectors[off..off + DIM])
             .expect("add to vector builder");
     }
-    let blob = b.finish();
-    let json =
-        format!(r#"[{{"name":"v","dim":{DIM},"n_cent":{N_CENT},"rot_seed":7,"metric":"cosine"}}]"#);
+    let blob = b.finish().expect("VectorBuilder::finish");
+    let json = format!(
+        r#"[{{"column":"v","dim":{DIM},"n_cent":{N_CENT},"rot_seed":7,"metric":"cosine"}}]"#
+    );
     VectorReader::open(Bytes::from(blob), &json).expect("open VectorReader")
 }
 

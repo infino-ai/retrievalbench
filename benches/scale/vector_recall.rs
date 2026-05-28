@@ -33,6 +33,7 @@ use infino::superfile::VectorSearchOptions;
 use infino::superfile::vector::builder::{VectorBuilder, VectorConfig};
 use infino::superfile::vector::distance::{Metric, distance, normalize};
 use infino::superfile::vector::reader::VectorReader;
+use infino::superfile::vector::rerank_codec::RerankCodec;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand_distr::{Distribution, StandardNormal};
@@ -97,11 +98,12 @@ fn brute_force_top_k(corpus: &[Vec<f32>], query: &[f32], metric: Metric, k: usiz
 fn build_reader(corpus: &[Vec<f32>], metric: Metric) -> VectorReader {
     let mut b = VectorBuilder::new();
     b.register_column(VectorConfig {
-        name: "v".into(),
+        column: "v".into(),
         dim: DIM,
         n_cent: N_CENT,
         rot_seed: 7,
         metric,
+        rerank_codec: RerankCodec::Fp32,
     })
     .expect("register column");
     for v in corpus {
@@ -114,7 +116,7 @@ fn build_reader(corpus: &[Vec<f32>], metric: Metric) -> VectorReader {
         Metric::NegDot => "negdot",
     };
     let json = format!(
-        r#"[{{"name":"v","dim":{DIM},"n_cent":{N_CENT},"rot_seed":7,"metric":"{metric_str}"}}]"#
+        r#"[{{"column":"v","dim":{DIM},"n_cent":{N_CENT},"rot_seed":7,"metric":"{metric_str}"}}]"#
     );
     VectorReader::open(Bytes::from(bytes), &json).expect("open VectorReader")
 }
