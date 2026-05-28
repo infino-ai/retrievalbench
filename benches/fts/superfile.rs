@@ -83,6 +83,13 @@ struct CoreDBHandles {
     pub segment: Segment,
 }
 
+// Lance data model: a Fragment is one physical `.lance` file (≈ one parquet).
+// A Lance Table is a container of N fragments with a single shared index.
+// We write all 1M docs in one RecordBatch, so Lance creates one fragment —
+// making this bench a single-fragment table. The closest infino analogue is
+// a superfile: one shard, one index, 1M docs. Lance's multi-fragment case
+// has no direct infino equivalent because Lance uses one shared index over
+// all fragments whereas infino's supertable has a separate index per superfile.
 struct LanceFtsHandles {
     table: Table,
     _dir: TempDir,
@@ -263,10 +270,12 @@ fn bench_lance_fts_and_only(
     lh: &LanceFtsHandles,
     terms: &[String],
 ) {
-    let terms = terms.to_vec();
+    // Pre-join outside b.iter() so string allocation is not measured —
+    // same pattern as Tantivy where query objects are built before the bench group.
+    let query = terms.join(" ");
     g.bench_function(format!("{name}_lance_top10"), |b| {
         b.iter(|| {
-            let hits = lance::search_lance_fts_and(&lh.rt, &lh.table, &terms, TOP_N);
+            let hits = lance::search_lance_fts_and(&lh.rt, &lh.table, &query, TOP_N);
             black_box(hits)
         });
     });
@@ -638,7 +647,7 @@ fn emit_json_results() {
     collector.add_from_criterion(
         group_name::SUPERFILE_FTS_BUILD,
         &format!("lance_fts_{N_DOCS}docs"),
-        Some("lance_fts"),
+        Some("lance"),
     );
 
     // Collect search benchmark results - separate groups per query
@@ -661,7 +670,7 @@ fn emit_json_results() {
             group_name::SUPERFILE_FTS_SEARCH,
             &search_group,
             &format!("{q}_lance_top10"),
-            Some("lance_fts"),
+            Some("lance"),
         );
         collector.add_from_infino_with_group(
             group_name::SUPERFILE_FTS_SEARCH,
@@ -689,7 +698,7 @@ fn emit_json_results() {
             group_name::SUPERFILE_FTS_SEARCH,
             &search_group,
             &format!("{q}_lance_top10"),
-            Some("lance_fts"),
+            Some("lance"),
         );
         collector.add_from_infino_with_group(
             group_name::SUPERFILE_FTS_SEARCH,

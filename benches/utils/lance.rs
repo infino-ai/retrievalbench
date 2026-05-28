@@ -300,17 +300,19 @@ pub fn build_lance_fts_table(
     (table, t0.elapsed())
 }
 
-/// One Lance FTS AND call. Every token in `terms` must appear in the
-/// document (`Operator::And`). Returns `(id, score)` pairs.
+/// One Lance FTS AND call. Every token in `query` must appear in the
+/// document (`Operator::And`). `query` is a pre-joined space-separated
+/// term string — callers should compute `terms.join(" ")` outside
+/// `b.iter()` so string allocation is not part of the measured time.
+/// Returns `(id, score)` pairs.
 pub fn search_lance_fts_and(
     rt: &Runtime,
     table: &Table,
-    terms: &[String],
+    query: &str,
     k: usize,
 ) -> Vec<(u32, f32)> {
-    let joined = terms.join(" ");
     rt.block_on(async move {
-        let match_q = MatchQuery::new(joined).with_operator(Operator::And);
+        let match_q = MatchQuery::new(query.to_string()).with_operator(Operator::And);
         let fts_query =
             FullTextSearchQuery::new_query(FtsQuery::Match(match_q)).wand_factor(Some(1.0));
         let stream = table
@@ -343,9 +345,12 @@ pub fn search_lance_fts_and(
     })
 }
 
-/// One Lance FTS call. Returns `(id, score)` pairs. Uses WAND
+/// One Lance FTS OR call. Returns `(id, score)` pairs. Uses WAND
 /// (`wand_factor = 1.0`) for best query performance. The query string
 /// is treated as an OR of its tokens by the underlying inverted index.
+/// `FullTextSearchQuery` is consumed by `full_text_search()` and cannot
+/// be reused across iterations — construction is unavoidably inside the
+/// hot path, but it is a trivial struct allocation (no tokenization).
 pub fn search_lance_fts(
     rt: &Runtime,
     table: &Table,
