@@ -30,6 +30,12 @@ set -euo pipefail
 # Cron's PATH is minimal; make cargo and gh resolvable.
 export PATH="$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
 
+# Benches mmap many files in parallel and exhaust the default 1024
+# soft open-files limit (EMFILE / "Too many open files" panic in the
+# vector bench builder). Raise to 65536, falling back to the hard
+# limit if it's lower than that.
+ulimit -n 65536 2>/dev/null || ulimit -n "$(ulimit -Hn)" 2>/dev/null || true
+
 RB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKSPACE_DIR="$(cd "$RB_DIR/.." && pwd)"
 INFINO_DIR="$WORKSPACE_DIR/infino"
