@@ -91,7 +91,7 @@ fn build_infino(docs: &[String]) -> FtsReader {
     for (i, d) in docs.iter().enumerate() {
         b.add_doc(0, i as u32, d).expect("add doc");
     }
-    let blob = b.finish();
+    let blob = b.finish().expect("FtsBuilder::finish");
     let json = r#"[{"name":"title","tokenizer":"ascii_lower"}]"#;
     FtsReader::open(Bytes::from(blob), json).expect("open FtsReader")
 }

@@ -206,11 +206,11 @@ fn bench(c: &mut Criterion) {
         });
 
         g.finish();
-        let peak = rss_sample.stop();
-        let _ = rss::write_peak_rss(
+        let stats = rss_sample.stop_stats();
+        let _ = rss::write_rss_stats(
             group_name::SUPERTABLE_VEC_BUILD,
             &format!("lance_{N_DOCS}docs"),
-            peak,
+            stats,
         );
 
         emit_ingest_markdown();
@@ -247,12 +247,12 @@ fn bench(c: &mut Criterion) {
         }
 
         g.finish();
-        let peak = rss_sample.stop();
+        let stats = rss_sample.stop_stats();
         for (i, &target) in RECALL_TARGETS.iter().enumerate() {
             let label = format!("recall_at_least_{:02}", (target * 100.0) as u32);
             if let Some(c_la) = cal.lance[i] {
                 let bid = format!("lance_{label}/p={},r={}", c_la.probe, c_la.refine as u32);
-                let _ = rss::write_peak_rss(group_name::SUPERTABLE_VEC_SEARCH, &bid, peak);
+                let _ = rss::write_rss_stats(group_name::SUPERTABLE_VEC_SEARCH, &bid, stats);
             }
         }
 
@@ -274,32 +274,53 @@ fn emit_ingest_markdown() {
 
     let group = group_name::SUPERTABLE_VEC_BUILD;
     let infino_bench = format!("supertable_{N_DOCS}docs_{n_seg}superfiles", n_seg = 4);
+    let lance_bench = format!("lance_{N_DOCS}docs");
     let infino_ns = read_infino_mean_ns(group, &infino_bench);
-    let lance_ns = read_mean_ns(group, &format!("lance_{N_DOCS}docs"));
-    let infino_rss = rss::read_infino_peak_rss_bytes(group, &infino_bench);
-    let lance_rss = rss::read_peak_rss_bytes(group, &format!("lance_{N_DOCS}docs"));
+    let lance_ns = read_mean_ns(group, &lance_bench);
 
     let mut body = String::new();
     body.push_str(&format!(
         "### Supertable vector — ingest ({N_DOCS} docs × dim={DIM}, sharded into 4 superfiles)\n\n"
     ));
-    body.push_str("| Engine | Time | Throughput | Peak RSS | vs LanceDB |\n");
-    body.push_str("|--------|------|------------|----------|------------|\n");
-    for (label, ns, peak_rss, baseline, is_baseline) in [
-        ("supertable", infino_ns, infino_rss, lance_ns, false),
-        ("lance", lance_ns, lance_rss, lance_ns, true),
+    body.push_str(
+        "| Engine | Time | Throughput | Peak RSS | Median RSS | P90 RSS | Peak RSS Δ | vs LanceDB |\n",
+    );
+    body.push_str(
+        "|--------|------|------------|----------|------------|---------|------------|------------|\n",
+    );
+    for (label, ns, peak_rss, median_rss, p90_rss, rss_delta, is_baseline) in [
+        (
+            "supertable",
+            infino_ns,
+            rss::read_infino_peak_rss_bytes(group, &infino_bench),
+            rss::fmt_infino_median_rss(group, &infino_bench),
+            rss::fmt_infino_p90_rss(group, &infino_bench),
+            rss::fmt_infino_peak_rss_delta(group, &infino_bench),
+            false,
+        ),
+        (
+            "lance",
+            lance_ns,
+            rss::read_peak_rss_bytes(group, &lance_bench),
+            rss::fmt_median_rss(group, &lance_bench),
+            rss::fmt_p90_rss(group, &lance_bench),
+            rss::fmt_peak_rss_delta(group, &lance_bench),
+            true,
+        ),
     ] {
         let time = ns.map(fmt_time).unwrap_or_else(|| "—".into());
         let thrpt = ns
             .map(|n| fmt_throughput((N_DOCS as f64) / (n / 1e9)))
             .unwrap_or_else(|| "—".into());
-        let rss = peak_rss.map(rss::fmt_bytes).unwrap_or_else(|| "—".into());
+        let peak = peak_rss.map(rss::fmt_bytes).unwrap_or_else(|| "—".into());
         let cmp = if is_baseline {
             "—".to_string()
         } else {
-            fmt_winner("infino", ns, "lance", baseline)
+            fmt_winner("infino", ns, "lance", lance_ns)
         };
-        body.push_str(&format!("| {label} | {time} | {thrpt} | {rss} | {cmp} |\n"));
+        body.push_str(&format!(
+            "| {label} | {time} | {thrpt} | {peak} | {median_rss} | {p90_rss} | {rss_delta} | {cmp} |\n"
+        ));
     }
 
     markdown::emit(&MarkdownSection {
@@ -309,7 +330,7 @@ fn emit_ingest_markdown() {
 }
 
 fn emit_search_markdown() {
-    use markdown::{MarkdownSection, fmt_time, fmt_winner, read_infino_calibrated, read_mean_ns};
+    use markdown::{MarkdownSection, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns};
 
     let cal = calibrations();
     let group = group_name::SUPERTABLE_VEC_SEARCH;
@@ -318,39 +339,61 @@ fn emit_search_markdown() {
     body.push_str(&format!(
         "### Supertable vector — search ({N_DOCS} docs × dim={DIM}, calibrated at recall targets)\n\n"
     ));
-    body.push_str("| Recall target | supertable (probe/seg, refine) | supertable p50 | supertable RSS | Lance (probe, refine) | Lance p50 | Lance RSS | Winner |\n");
-    body.push_str("|---------------|--------------------------------|----------------|----------------|-----------------------|-----------|-----------|--------|\n");
+    body.push_str(
+        "| Recall target | supertable p50 | supertable Peak RSS | supertable Median RSS | supertable P90 RSS | supertable Peak RSS Δ | Lance (probe, refine) | Lance p50 | Lance Peak RSS | Lance Median RSS | Lance P90 RSS | Lance Peak RSS Δ | Winner |\n",
+    );
+    body.push_str(
+        "|---------------|----------------|---------------------|-----------------------|--------------------|-----------------------|-----------------------|-----------|----------------|------------------|---------------|------------------|--------|\n",
+    );
 
     for (i, &target) in RECALL_TARGETS.iter().enumerate() {
         let recall_label = format!("recall_at_least_{:02}", (target * 100.0) as u32);
         let row_target = format!("{target:.2}");
 
-        let (st_cell, st_ns, st_rss) =
-            match read_infino_calibrated(group, &format!("supertable_{recall_label}")) {
-                Some((p, r, ns)) => {
-                    let bid = format!("supertable_{recall_label}/p={p},r={r}");
-                    let peak_rss = rss::read_infino_peak_rss_bytes(group, &bid);
-                    (format!("(p={p}, r={r})"), Some(ns), peak_rss)
-                }
-                None => ("—".into(), None, None),
-            };
-        let (lan_cell, lan_ns, lan_rss) = match cal.lance[i] {
+        // Supertable (infino): PR6 flat id; calibrated (p/seg, refine)
+        // is in-memory inside infino's process and not on disk.
+        let st_bid = format!("supertable_{recall_label}");
+        let st_ns = read_infino_mean_ns(group, &st_bid);
+        let st_peak = rss::read_infino_peak_rss_bytes(group, &st_bid);
+        let st_median = rss::fmt_infino_median_rss(group, &st_bid);
+        let st_p90 = rss::fmt_infino_p90_rss(group, &st_bid);
+        let st_delta = rss::fmt_infino_peak_rss_delta(group, &st_bid);
+
+        let (lan_cell, lan_ns, lan_peak, lan_median, lan_p90, lan_delta) = match cal.lance[i] {
             Some(c) => {
                 let r_u32 = c.refine as u32;
                 let bid = format!("lance_{recall_label}/p={},r={}", c.probe, r_u32);
                 let ns = read_mean_ns(group, &bid);
-                let peak_rss = rss::read_peak_rss_bytes(group, &bid);
-                (format!("(p={}, r={})", c.probe, r_u32), ns, peak_rss)
+                let peak = rss::read_peak_rss_bytes(group, &bid);
+                let median = rss::fmt_median_rss(group, &bid);
+                let p90 = rss::fmt_p90_rss(group, &bid);
+                let delta = rss::fmt_peak_rss_delta(group, &bid);
+                (
+                    format!("(p={}, r={})", c.probe, r_u32),
+                    ns,
+                    peak,
+                    median,
+                    p90,
+                    delta,
+                )
             }
-            None => ("—".into(), None, None),
+            None => (
+                "—".into(),
+                None,
+                None,
+                "—".into(),
+                "—".into(),
+                "—".into(),
+            ),
         };
+
         let st_t = st_ns.map(fmt_time).unwrap_or_else(|| "—".into());
         let lan_t = lan_ns.map(fmt_time).unwrap_or_else(|| "—".into());
-        let st_rss = st_rss.map(rss::fmt_bytes).unwrap_or_else(|| "—".into());
-        let lan_rss = lan_rss.map(rss::fmt_bytes).unwrap_or_else(|| "—".into());
+        let st_peak = st_peak.map(rss::fmt_bytes).unwrap_or_else(|| "—".into());
+        let lan_peak = lan_peak.map(rss::fmt_bytes).unwrap_or_else(|| "—".into());
         let winner = fmt_winner("supertable", st_ns, "lance", lan_ns);
         body.push_str(&format!(
-            "| {row_target} | {st_cell} | {st_t} | {st_rss} | {lan_cell} | {lan_t} | {lan_rss} | {winner} |\n"
+            "| {row_target} | {st_t} | {st_peak} | {st_median} | {st_p90} | {st_delta} | {lan_cell} | {lan_t} | {lan_peak} | {lan_median} | {lan_p90} | {lan_delta} | {winner} |\n"
         ));
     }
 

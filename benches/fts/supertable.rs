@@ -286,11 +286,11 @@ fn bench_ingest(c: &mut Criterion) {
     });
 
     g.finish();
-    let peak = rss_sample.stop();
-    let _ = rss::write_peak_rss(
+    let stats = rss_sample.stop_stats();
+    let _ = rss::write_rss_stats(
         group_name::SUPERTABLE_FTS_BUILD,
         "tantivy_default_threads",
-        peak,
+        stats,
     );
 
     emit_ingest_markdown();
@@ -348,12 +348,12 @@ fn bench_search(c: &mut Criterion) {
     });
 
     g.finish();
-    let peak = rss_sample.stop();
+    let stats = rss_sample.stop_stats();
     for q in QUERY_NAMES {
-        let _ = rss::write_peak_rss(
+        let _ = rss::write_rss_stats(
             group_name::SUPERTABLE_FTS_SEARCH,
             &format!("{q}_tantivy_top10"),
-            peak,
+            stats,
         );
     }
 
@@ -383,34 +383,38 @@ fn emit_ingest_markdown() {
     };
 
     let group = group_name::SUPERTABLE_FTS_BUILD;
-    let infino_ns = read_infino_mean_ns(group, "infino_auto_writer_pool");
-    let tantivy_ns = read_mean_ns(group, "tantivy_default_threads");
-    let infino_rss = rss::read_infino_peak_rss_bytes(group, "infino_auto_writer_pool");
-    let tantivy_rss = rss::read_peak_rss_bytes(group, "tantivy_default_threads");
+    let infino_id = "infino_auto_writer_pool";
+    let tantivy_id = "tantivy_default_threads";
+    let infino_ns = read_infino_mean_ns(group, infino_id);
+    let tantivy_ns = read_mean_ns(group, tantivy_id);
 
     let mut body = String::new();
     body.push_str(&format!(
         "### Supertable FTS — ingest ({N_DOCS} docs, Zipfian, 200 tokens/doc, 10K vocab)\n\n"
     ));
     body.push_str(
-        "| Engine                  | Time       | Throughput | Peak RSS | vs Tantivy        |\n",
+        "| Engine | Time | Throughput | Peak RSS | Median RSS | P90 RSS | Peak RSS Δ | vs Tantivy |\n",
     );
     body.push_str(
-        "|-------------------------|------------|------------|----------|-------------------|\n",
+        "|--------|------|------------|----------|------------|---------|------------|------------|\n",
     );
-    for (label, ns, peak_rss, baseline_ns, is_baseline) in [
+    for (label, ns, peak_rss, median, p90, delta, is_baseline) in [
         (
-            "infino_auto_writer_pool",
+            infino_id,
             infino_ns,
-            infino_rss,
-            tantivy_ns,
+            rss::read_infino_peak_rss_bytes(group, infino_id),
+            rss::fmt_infino_median_rss(group, infino_id),
+            rss::fmt_infino_p90_rss(group, infino_id),
+            rss::fmt_infino_peak_rss_delta(group, infino_id),
             false,
         ),
         (
-            "tantivy_default_threads",
+            tantivy_id,
             tantivy_ns,
-            tantivy_rss,
-            tantivy_ns,
+            rss::read_peak_rss_bytes(group, tantivy_id),
+            rss::fmt_median_rss(group, tantivy_id),
+            rss::fmt_p90_rss(group, tantivy_id),
+            rss::fmt_peak_rss_delta(group, tantivy_id),
             true,
         ),
     ] {
@@ -418,14 +422,14 @@ fn emit_ingest_markdown() {
         let thrpt = ns
             .map(|n| fmt_throughput((N_DOCS as f64) / (n / 1e9)))
             .unwrap_or_else(|| "—".into());
-        let rss = peak_rss.map(rss::fmt_bytes).unwrap_or_else(|| "—".into());
+        let peak = peak_rss.map(rss::fmt_bytes).unwrap_or_else(|| "—".into());
         let cmp = if is_baseline {
             "—".to_string()
         } else {
-            fmt_winner("infino", ns, "tantivy", baseline_ns)
+            fmt_winner("infino", ns, "tantivy", tantivy_ns)
         };
         body.push_str(&format!(
-            "| {label:23} | {time:10} | {thrpt:10} | {rss:8} | {cmp:17} |\n"
+            "| {label} | {time} | {thrpt} | {peak} | {median} | {p90} | {delta} | {cmp} |\n"
         ));
     }
     body.push_str(
@@ -448,22 +452,34 @@ fn emit_search_markdown() {
     let group = group_name::SUPERTABLE_FTS_SEARCH;
     let mut body = String::new();
     body.push_str(&format!("### Supertable FTS — search ({N_DOCS} docs)\n\n"));
-    body.push_str("| Query          | infino     | infino RSS | Tantivy    | Tantivy RSS | Winner                |\n");
-    body.push_str("|----------------|------------|------------|------------|-------------|-----------------------|\n");
+    body.push_str(
+        "| Query | infino p50 | infino Peak RSS | infino Median RSS | infino P90 RSS | infino Peak RSS Δ | Tantivy p50 | Tantivy Peak RSS | Tantivy Median RSS | Tantivy P90 RSS | Tantivy Peak RSS Δ | Winner |\n",
+    );
+    body.push_str(
+        "|-------|------------|-----------------|-------------------|----------------|-------------------|-------------|------------------|--------------------|-----------------|--------------------|--------|\n",
+    );
     for q in QUERY_NAMES {
-        let inf = read_infino_mean_ns(group, &format!("{q}_supertable_top10"));
-        let tan = read_mean_ns(group, &format!("{q}_tantivy_top10"));
+        let inf_id = format!("{q}_supertable_top10");
+        let tan_id = format!("{q}_tantivy_top10");
+        let inf = read_infino_mean_ns(group, &inf_id);
+        let tan = read_mean_ns(group, &tan_id);
         let inf_s = inf.map(fmt_time).unwrap_or_else(|| "—".into());
         let tan_s = tan.map(fmt_time).unwrap_or_else(|| "—".into());
-        let inf_rss = rss::read_infino_peak_rss_bytes(group, &format!("{q}_supertable_top10"))
+        let inf_peak = rss::read_infino_peak_rss_bytes(group, &inf_id)
             .map(rss::fmt_bytes)
             .unwrap_or_else(|| "—".into());
-        let tan_rss = rss::read_peak_rss_bytes(group, &format!("{q}_tantivy_top10"))
+        let inf_median = rss::fmt_infino_median_rss(group, &inf_id);
+        let inf_p90 = rss::fmt_infino_p90_rss(group, &inf_id);
+        let inf_delta = rss::fmt_infino_peak_rss_delta(group, &inf_id);
+        let tan_peak = rss::read_peak_rss_bytes(group, &tan_id)
             .map(rss::fmt_bytes)
             .unwrap_or_else(|| "—".into());
+        let tan_median = rss::fmt_median_rss(group, &tan_id);
+        let tan_p90 = rss::fmt_p90_rss(group, &tan_id);
+        let tan_delta = rss::fmt_peak_rss_delta(group, &tan_id);
         let w = fmt_winner("infino", inf, "tantivy", tan);
         body.push_str(&format!(
-            "| {q:14} | {inf_s:10} | {inf_rss:10} | {tan_s:10} | {tan_rss:11} | {w:21} |\n"
+            "| {q} | {inf_s} | {inf_peak} | {inf_median} | {inf_p90} | {inf_delta} | {tan_s} | {tan_peak} | {tan_median} | {tan_p90} | {tan_delta} | {w} |\n"
         ));
     }
 

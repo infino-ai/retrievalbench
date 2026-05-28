@@ -30,13 +30,18 @@
 //! sampling adds noise without adding signal.
 
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 const DEFAULT_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Sibling infino criterion tree. Retrievalbench's `Cargo.toml`
+/// pins `infino = { path = "../infino" }`, so the bench harness
+/// reads infino's published numbers from the same relative path.
+const INFINO_CRITERION_REL: &str = "../infino/target/criterion";
 
 /// One-shot read of the calling process's current VmRSS in
 /// bytes. `None` on non-Linux hosts or if `/proc/self/status`
@@ -56,86 +61,113 @@ pub fn current_rss_bytes() -> Option<u64> {
     None
 }
 
-/// Background-thread peak-RSS sampler. Start it before the
-/// work you want to bound and stop it after; the returned
-/// peak is the max VmRSS observed across the sampler's
-/// lifetime.
+/// Background-thread RSS sampler. Start before the work you
+/// want to bound and stop after; [`PeakSampler::stop_stats`]
+/// returns the peak / median / p90 VmRSS observed over the
+/// sampler's lifetime, [`PeakSampler::stop`] keeps the legacy
+/// peak-only return shape.
 ///
-/// The thread reads `/proc/self/status` at `interval`
-/// cadence. Each read is a ~10 µs syscall — negligible next
-/// to the work the sampler watches.
+/// The thread reads `/proc/self/status` at `interval` cadence.
+/// Each read is a ~10 µs syscall — negligible next to the work
+/// the sampler watches.
 pub struct PeakSampler {
     stop: Arc<AtomicBool>,
-    peak: Arc<AtomicU64>,
-    handle: Option<JoinHandle<()>>,
+    handle: Option<JoinHandle<Vec<u64>>>,
+}
+
+/// Peak / median / p90 RSS observed across a [`PeakSampler`]
+/// lifetime. The same shape infino writes to its `rss.json`,
+/// so retrievalbench can record / read across both trees with
+/// one schema.
+#[derive(Debug, Clone, Copy)]
+pub struct RssStats {
+    pub peak_rss_bytes: u64,
+    pub median_rss_bytes: u64,
+    pub p90_rss_bytes: u64,
+}
+
+impl RssStats {
+    fn from_samples(mut samples: Vec<u64>) -> Self {
+        if samples.is_empty() {
+            samples.push(current_rss_bytes().unwrap_or(0));
+        }
+        samples.sort_unstable();
+        Self {
+            peak_rss_bytes: *samples.last().expect("rss samples is non-empty"),
+            median_rss_bytes: percentile_nearest_rank(&samples, 50),
+            p90_rss_bytes: percentile_nearest_rank(&samples, 90),
+        }
+    }
+}
+
+fn percentile_nearest_rank(sorted: &[u64], percentile: usize) -> u64 {
+    debug_assert!(!sorted.is_empty());
+    let rank = ((percentile as f64 / 100.0) * sorted.len() as f64).ceil() as usize;
+    sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
 }
 
 impl PeakSampler {
-    /// Start a sampler with the default bench cadence.
+    /// Start a sampler with the default bench cadence (50 ms).
     pub fn start_default() -> Self {
         Self::start(DEFAULT_INTERVAL)
     }
 
     /// Start a sampler that polls VmRSS every `interval`.
-    /// Seeds the peak with the current reading so callers
-    /// who stop the sampler before any background sample
-    /// lands still see at least the start-time RSS.
+    /// Seeds the sample buffer with the current reading so
+    /// callers who stop the sampler before any background
+    /// sample lands still see at least the start-time RSS.
     pub fn start(interval: Duration) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
-        let peak = Arc::new(AtomicU64::new(current_rss_bytes().unwrap_or(0)));
+        let initial = current_rss_bytes().unwrap_or(0);
 
         let stop_t = Arc::clone(&stop);
-        let peak_t = Arc::clone(&peak);
         let handle = thread::Builder::new()
             .name("rss-sampler".into())
             .spawn(move || {
+                let mut samples = vec![initial];
                 while !stop_t.load(Ordering::Acquire) {
                     if let Some(rss) = current_rss_bytes() {
-                        // Lock-free max: CAS-loop on the
-                        // peak atomic; tolerates concurrent
-                        // updates from rapid restarts (not
-                        // expected here, but cheap to be
-                        // correct about).
-                        let mut cur = peak_t.load(Ordering::Acquire);
-                        while rss > cur {
-                            match peak_t.compare_exchange_weak(
-                                cur,
-                                rss,
-                                Ordering::AcqRel,
-                                Ordering::Acquire,
-                            ) {
-                                Ok(_) => break,
-                                Err(observed) => cur = observed,
-                            }
-                        }
+                        samples.push(rss);
                     }
                     thread::sleep(interval);
                 }
+                if let Some(rss) = current_rss_bytes() {
+                    samples.push(rss);
+                }
+                samples
             })
             .expect("spawn rss-sampler thread");
 
         Self {
             stop,
-            peak,
             handle: Some(handle),
         }
     }
 
     /// Stop the sampler, join the background thread, return
-    /// the peak VmRSS observed (in bytes). Consumes the
-    /// sampler.
-    pub fn stop(mut self) -> u64 {
+    /// only the peak VmRSS observed (in bytes). Kept for
+    /// callers that don't need the full distribution.
+    pub fn stop(self) -> u64 {
+        self.stop_stats().peak_rss_bytes
+    }
+
+    /// Stop the sampler, join the background thread, return
+    /// peak / median / p90 VmRSS observed over the sampler's
+    /// lifetime. Consumes the sampler.
+    pub fn stop_stats(mut self) -> RssStats {
         self.stop.store(true, Ordering::Release);
-        if let Some(h) = self.handle.take() {
-            let _ = h.join();
-        }
-        self.peak.load(Ordering::Acquire)
+        let samples = self
+            .handle
+            .take()
+            .and_then(|h| h.join().ok())
+            .unwrap_or_else(|| vec![current_rss_bytes().unwrap_or(0)]);
+        RssStats::from_samples(samples)
     }
 }
 
 /// Format a byte count as a right-justified human string —
-/// "12.3 GiB" / "456.7 MiB" / "123 KiB" — for the bench
-/// markdown tables.
+/// `"12.34 GiB"` / `"456.78 MiB"` / `"123.4 KiB"` — for the
+/// bench markdown tables.
 pub fn fmt_bytes(b: u64) -> String {
     const KIB: u64 = 1 << 10;
     const MIB: u64 = 1 << 20;
@@ -151,72 +183,193 @@ pub fn fmt_bytes(b: u64) -> String {
     }
 }
 
-/// Persist a peak RSS sample next to criterion's artifacts:
+/// Persist peak / median / p90 RSS next to criterion's
+/// artifacts:
 ///
-/// `target/criterion/<group>/<bench>/rss.json`
+/// `target/criterion/<group>/<bench>/new/rss.json`
 ///
-/// Keeping the artifact beside `estimates.json` makes the markdown
-/// emitters use the same lookup shape for both latency and memory.
-pub fn write_peak_rss(group: &str, bench: &str, peak_rss_bytes: u64) -> std::io::Result<()> {
+/// Before writing, the previous `new/rss.json` is moved to
+/// `base/rss.json`, mirroring criterion's own `new`/`base`
+/// rotation for `estimates.json`. Keeping the artifact beside
+/// `estimates.json` makes the markdown emitters use the same
+/// `(group, bench)` lookup shape for both latency and memory.
+pub fn write_rss_stats(group: &str, bench: &str, stats: RssStats) -> std::io::Result<()> {
     let dir = criterion_bench_dir(group, bench);
-    std::fs::create_dir_all(&dir)?;
+    let new_dir = dir.join("new");
+    let base_dir = dir.join("base");
+    std::fs::create_dir_all(&new_dir)?;
+    if let Ok(existing) = std::fs::read(new_dir.join("rss.json")) {
+        std::fs::create_dir_all(&base_dir)?;
+        std::fs::write(base_dir.join("rss.json"), existing)?;
+    }
     let body = serde_json::json!({
-        "peak_rss_bytes": peak_rss_bytes,
+        "peak_rss_bytes": stats.peak_rss_bytes,
+        "median_rss_bytes": stats.median_rss_bytes,
+        "p90_rss_bytes": stats.p90_rss_bytes,
     });
     std::fs::write(
-        dir.join("rss.json"),
+        new_dir.join("rss.json"),
         serde_json::to_vec_pretty(&body).expect("serialize rss json"),
     )
 }
 
-/// Read a locally recorded peak RSS sample.
+// ─── Local readers ────────────────────────────────────────────────
+
+/// Read a locally recorded peak RSS sample. `None` if the
+/// file doesn't exist (bench was filtered out or hasn't run
+/// yet) or the JSON can't be parsed.
 pub fn read_peak_rss_bytes(group: &str, bench: &str) -> Option<u64> {
-    read_peak_rss_from_path(criterion_bench_dir(group, bench).join("rss.json"))
+    read_local_rss_field(group, bench, "peak_rss_bytes")
 }
 
-/// Read an infino-recorded peak RSS sample from the sibling infino
-/// criterion tree, mirroring `markdown::read_infino_mean_ns`.
+pub fn read_median_rss_bytes(group: &str, bench: &str) -> Option<u64> {
+    read_local_rss_field(group, bench, "median_rss_bytes")
+}
+
+pub fn read_p90_rss_bytes(group: &str, bench: &str) -> Option<u64> {
+    read_local_rss_field(group, bench, "p90_rss_bytes")
+}
+
+/// Read the previous run's peak RSS sample (`base/rss.json`).
+pub fn read_base_peak_rss_bytes(group: &str, bench: &str) -> Option<u64> {
+    let path = criterion_bench_dir(group, bench)
+        .join("base")
+        .join("rss.json");
+    read_field_at(&path, "peak_rss_bytes")
+}
+
+pub fn fmt_median_rss(group: &str, bench: &str) -> String {
+    read_median_rss_bytes(group, bench)
+        .map(fmt_bytes)
+        .unwrap_or_else(|| "—".into())
+}
+
+pub fn fmt_p90_rss(group: &str, bench: &str) -> String {
+    read_p90_rss_bytes(group, bench)
+        .map(fmt_bytes)
+        .unwrap_or_else(|| "—".into())
+}
+
+/// Format the local peak RSS Δ for markdown tables. Uses a 5%
+/// noise band, matching criterion's default practical-significance
+/// threshold.
+pub fn fmt_peak_rss_delta(group: &str, bench: &str) -> String {
+    let new = match read_peak_rss_bytes(group, bench) {
+        Some(v) => v,
+        None => return "—".into(),
+    };
+    let base = match read_base_peak_rss_bytes(group, bench) {
+        Some(v) => v,
+        None => return "—".into(),
+    };
+    fmt_pct_delta(new, base)
+}
+
+// ─── Sibling-infino readers ───────────────────────────────────────
+
+/// Read an infino-recorded peak RSS sample from the sibling
+/// infino criterion tree, mirroring `markdown::read_infino_mean_ns`.
 pub fn read_infino_peak_rss_bytes(group: &str, bench: &str) -> Option<u64> {
-    read_peak_rss_from_path(
-        PathBuf::from("../infino")
-            .join("target")
-            .join("criterion")
-            .join(group)
-            .join(bench)
-            .join("rss.json"),
-    )
+    read_infino_rss_field(group, bench, "peak_rss_bytes")
 }
 
-/// Read an infino-recorded calibrated peak RSS sample. Vector
-/// calibrated rows encode `(probe, refine)` in a subdirectory named
-/// `p=N,r=M`, so this mirrors `markdown::read_infino_calibrated`.
-pub fn read_infino_calibrated_peak_rss_bytes(group: &str, bench_prefix: &str) -> Option<u64> {
-    let base = PathBuf::from("../infino")
-        .join("target")
-        .join("criterion")
-        .join(group)
-        .join(bench_prefix);
-    let entries = std::fs::read_dir(base).ok()?;
-    for entry in entries.flatten() {
-        let rss = entry.path().join("rss.json");
-        if let Some(bytes) = read_peak_rss_from_path(rss) {
-            return Some(bytes);
-        }
-    }
-    None
+pub fn read_infino_median_rss_bytes(group: &str, bench: &str) -> Option<u64> {
+    read_infino_rss_field(group, bench, "median_rss_bytes")
 }
 
+pub fn read_infino_p90_rss_bytes(group: &str, bench: &str) -> Option<u64> {
+    read_infino_rss_field(group, bench, "p90_rss_bytes")
+}
+
+/// Read the infino tree's previous-run peak RSS (`base/rss.json`).
+pub fn read_infino_base_peak_rss_bytes(group: &str, bench: &str) -> Option<u64> {
+    let path = infino_bench_dir(group, bench).join("base").join("rss.json");
+    read_field_at(&path, "peak_rss_bytes")
+}
+
+pub fn fmt_infino_median_rss(group: &str, bench: &str) -> String {
+    read_infino_median_rss_bytes(group, bench)
+        .map(fmt_bytes)
+        .unwrap_or_else(|| "—".into())
+}
+
+pub fn fmt_infino_p90_rss(group: &str, bench: &str) -> String {
+    read_infino_p90_rss_bytes(group, bench)
+        .map(fmt_bytes)
+        .unwrap_or_else(|| "—".into())
+}
+
+pub fn fmt_infino_peak_rss_delta(group: &str, bench: &str) -> String {
+    let new = match read_infino_peak_rss_bytes(group, bench) {
+        Some(v) => v,
+        None => return "—".into(),
+    };
+    let base = match read_infino_base_peak_rss_bytes(group, bench) {
+        Some(v) => v,
+        None => return "—".into(),
+    };
+    fmt_pct_delta(new, base)
+}
+
+// ─── Path / field helpers ─────────────────────────────────────────
+
+/// `$CARGO_TARGET_DIR/criterion/<group>/<bench>` if `CARGO_TARGET_DIR`
+/// is set (criterion writes there when the env var is exported), else
+/// workspace-relative `target/criterion/<group>/<bench>`. Tracking
+/// criterion's own behavior keeps `rss.json` next to `estimates.json`
+/// on every host, including CI where the target dir is redirected
+/// outside the workspace.
 fn criterion_bench_dir(group: &str, bench: &str) -> PathBuf {
-    PathBuf::from("target")
-        .join("criterion")
-        .join(group)
-        .join(bench)
+    let base = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("target"));
+    base.join("criterion").join(group).join(bench)
 }
 
-fn read_peak_rss_from_path(path: PathBuf) -> Option<u64> {
+fn infino_bench_dir(group: &str, bench: &str) -> PathBuf {
+    PathBuf::from(INFINO_CRITERION_REL).join(group).join(bench)
+}
+
+fn read_local_rss_field(group: &str, bench: &str, field: &str) -> Option<u64> {
+    let dir = criterion_bench_dir(group, bench);
+    read_rss_field_in_dir(&dir, field)
+}
+
+fn read_infino_rss_field(group: &str, bench: &str, field: &str) -> Option<u64> {
+    let dir = infino_bench_dir(group, bench);
+    read_rss_field_in_dir(&dir, field)
+}
+
+/// Read `<dir>/new/rss.json`. No fallback path: every writer
+/// goes through [`write_rss_stats`], which always emits the
+/// rotated `new`/`base` layout, so a missing file genuinely
+/// means "no recorded RSS for this bench."
+fn read_rss_field_in_dir(dir: &Path, field: &str) -> Option<u64> {
+    read_field_at(&dir.join("new").join("rss.json"), field)
+}
+
+/// Read a single `u64` field from `path`. Returns `None` if
+/// the file is missing, unparseable, or the field is absent —
+/// no implicit substitution from a different field.
+fn read_field_at(path: &Path, field: &str) -> Option<u64> {
     let text = std::fs::read_to_string(path).ok()?;
     let v: Value = serde_json::from_str(&text).ok()?;
-    v.get("peak_rss_bytes")?.as_u64()
+    v.get(field).and_then(Value::as_u64)
+}
+
+fn fmt_pct_delta(new: u64, base: u64) -> String {
+    if base == 0 {
+        return "—".into();
+    }
+    let pct = ((new as f64 - base as f64) / base as f64) * 100.0;
+    let label = if pct <= -5.0 {
+        "improved"
+    } else if pct >= 5.0 {
+        "regressed"
+    } else {
+        "no change"
+    };
+    format!("{pct:+.1}% {label}")
 }
 
 #[cfg(test)]
