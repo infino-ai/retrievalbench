@@ -30,13 +30,14 @@ use std::time::Instant;
 
 use arrow_array_lance::{
     Array, FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator, RecordBatchReader,
-    UInt32Array,
+    StringArray, UInt32Array,
 };
 use arrow_schema_lance::{DataType, Field, Schema};
 use futures::TryStreamExt;
 use lancedb::DistanceType;
 use lancedb::Table;
 use lancedb::index::Index;
+use lancedb::index::scalar::{FtsIndexBuilder, FtsQuery, FullTextSearchQuery, MatchQuery, Operator};
 use lancedb::index::vector::IvfPqIndexBuilder;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use tokio::runtime::Runtime;
@@ -228,4 +229,157 @@ pub fn calibrate_lance(
 /// ~33% larger PQ codes (64 B vs 48 B / vec).
 pub fn default_n_sub_vectors() -> u32 {
     64
+}
+
+/// Build a Lance table at `path` with a full-text search (FTS / inverted)
+/// index, return it open and ready for queries. Times the whole pipeline
+/// (data load + index write).
+pub fn build_lance_fts_table(
+    rt: &Runtime,
+    path: &Path,
+    docs: &[String],
+    n_docs: usize,
+) -> (Table, std::time::Duration) {
+    let t0 = Instant::now();
+    let table = rt.block_on(async move {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::UInt32, false),
+            Field::new("text", DataType::Utf8, false),
+        ]));
+
+        let ids = UInt32Array::from((0..n_docs as u32).collect::<Vec<_>>());
+        let texts = StringArray::from(docs.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(ids), Arc::new(texts)])
+            .expect("build RecordBatch");
+        let reader: Box<dyn RecordBatchReader + Send> =
+            Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema.clone()));
+
+        let db = lancedb::connect(path.to_str().expect("path to_str"))
+            .execute()
+            .await
+            .expect("await async result");
+        let table = db
+            .create_table("fts", reader)
+            .execute()
+            .await
+            .expect("create lance table");
+
+        // Disable stemming, stop-word removal, and ASCII folding: our
+        // synthetic corpus terms (e.g. "term00001") get no recall benefit
+        // from these filters, and each filter adds query-time tokenization
+        // overhead. This matches what the Tantivy bench uses: only
+        // SimpleTokenizer + LowerCaser.
+        let fts_params = FtsIndexBuilder::default()
+            .stem(false)
+            .remove_stop_words(false)
+            .ascii_folding(false);
+        table
+            .create_index(&["text"], Index::FTS(fts_params))
+            .execute()
+            .await
+            .expect("await async result");
+
+        // Prewarm: load all FTS posting lists into memory so search
+        // measurements don't pay cold I/O latency. The index name is
+        // the column name + "_idx" (lancedb convention).
+        let idx_name = table
+            .list_indices()
+            .await
+            .expect("await async result")
+            .into_iter()
+            .next()
+            .map(|c| c.name)
+            .unwrap_or_else(|| "text_idx".into());
+        table
+            .prewarm_index(&idx_name)
+            .await
+            .expect("await async result");
+
+        table
+    });
+    (table, t0.elapsed())
+}
+
+/// One Lance FTS AND call. Every token in `terms` must appear in the
+/// document (`Operator::And`). Returns `(id, score)` pairs.
+pub fn search_lance_fts_and(
+    rt: &Runtime,
+    table: &Table,
+    terms: &[String],
+    k: usize,
+) -> Vec<(u32, f32)> {
+    let joined = terms.join(" ");
+    rt.block_on(async move {
+        let match_q = MatchQuery::new(joined).with_operator(Operator::And);
+        let fts_query =
+            FullTextSearchQuery::new_query(FtsQuery::Match(match_q)).wand_factor(Some(1.0));
+        let stream = table
+            .query()
+            .full_text_search(fts_query)
+            .limit(k)
+            .execute()
+            .await
+            .expect("await async result");
+        let batches: Vec<RecordBatch> = stream.try_collect().await.expect("collect stream");
+        let mut out = Vec::with_capacity(k);
+        for b in batches {
+            let id_col = b
+                .column_by_name("id")
+                .expect("column by name")
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .expect("downcast");
+            let score_col = b
+                .column_by_name("_score")
+                .expect("column by name")
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .expect("downcast");
+            for i in 0..b.num_rows() {
+                out.push((id_col.value(i), score_col.value(i)));
+            }
+        }
+        out
+    })
+}
+
+/// One Lance FTS call. Returns `(id, score)` pairs. Uses WAND
+/// (`wand_factor = 1.0`) for best query performance. The query string
+/// is treated as an OR of its tokens by the underlying inverted index.
+pub fn search_lance_fts(
+    rt: &Runtime,
+    table: &Table,
+    query: &str,
+    k: usize,
+) -> Vec<(u32, f32)> {
+    rt.block_on(async move {
+        let fts_query = FullTextSearchQuery::new(query.to_string()).wand_factor(Some(1.0));
+        let stream = table
+            .query()
+            .full_text_search(fts_query)
+            .limit(k)
+            .execute()
+            .await
+            .expect("await async result");
+        let batches: Vec<RecordBatch> = stream.try_collect().await.expect("collect stream");
+        let mut out = Vec::with_capacity(k);
+        for b in batches {
+            let id_col = b
+                .column_by_name("id")
+                .expect("column by name")
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .expect("downcast");
+            let score_col = b
+                .column_by_name("_score")
+                .expect("column by name")
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .expect("downcast");
+            for i in 0..b.num_rows() {
+                out.push((id_col.value(i), score_col.value(i)));
+            }
+        }
+        out
+    })
 }
