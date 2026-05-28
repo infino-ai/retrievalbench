@@ -300,21 +300,19 @@ pub fn build_lance_fts_table(
     (table, t0.elapsed())
 }
 
-/// One Lance FTS AND call. Every token in `query` must appear in the
-/// document (`Operator::And`). `query` is a pre-joined space-separated
-/// term string — callers should compute `terms.join(" ")` outside
-/// `b.iter()` so string allocation is not part of the measured time.
-/// Returns `(id, score)` pairs.
-pub fn search_lance_fts_and(
+/// Execute a pre-built `FullTextSearchQuery`. Callers construct the query
+/// once outside `b.iter()` and `.clone()` it per iteration so that query
+/// object allocation is not part of the measured time — same pattern as
+/// Tantivy where `parser.parse_query(...)` is called before the bench
+/// group and a `&dyn Query` reference is reused across iterations.
+/// `FullTextSearchQuery` and all `FtsQuery` variants derive `Clone`.
+pub fn search_lance_fts_query(
     rt: &Runtime,
     table: &Table,
-    query: &str,
+    fts_query: FullTextSearchQuery,
     k: usize,
 ) -> Vec<(u32, f32)> {
     rt.block_on(async move {
-        let match_q = MatchQuery::new(query.to_string()).with_operator(Operator::And);
-        let fts_query =
-            FullTextSearchQuery::new_query(FtsQuery::Match(match_q)).wand_factor(Some(1.0));
         let stream = table
             .query()
             .full_text_search(fts_query)
@@ -345,12 +343,25 @@ pub fn search_lance_fts_and(
     })
 }
 
+/// Build an OR `FullTextSearchQuery` for the given query string with WAND
+/// enabled. Construct this once outside `b.iter()` and pass `.clone()` to
+/// `search_lance_fts_query` each iteration.
+pub fn make_lance_fts_or_query(query: &str) -> FullTextSearchQuery {
+    FullTextSearchQuery::new(query.to_string()).wand_factor(Some(1.0))
+}
+
+/// Build an AND `FullTextSearchQuery` for the given space-separated terms.
+/// Construct this once outside `b.iter()` and pass `.clone()` to
+/// `search_lance_fts_query` each iteration.
+pub fn make_lance_fts_and_query(terms: &[String]) -> FullTextSearchQuery {
+    let joined = terms.join(" ");
+    let match_q = MatchQuery::new(joined).with_operator(Operator::And);
+    FullTextSearchQuery::new_query(FtsQuery::Match(match_q)).wand_factor(Some(1.0))
+}
+
 /// One Lance FTS OR call. Returns `(id, score)` pairs. Uses WAND
 /// (`wand_factor = 1.0`) for best query performance. The query string
 /// is treated as an OR of its tokens by the underlying inverted index.
-/// `FullTextSearchQuery` is consumed by `full_text_search()` and cannot
-/// be reused across iterations — construction is unavoidably inside the
-/// hot path, but it is a trivial struct allocation (no tokenization).
 pub fn search_lance_fts(
     rt: &Runtime,
     table: &Table,

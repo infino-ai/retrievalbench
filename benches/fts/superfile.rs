@@ -256,11 +256,19 @@ fn bench_lance_fts_only(
     lh: &LanceFtsHandles,
     query: &str,
 ) {
+    // Build the query object once. `full_text_search()` consumes it by value,
+    // so we use `iter_batched` to clone it in the *setup* phase (unmeasured),
+    // keeping the hot path clone-free — same spirit as Tantivy's `&dyn Query`.
+    let fts_query = lance::make_lance_fts_or_query(query);
     g.bench_function(format!("{name}_lance_top10"), |b| {
-        b.iter(|| {
-            let hits = lance::search_lance_fts(&lh.rt, &lh.table, query, TOP_N);
-            black_box(hits)
-        });
+        b.iter_batched(
+            || fts_query.clone(),
+            |q| {
+                let hits = lance::search_lance_fts_query(&lh.rt, &lh.table, q, TOP_N);
+                black_box(hits)
+            },
+            criterion::BatchSize::SmallInput,
+        );
     });
 }
 
@@ -270,14 +278,18 @@ fn bench_lance_fts_and_only(
     lh: &LanceFtsHandles,
     terms: &[String],
 ) {
-    // Pre-join outside b.iter() so string allocation is not measured —
-    // same pattern as Tantivy where query objects are built before the bench group.
-    let query = terms.join(" ");
+    // Same iter_batched pattern: clone happens in setup (unmeasured), search
+    // in routine (measured).
+    let fts_query = lance::make_lance_fts_and_query(terms);
     g.bench_function(format!("{name}_lance_top10"), |b| {
-        b.iter(|| {
-            let hits = lance::search_lance_fts_and(&lh.rt, &lh.table, &query, TOP_N);
-            black_box(hits)
-        });
+        b.iter_batched(
+            || fts_query.clone(),
+            |q| {
+                let hits = lance::search_lance_fts_query(&lh.rt, &lh.table, q, TOP_N);
+                black_box(hits)
+            },
+            criterion::BatchSize::SmallInput,
+        );
     });
 }
 
