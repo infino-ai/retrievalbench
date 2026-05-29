@@ -235,9 +235,10 @@ cross-engine match before timing starts.
 <!-- BEGIN: bench/fts/superfile/search -->
 ### Superfile FTS — search (1000000 docs)
 
+#### OR queries
+
 | Query | infino p50 | infino Peak RSS | infino Median RSS | infino P90 RSS | infino Peak RSS Δ | Tantivy p50 | Tantivy Peak RSS | Tantivy Median RSS | Tantivy P90 RSS | Tantivy Peak RSS Δ | Winner |
 |-------|------------|-----------------|-------------------|----------------|-------------------|-------------|------------------|--------------------|-----------------|--------------------|--------|
-**OR queries:**
 
 | single_rare | 466 ns | 3.96 GiB | 3.84 GiB | 3.86 GiB | +1.2% no change | 7.54 µs | 11.72 GiB | 9.81 GiB | 9.82 GiB | — | **infino wins, 16.2× faster than tantivy** |
 | single_df1 | 218 ns | 3.96 GiB | 3.84 GiB | 3.86 GiB | +1.2% no change | 1.33 µs | 11.72 GiB | 9.81 GiB | 9.82 GiB | — | **infino wins, 6.1× faster than tantivy** |
@@ -247,14 +248,16 @@ cross-engine match before timing starts.
 | three_similar_or | 9.00 ms | 3.96 GiB | 3.84 GiB | 3.86 GiB | +1.2% no change | 12.75 ms | 11.72 GiB | 9.81 GiB | 9.82 GiB | — | **infino wins, 1.4× faster than tantivy** |
 | five_term_or | 17.71 ms | 3.96 GiB | 3.84 GiB | 3.86 GiB | +1.2% no change | 26.85 ms | 11.72 GiB | 9.81 GiB | 9.82 GiB | — | **infino wins, 1.5× faster than tantivy** |
 
-**AND queries:**
+#### AND queries
 
+| Query | infino p50 | infino Peak RSS | infino Median RSS | infino P90 RSS | infino Peak RSS Δ | Tantivy p50 | Tantivy Peak RSS | Tantivy Median RSS | Tantivy P90 RSS | Tantivy Peak RSS Δ | Winner |
+|-------|------------|-----------------|-------------------|----------------|-------------------|-------------|------------------|--------------------|-----------------|--------------------|--------|
 | two_term_and | 176.63 µs | 3.96 GiB | 3.84 GiB | 3.86 GiB | +1.2% no change | 9.27 ms | 11.72 GiB | 9.81 GiB | 9.82 GiB | — | **infino wins, 52.5× faster than tantivy** |
 | three_wide_and | 3.38 ms | 3.96 GiB | 3.84 GiB | 3.86 GiB | +1.2% no change | 5.29 ms | 11.72 GiB | 9.81 GiB | 9.82 GiB | — | **infino wins, 1.6× faster than tantivy** |
 | three_similar_and | 5.34 ms | 3.96 GiB | 3.84 GiB | 3.86 GiB | +1.2% no change | 7.20 ms | 11.72 GiB | 9.81 GiB | 9.82 GiB | — | **infino wins, 1.3× faster than tantivy** |
 | five_term_and | 6.54 ms | 3.96 GiB | 3.84 GiB | 3.86 GiB | +1.2% no change | 7.06 ms | 11.72 GiB | 9.81 GiB | 9.82 GiB | — | **infino wins, 1.1× faster than tantivy** |
 
-**Per-algorithm probes** (infino-only, WAND+BMW vs MaxScore+BMM):
+#### Per-algorithm probes (infino-only, WAND+BMW vs MaxScore+BMM)
 
 | Shape | WAND+BMW p50 | WAND+BMW Peak RSS | WAND+BMW Median RSS | WAND+BMW P90 RSS | WAND+BMW Peak RSS Δ | MaxScore+BMM p50 | MaxScore+BMM Peak RSS | MaxScore+BMM Median RSS | MaxScore+BMM P90 RSS | MaxScore+BMM Peak RSS Δ | Winner |
 |-------|--------------|-------------------|---------------------|------------------|---------------------|------------------|-----------------------|-------------------------|----------------------|-------------------------|--------|
