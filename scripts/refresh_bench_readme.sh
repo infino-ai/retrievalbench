@@ -179,7 +179,15 @@ fi
 
 git -C "$RB_DIR" add benches/README.md
 git -C "$RB_DIR" commit -m "bench: refresh README results ($(date -u +%Y-%m-%d))"
-git -C "$RB_DIR" push --force-with-lease origin bench/auto-refresh
+# `bench/auto-refresh` is a disposable rolling branch: it is recreated from
+# origin/main at the top of every run (see `checkout -B ... origin/main` above),
+# so the prior night's tip is *meant* to be overwritten. We never fetch this
+# branch, so a bare `--force-with-lease` compares against a stale remote-tracking
+# ref and aborts with "stale info" the moment the remote branch has advanced
+# (e.g. a previous nightly already pushed). A plain `--force` is the correct,
+# deterministic choice here: the run holds a single-instance flock, no human
+# writes this branch, and the lease provides no protection we actually want.
+git -C "$RB_DIR" push --force origin bench/auto-refresh
 
 existing_pr="$(
   gh pr list \

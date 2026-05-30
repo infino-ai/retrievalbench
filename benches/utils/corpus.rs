@@ -264,7 +264,7 @@ pub fn build_vector_index(
         n_cent,
         rot_seed: 7,
         metric,
-        rerank_codec: RerankCodec::Fp32,
+        rerank_codec: RerankCodec::Sq8,
     })
     .expect("register column");
     for i in 0..n_docs {
@@ -310,7 +310,7 @@ pub fn build_superfile(docs: &[String], vectors: &[f32], n_cent: usize) -> Vec<u
             n_cent,
             rot_seed: 7,
             metric: Metric::Cosine,
-            rerank_codec: RerankCodec::Fp32,
+            rerank_codec: RerankCodec::Sq8,
         }],
         Some(default_tokenizer()),
     );
