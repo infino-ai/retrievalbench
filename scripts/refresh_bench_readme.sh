@@ -172,14 +172,22 @@ git -C "$RB_DIR" checkout -B bench/auto-refresh origin/main
   INFINO_BENCH_UPDATE_README=1 cargo bench --bench vector
 )
 
-if git -C "$RB_DIR" diff --quiet -- benches/README.md; then
-  echo "no README changes after bench run; nothing to PR"
+# Stage the README (modified in place by INFINO_BENCH_UPDATE_README)
+# and the results/ directory (each run drops a new timestamped JSON).
+# Stage first so the diff check sees the new untracked JSON files too.
+git -C "$RB_DIR" add benches/README.md results/
+
+if git -C "$RB_DIR" diff --cached --quiet; then
+  echo "no changes after bench run; nothing to PR"
   exit 0
 fi
 
-git -C "$RB_DIR" add benches/README.md
-git -C "$RB_DIR" commit -m "bench: refresh README results ($(date -u +%Y-%m-%d))"
-git -C "$RB_DIR" push --force-with-lease origin bench/auto-refresh
+git -C "$RB_DIR" commit -m "bench: nightly results ($(date -u +%Y-%m-%d))"
+# Plain --force (not --force-with-lease): we never fetch the
+# bench/auto-refresh remote ref, so --force-with-lease can refuse with
+# "stale info." Plain --force also creates the branch on first push
+# when it's missing on remote.
+git -C "$RB_DIR" push --force origin bench/auto-refresh
 
 existing_pr="$(
   gh pr list \
