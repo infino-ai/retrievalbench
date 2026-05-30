@@ -788,8 +788,6 @@ fn emit_ingest_markdown() {
     let infino_rayon = read_infino_mean_ns(group, &infino_rayon_id);
     let tantivy_1t = read_mean_ns(group, &tantivy_1t_id);
     let tantivy_def = read_mean_ns(group, &tantivy_def_id);
-    let coredb_ingestion_time = read_mean_ns(group, &format!("coredb_{N_DOCS}docs"));
-    let coredb_ingestion_rss = rss::read_peak_rss_bytes(group, &format!("coredb_{N_DOCS}docs"));
     let lance_fts_ingestion_time = read_mean_ns(group, &format!("lance_fts_{N_DOCS}docs"));
     let lance_fts_ingestion_rss =
         rss::read_peak_rss_bytes(group, &format!("lance_fts_{N_DOCS}docs"));
