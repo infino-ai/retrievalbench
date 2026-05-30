@@ -29,6 +29,7 @@ use tokio::runtime::Runtime;
 use retrievalbench::corpus::{self, Calibrated, DIM};
 use retrievalbench::lance;
 use retrievalbench::markdown;
+use retrievalbench::results;
 
 // ─── Constants ────────────────────────────────────────────────────────
 
@@ -214,6 +215,7 @@ fn bench(c: &mut Criterion) {
         );
 
         emit_ingest_markdown();
+        emit_json_results();
     }
 
     // ---- Search sub-bench (group: supertable_vec_search) -----------
@@ -257,6 +259,46 @@ fn bench(c: &mut Criterion) {
         }
 
         emit_search_markdown();
+        emit_json_results();
+    }
+}
+
+// ─── JSON results emitter ─────────────────────────────────────────────
+
+fn emit_json_results() {
+    let mut collector = results::ResultsCollector::new();
+
+    // Collect build benchmark results
+    collector.add_from_criterion(
+        group_name::SUPERTABLE_VEC_BUILD,
+        &format!("lance_{N_DOCS}docs"),
+        Some("lance"),
+    );
+    collector.add_from_infino(
+        group_name::SUPERTABLE_VEC_BUILD,
+        &format!("supertable_{N_DOCS}docs_4superfiles"),
+        Some("infino"),
+    );
+
+    // Collect search benchmark results
+    let cal = calibrations();
+    for (i, &target) in RECALL_TARGETS.iter().enumerate() {
+        let label = format!("recall_at_least_{:02}", (target * 100.0) as u32);
+        if let Some(c_la) = cal.lance[i] {
+            let bid = format!("lance_{label}/p={},r={}", c_la.probe, c_la.refine as u32);
+            collector.add_from_criterion_with_group(
+                group_name::SUPERTABLE_VEC_SEARCH,
+                &format!("supertable_vec_search_{label}"),
+                &bid,
+                Some("lance"),
+            );
+        }
+        // Note: infino search results are stored as calibrated values and would require
+        // more complex extraction. For now, we collect the main Lance results.
+    }
+
+    if let Err(e) = collector.emit() {
+        eprintln!("[results] failed to emit JSON results: {e}");
     }
 }
 

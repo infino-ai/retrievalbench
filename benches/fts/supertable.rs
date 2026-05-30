@@ -29,7 +29,7 @@ use std::sync::{Arc, OnceLock};
 use criterion::{criterion_group, Criterion, Throughput};
 use rayon::prelude::*;
 use rayon::ThreadPool;
-use retrievalbench::{corpus, markdown, rss};
+use retrievalbench::{corpus, markdown, results, rss};
 use tantivy::collector::Collector;
 use tantivy::collector::TopDocs;
 use tantivy::doc;
@@ -292,6 +292,7 @@ fn bench_ingest(c: &mut Criterion) {
     );
 
     emit_ingest_markdown();
+    emit_json_results();
 }
 
 // ─── Bench: search (group: supertable_fts_search) ─────────────────────
@@ -374,6 +375,45 @@ fn bench_search(c: &mut Criterion) {
     }
 
     emit_search_markdown();
+    emit_json_results();
+}
+
+// ─── JSON results emitter ─────────────────────────────────────────────
+
+fn emit_json_results() {
+    let mut collector = results::ResultsCollector::new();
+
+    // Collect build benchmark results
+    collector.add_from_criterion(
+        group_name::SUPERTABLE_FTS_BUILD,
+        "tantivy_default_threads",
+        Some("tantivy"),
+    );
+    collector.add_from_infino(
+        group_name::SUPERTABLE_FTS_BUILD,
+        "infino_auto_writer_pool",
+        Some("infino"),
+    );
+
+    // Collect search benchmark results
+    for q in QUERY_NAMES {
+        collector.add_from_criterion_with_group(
+            group_name::SUPERTABLE_FTS_SEARCH,
+            &format!("supertable_fts_search_{q}"),
+            &format!("{q}_tantivy_top10"),
+            Some("tantivy"),
+        );
+        collector.add_from_infino_with_group(
+            group_name::SUPERTABLE_FTS_SEARCH,
+            &format!("supertable_fts_search_{q}"),
+            &format!("{q}_supertable_top10"),
+            Some("infino"),
+        );
+    }
+
+    if let Err(e) = collector.emit() {
+        eprintln!("[results] failed to emit JSON results: {e}");
+    }
 }
 
 // ─── Markdown summary emitters ────────────────────────────────────────

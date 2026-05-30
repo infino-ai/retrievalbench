@@ -477,7 +477,10 @@ function getHTML() {
         <div class="selector-group">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
             <label>Benchmarks</label>
-            <button id="clearBenchmarks" style="padding: 4px 8px; font-size: 12px; cursor: pointer;">Clear</button>
+            <div style="display: flex; gap: 6px;">
+              <button id="selectAllBenchmarks" style="padding: 4px 8px; font-size: 12px; cursor: pointer;">Select All</button>
+              <button id="clearBenchmarks" style="padding: 4px 8px; font-size: 12px; cursor: pointer;">Clear</button>
+            </div>
           </div>
           <input id="benchmarks-search" type="text" placeholder="Search benchmarks..." style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 8px; font-size: 13px; display: none;" />
           <div id="benchmarks-container" style="border: 1px solid #ddd; border-radius: 4px; padding: 8px; max-height: 150px; overflow-y: auto; background: white; min-height: 50px;">
@@ -504,6 +507,7 @@ function getHTML() {
     const timestamp2Select = document.getElementById("timestamp2");
     const benchmarksContainer = document.getElementById("benchmarks-container");
     const clearBenchmarksBtn = document.getElementById("clearBenchmarks");
+    const selectAllBenchmarksBtn = document.getElementById("selectAllBenchmarks");
     const benchmarksSearchInput = document.getElementById("benchmarks-search");
     const comparisonDiv = document.getElementById("comparison");
 
@@ -751,6 +755,20 @@ function getHTML() {
     timestamp1Select.addEventListener("change", () => { loadBenchmarks(); updateComparison(); updateURL(); saveTabState("progression"); });
     timestamp2Select.addEventListener("change", () => { loadBenchmarks(); updateComparison(); updateURL(); saveTabState("progression"); });
 
+    selectAllBenchmarksBtn.addEventListener("click", () => {
+      benchmarksContainer.querySelectorAll(".benchmark-checkbox").forEach(checkboxDiv => {
+        if (checkboxDiv.style.display !== "none") {
+          const checkbox = checkboxDiv.querySelector("input[type='checkbox']");
+          if (checkbox) {
+            checkbox.checked = true;
+          }
+        }
+      });
+      updateComparison();
+      updateURL();
+      saveTabState("progression");
+    });
+
     clearBenchmarksBtn.addEventListener("click", () => {
       benchmarksContainer.querySelectorAll("input[type='checkbox']").forEach(checkbox => {
         checkbox.checked = false;
@@ -973,10 +991,24 @@ function getHTML() {
       const benchmarkField = document.createElement("div");
       benchmarkField.className = "db-group-field";
 
+      const benchmarkLabelContainer = document.createElement("div");
+      benchmarkLabelContainer.style.display = "flex";
+      benchmarkLabelContainer.style.justifyContent = "space-between";
+      benchmarkLabelContainer.style.alignItems = "center";
+      benchmarkLabelContainer.style.marginBottom = "8px";
+
       const benchmarkLabel = document.createElement("label");
       benchmarkLabel.textContent = "Benchmarks";
-      benchmarkLabel.style.display = "block";
-      benchmarkLabel.style.marginBottom = "8px";
+
+      const selectAllDBBtn = document.createElement("button");
+      selectAllDBBtn.textContent = "Select All";
+      selectAllDBBtn.style.padding = "4px 8px";
+      selectAllDBBtn.style.fontSize = "12px";
+      selectAllDBBtn.style.cursor = "pointer";
+      selectAllDBBtn.disabled = true;
+
+      benchmarkLabelContainer.appendChild(benchmarkLabel);
+      benchmarkLabelContainer.appendChild(selectAllDBBtn);
 
       const benchmarkSearch = document.createElement("input");
       benchmarkSearch.type = "text";
@@ -1000,7 +1032,7 @@ function getHTML() {
       benchmarkContainer.style.background = "white";
       benchmarkContainer.style.minHeight = "50px";
 
-      benchmarkField.appendChild(benchmarkLabel);
+      benchmarkField.appendChild(benchmarkLabelContainer);
       benchmarkField.appendChild(benchmarkSearch);
       benchmarkField.appendChild(benchmarkContainer);
 
@@ -1025,6 +1057,7 @@ function getHTML() {
         benchmarkContainer.innerHTML = "";
         benchmarkSearch.disabled = true;
         benchmarkSearch.value = "";
+        selectAllDBBtn.disabled = true;
 
         if (timestampSelect.value) {
           const benchmarks = await loadDBBenchmarks(timestampSelect.value);
@@ -1052,7 +1085,21 @@ function getHTML() {
             });
           });
           benchmarkSearch.disabled = false;
+          selectAllDBBtn.disabled = false;
         }
+        updateDBComparison();
+        saveDBComparisonURL();
+      });
+
+      selectAllDBBtn.addEventListener("click", () => {
+        benchmarkContainer.querySelectorAll(".benchmark-checkbox").forEach(checkboxDiv => {
+          if (checkboxDiv.style.display !== "none") {
+            const checkbox = checkboxDiv.querySelector("input[type='checkbox']");
+            if (checkbox) {
+              checkbox.checked = true;
+            }
+          }
+        });
         updateDBComparison();
         saveDBComparisonURL();
       });
