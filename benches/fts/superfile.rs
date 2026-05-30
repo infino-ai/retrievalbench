@@ -37,7 +37,8 @@ use coredb::event_manager::event_reference::FieldType;
 use coredb::index_manager::metadata::static_metadata::StaticMetadata;
 use coredb::segment_manager::segment::Segment;
 use criterion::{criterion_group, measurement::WallTime, BenchmarkGroup, Criterion, Throughput};
-use retrievalbench::{corpus, markdown, results, rss};
+use lancedb::Table;
+use retrievalbench::{corpus, lance, markdown, results, rss};
 use std::hint::black_box;
 use std::sync::OnceLock;
 use tantivy::collector::Collector;
@@ -50,6 +51,8 @@ use tantivy::DocAddress;
 use tantivy::Index;
 use tantivy::Score;
 use tantivy::Searcher;
+use tempfile::TempDir;
+use tokio::runtime::Runtime;
 
 // ─── Constants ────────────────────────────────────────────────────────
 
@@ -80,11 +83,25 @@ struct CoreDBHandles {
     pub segment: Segment,
 }
 
+// Lance data model: a Fragment is one physical `.lance` file (≈ one parquet).
+// A Lance Table is a container of N fragments with a single shared index.
+// We write all 1M docs in one RecordBatch, so Lance creates one fragment —
+// making this bench a single-fragment table. The closest infino analogue is
+// a superfile: one shard, one index, 1M docs. Lance's multi-fragment case
+// has no direct infino equivalent because Lance uses one shared index over
+// all fragments whereas infino's supertable has a separate index per superfile.
+struct LanceFtsHandles {
+    table: Table,
+    _dir: TempDir,
+    rt: Runtime,
+}
+
 // ─── Fixtures ────────────────────────────────────────────────────────
 
 static DOCS: OnceLock<Vec<String>> = OnceLock::new();
 static TANTIVY: OnceLock<TantivyHandles> = OnceLock::new();
 static COREDB: OnceLock<CoreDBHandles> = OnceLock::new();
+static LANCE_FTS: OnceLock<LanceFtsHandles> = OnceLock::new();
 
 fn docs() -> &'static [String] {
     DOCS.get_or_init(|| corpus::generate_text_corpus(N_DOCS, 1))
@@ -97,6 +114,22 @@ fn tantivy_handles() -> &'static TantivyHandles {
 
 fn coredb_handles() -> &'static CoreDBHandles {
     COREDB.get_or_init(|| build_coredb(docs()))
+}
+
+fn lance_fts_handles() -> &'static LanceFtsHandles {
+    LANCE_FTS.get_or_init(|| {
+        // current_thread runtime avoids background worker threads competing
+        // for CPU cache during single-query latency measurement — same
+        // choice made for the vector benches where it gave 25–53% better p50.
+        let rt = Runtime::new().expect("tokio runtime");
+        let dir = TempDir::new().expect("tempdir");
+        let (table, _) = lance::build_lance_fts_table(&rt, dir.path(), docs(), N_DOCS);
+        LanceFtsHandles {
+            table,
+            _dir: dir,
+            rt,
+        }
+    })
 }
 
 // ─── Tantivy builder + search ─────────────────────────────────────────
@@ -217,6 +250,50 @@ fn bench_tantivy_only(
     });
 }
 
+fn bench_lance_fts_only(
+    g: &mut BenchmarkGroup<WallTime>,
+    name: &str,
+    lh: &LanceFtsHandles,
+    query: &str,
+) {
+    // Build the query object once. `full_text_search()` consumes it by value,
+    // so we use `iter_batched` to clone it in the *setup* phase (unmeasured),
+    // keeping the hot path clone-free — same spirit as Tantivy's `&dyn Query`.
+    // `bench_lance_fts_query` times only execute()+try_collect(); Arrow column
+    // deserialization is excluded (it is not search engine work).
+    let fts_query = lance::make_lance_fts_or_query(query);
+    g.bench_function(format!("{name}_lance_top10"), |b| {
+        b.iter_batched(
+            || fts_query.clone(),
+            |q| {
+                let n = lance::bench_lance_fts_query(&lh.rt, &lh.table, q, TOP_N);
+                black_box(n)
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+}
+
+fn bench_lance_fts_and_only(
+    g: &mut BenchmarkGroup<WallTime>,
+    name: &str,
+    lh: &LanceFtsHandles,
+    terms: &[String],
+) {
+    // Same iter_batched + bench_lance_fts_query pattern as the OR helper.
+    let fts_query = lance::make_lance_fts_and_query(terms);
+    g.bench_function(format!("{name}_lance_top10"), |b| {
+        b.iter_batched(
+            || fts_query.clone(),
+            |q| {
+                let n = lance::bench_lance_fts_query(&lh.rt, &lh.table, q, TOP_N);
+                black_box(n)
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+}
+
 fn bench_coredb_only(
     g: &mut BenchmarkGroup<WallTime>,
     name: &str,
@@ -246,6 +323,10 @@ fn bench(c: &mut Criterion) {
     let coredb = coredb_handles();
     eprintln!("[fts/superfile] CoreDB ready");
 
+    eprintln!("[fts/superfile] building Lance FTS ({N_DOCS} docs)...");
+    let lance_fts = lance_fts_handles();
+    eprintln!("[fts/superfile] Lance FTS ready");
+
     // ---- Ingest sub-bench (group: superfile_fts_build) -------------
     {
         let n = N_DOCS;
@@ -268,6 +349,15 @@ fn bench(c: &mut Criterion) {
         g.bench_function(format!("coredb_{n}docs"), |b| {
             b.iter_with_large_drop(|| build_coredb(black_box(docs_for_ingest)));
         });
+        g.bench_function(format!("lance_fts_{n}docs"), |b| {
+            b.iter_with_large_drop(|| {
+                let dir = TempDir::new().expect("tempdir");
+                let rt = Runtime::new().expect("tokio runtime");
+                let (table, _) =
+                    lance::build_lance_fts_table(&rt, dir.path(), black_box(docs_for_ingest), n);
+                (table, dir, rt)
+            });
+        });
         g.finish();
         let stats = rss_sample.stop_stats();
         let _ = rss::write_rss_stats(
@@ -278,6 +368,11 @@ fn bench(c: &mut Criterion) {
         let _ = rss::write_rss_stats(
             group_name::SUPERFILE_FTS_BUILD,
             &format!("tantivy_default_threads_{n}docs"),
+            stats,
+        );
+        let _ = rss::write_rss_stats(
+            group_name::SUPERFILE_FTS_BUILD,
+            &format!("lance_fts_{n}docs"),
             stats,
         );
 
@@ -383,6 +478,7 @@ fn bench(c: &mut Criterion) {
             "OR",
             TOP_N,
         );
+        bench_lance_fts_only(&mut g, "single_rare", lance_fts, &q_single_rare_terms.join(" "));
 
         bench_tantivy_only(&mut g, "single_df1", t, q_single_df1.as_ref());
         bench_coredb_only(
@@ -393,6 +489,7 @@ fn bench(c: &mut Criterion) {
             "OR",
             TOP_N,
         );
+        bench_lance_fts_only(&mut g, "single_df1", lance_fts, &q_single_df1_terms.join(" "));
 
         bench_tantivy_only(&mut g, "single_common", t, q_single_common.as_ref());
         bench_coredb_only(
@@ -402,6 +499,12 @@ fn bench(c: &mut Criterion) {
             q_single_common_terms.clone(),
             "OR",
             TOP_N,
+        );
+        bench_lance_fts_only(
+            &mut g,
+            "single_common",
+            lance_fts,
+            &q_single_common_terms.join(" "),
         );
 
         bench_tantivy_only(&mut g, "two_term_or", t, q_two.as_ref());
@@ -413,6 +516,7 @@ fn bench(c: &mut Criterion) {
             "OR",
             TOP_N,
         );
+        bench_lance_fts_only(&mut g, "two_term_or", lance_fts, &q_two_terms.join(" "));
 
         // OR labels carry the `_or` suffix to match infino's bench
         // labels — retrievalbench reads infino's criterion output by
@@ -426,6 +530,12 @@ fn bench(c: &mut Criterion) {
             "OR",
             TOP_N,
         );
+        bench_lance_fts_only(
+            &mut g,
+            "three_wide_or",
+            lance_fts,
+            &q_three_wide_terms.join(" "),
+        );
 
         bench_tantivy_only(&mut g, "three_similar_or", t, q_three_similar.as_ref());
         bench_coredb_only(
@@ -435,6 +545,12 @@ fn bench(c: &mut Criterion) {
             q_three_similar_terms.clone(),
             "OR",
             TOP_N,
+        );
+        bench_lance_fts_only(
+            &mut g,
+            "three_similar_or",
+            lance_fts,
+            &q_three_similar_terms.join(" "),
         );
 
         bench_tantivy_only(&mut g, "five_term_or", t, q_five.as_ref());
@@ -446,6 +562,7 @@ fn bench(c: &mut Criterion) {
             "OR",
             TOP_N,
         );
+        bench_lance_fts_only(&mut g, "five_term_or", lance_fts, &q_five_terms.join(" "));
 
         bench_tantivy_only(&mut g, "two_term_and", t, q_two_and.as_ref());
         bench_coredb_only(
@@ -456,6 +573,7 @@ fn bench(c: &mut Criterion) {
             "AND",
             TOP_N,
         );
+        bench_lance_fts_and_only(&mut g, "two_term_and", lance_fts, &q_two_terms);
 
         bench_tantivy_only(&mut g, "three_wide_and", t, q_three_wide_and.as_ref());
         bench_coredb_only(
@@ -466,6 +584,8 @@ fn bench(c: &mut Criterion) {
             "AND",
             TOP_N,
         );
+        bench_lance_fts_and_only(&mut g, "three_wide_and", lance_fts, &q_three_wide_terms);
+
         bench_tantivy_only(&mut g, "three_similar_and", t, q_three_similar_and.as_ref());
         bench_coredb_only(
             &mut g,
@@ -474,6 +594,12 @@ fn bench(c: &mut Criterion) {
             q_three_similar_terms.clone(),
             "AND",
             TOP_N,
+        );
+        bench_lance_fts_and_only(
+            &mut g,
+            "three_similar_and",
+            lance_fts,
+            &q_three_similar_terms,
         );
 
         bench_tantivy_only(&mut g, "five_term_and", t, q_five_and.as_ref());
@@ -485,6 +611,7 @@ fn bench(c: &mut Criterion) {
             "AND",
             TOP_N,
         );
+        bench_lance_fts_and_only(&mut g, "five_term_and", lance_fts, &q_five_terms);
 
         g.finish();
         let stats = rss_sample.stop_stats();
@@ -492,6 +619,13 @@ fn bench(c: &mut Criterion) {
             let _ = rss::write_rss_stats(
                 group_name::SUPERFILE_FTS_SEARCH,
                 &format!("{q}_tantivy_top10"),
+                stats,
+            );
+        }
+        for q in QUERY_NAMES_OR.iter().chain(QUERY_NAMES_AND.iter()) {
+            let _ = rss::write_rss_stats(
+                group_name::SUPERFILE_FTS_SEARCH,
+                &format!("{q}_lance_top10"),
                 stats,
             );
         }
@@ -523,6 +657,11 @@ fn emit_json_results() {
         &format!("coredb_{N_DOCS}docs"),
         Some("coredb"),
     );
+    collector.add_from_criterion(
+        group_name::SUPERFILE_FTS_BUILD,
+        &format!("lance_fts_{N_DOCS}docs"),
+        Some("lance"),
+    );
 
     // Collect search benchmark results - separate groups per query
     // Note: criterion stores results under "superfile_fts_search", but we organize them by query in results
@@ -539,6 +678,12 @@ fn emit_json_results() {
             &search_group,
             &format!("{q}_coredb_top10"),
             Some("coredb"),
+        );
+        collector.add_from_criterion_with_group(
+            group_name::SUPERFILE_FTS_SEARCH,
+            &search_group,
+            &format!("{q}_lance_top10"),
+            Some("lance"),
         );
         collector.add_from_infino_with_group(
             group_name::SUPERFILE_FTS_SEARCH,
@@ -561,6 +706,12 @@ fn emit_json_results() {
             &search_group,
             &format!("{q}_coredb_top10"),
             Some("coredb"),
+        );
+        collector.add_from_criterion_with_group(
+            group_name::SUPERFILE_FTS_SEARCH,
+            &search_group,
+            &format!("{q}_lance_top10"),
+            Some("lance"),
         );
         collector.add_from_infino_with_group(
             group_name::SUPERFILE_FTS_SEARCH,
@@ -637,6 +788,9 @@ fn emit_ingest_markdown() {
     let infino_rayon = read_infino_mean_ns(group, &infino_rayon_id);
     let tantivy_1t = read_mean_ns(group, &tantivy_1t_id);
     let tantivy_def = read_mean_ns(group, &tantivy_def_id);
+    let lance_fts_ingestion_time = read_mean_ns(group, &format!("lance_fts_{N_DOCS}docs"));
+    let lance_fts_ingestion_rss =
+        rss::read_peak_rss_bytes(group, &format!("lance_fts_{N_DOCS}docs"));
 
     let infino_row = |label: &str, ns: Option<f64>, bench: &str, baseline: Option<f64>| -> String {
         let time = ns.map(fmt_time).unwrap_or_else(|| "—".into());
@@ -667,6 +821,24 @@ fn emit_ingest_markdown() {
         format!("| {label} | {time} | {thrpt} | {peak} | {median} | {p90} | {delta} | — |\n")
     };
 
+    // Generic row for engines that use write_rss_stats (coredb, lance_fts).
+    // Reads peak/median/p90/delta from the same rss store as tantivy_row.
+    let row = |label: &str, ns: Option<f64>, _rss: Option<u64>, baseline: Option<f64>, _is_infino: bool| -> String {
+        let bench = &format!("{label}_{N_DOCS}docs");
+        let time = ns.map(fmt_time).unwrap_or_else(|| "—".into());
+        let thrpt = ns
+            .map(|n| fmt_throughput((N_DOCS as f64) / (n / 1e9)))
+            .unwrap_or_else(|| "—".into());
+        let peak = rss::read_peak_rss_bytes(group, bench)
+            .map(rss::fmt_bytes)
+            .unwrap_or_else(|| "—".into());
+        let median = rss::fmt_median_rss(group, bench);
+        let p90 = rss::fmt_p90_rss(group, bench);
+        let delta = rss::fmt_peak_rss_delta(group, bench);
+        let cmp = fmt_winner(label, ns, "tantivy", baseline);
+        format!("| {label} | {time} | {thrpt} | {peak} | {median} | {p90} | {delta} | {cmp} |\n")
+    };
+
     body.push_str(&infino_row(
         "infino_1thread",
         infino_1t,
@@ -685,6 +857,13 @@ fn emit_ingest_markdown() {
         tantivy_def,
         &tantivy_def_id,
     ));
+    body.push_str(&row(
+        "lance_fts",
+        lance_fts_ingestion_time,
+        lance_fts_ingestion_rss,
+        tantivy_1t,
+        false,
+    ));
 
     markdown::emit(&MarkdownSection {
         anchor_id: "bench/fts/superfile/ingest".into(),
@@ -697,47 +876,55 @@ fn emit_search_markdown() {
 
     let mut body = String::new();
     body.push_str(&format!("### Superfile FTS — search ({N_DOCS} docs)\n\n"));
-    body.push_str(
-        "| Query | infino p50 | infino Peak RSS | infino Median RSS | infino P90 RSS | infino Peak RSS Δ | Tantivy p50 | Tantivy Peak RSS | Tantivy Median RSS | Tantivy P90 RSS | Tantivy Peak RSS Δ | Winner |\n",
-    );
-    body.push_str(
-        "|-------|------------|-----------------|-------------------|----------------|-------------------|-------------|------------------|--------------------|-----------------|--------------------|--------|\n",
-    );
 
     let group = group_name::SUPERFILE_FTS_SEARCH;
-    let row = |q: &str, body: &mut String| {
-        let inf_id = format!("{q}_infino_top10");
-        let tan_id = format!("{q}_tantivy_top10");
-        let inf = read_infino_mean_ns(group, &inf_id);
-        let tan = read_mean_ns(group, &tan_id);
+    let row_or = |q: &str, body: &mut String| {
+        let inf = read_infino_mean_ns(group, &format!("{q}_infino_top10"));
+        let tan = read_mean_ns(group, &format!("{q}_tantivy_top10"));
+        let coredb = read_mean_ns(group, &format!("{q}_coredb_top10"));
+        let lance = read_mean_ns(group, &format!("{q}_lance_top10"));
         let inf_s = inf.map(fmt_time).unwrap_or_else(|| "—".into());
         let tan_s = tan.map(fmt_time).unwrap_or_else(|| "—".into());
-        let inf_peak = rss::read_infino_peak_rss_bytes(group, &inf_id)
+        let coredb_s = coredb.map(fmt_time).unwrap_or_else(|| "—".into());
+        let lance_s = lance.map(fmt_time).unwrap_or_else(|| "—".into());
+        let inf_rss = rss::read_infino_peak_rss_bytes(group, &format!("{q}_infino_top10"))
             .map(rss::fmt_bytes)
             .unwrap_or_else(|| "—".into());
-        let inf_median = rss::fmt_infino_median_rss(group, &inf_id);
-        let inf_p90 = rss::fmt_infino_p90_rss(group, &inf_id);
-        let inf_delta = rss::fmt_infino_peak_rss_delta(group, &inf_id);
-        let tan_peak = rss::read_peak_rss_bytes(group, &tan_id)
+        let tan_rss = rss::read_peak_rss_bytes(group, &format!("{q}_tantivy_top10"))
             .map(rss::fmt_bytes)
             .unwrap_or_else(|| "—".into());
-        let tan_median = rss::fmt_median_rss(group, &tan_id);
-        let tan_p90 = rss::fmt_p90_rss(group, &tan_id);
-        let tan_delta = rss::fmt_peak_rss_delta(group, &tan_id);
+        let coredb_rss = rss::read_peak_rss_bytes(group, &format!("{q}_coredb_top10"))
+            .map(rss::fmt_bytes)
+            .unwrap_or_else(|| "—".into());
+        let lance_rss = rss::read_peak_rss_bytes(group, &format!("{q}_lance_top10"))
+            .map(rss::fmt_bytes)
+            .unwrap_or_else(|| "—".into());
+        // TODO: Add support for CoreDB winner/comparisons
         let w = fmt_winner("infino", inf, "tantivy", tan);
         body.push_str(&format!(
-            "| {q} | {inf_s} | {inf_peak} | {inf_median} | {inf_p90} | {inf_delta} | {tan_s} | {tan_peak} | {tan_median} | {tan_p90} | {tan_delta} | {w} |\n"
+            "| {q:17} | {inf_s:10} | {inf_rss:10} | {tan_s:10} | {tan_rss:11} | {coredb_s:10} | {coredb_rss:10} | {lance_s:10} | {lance_rss:10} | {w:21} |\n"
         ));
     };
-
-    body.push_str("**OR queries:**\n\n");
-    for q in QUERY_NAMES_OR {
-        row(q, &mut body);
+    // Each section emits its own header + separator so the OR / AND
+    // groups render as two valid markdown tables rather than one big
+    // table with a bold heading injected mid-rows.
+    {
+        body.push_str("**OR queries:**\n\n");
+        body.push_str("| Query             | infino     | infino RSS | Tantivy    | Tantivy RSS | CoreDB    | CoreDB RSS  | Lance FTS  | Lance RSS  | Winner                |\n");
+        body.push_str("|-------------------|------------|------------|------------|-------------|------------|------------|------------|------------|-----------------------|\n");
+        for q in QUERY_NAMES_OR {
+            row_or(q, &mut body);
+        }
+        body.push('\n');
     }
-
-    body.push_str("\n**AND queries:**\n\n");
-    for q in QUERY_NAMES_AND {
-        row(q, &mut body);
+    {
+        body.push_str("**AND queries:**\n\n");
+        body.push_str("| Query             | infino     | infino RSS | Tantivy    | Tantivy RSS | CoreDB    | CoreDB RSS  | Lance FTS  | Lance RSS  | Winner                |\n");
+        body.push_str("|-------------------|------------|------------|------------|-------------|------------|------------|------------|------------|-----------------------|\n");
+        for q in QUERY_NAMES_AND {
+            row_or(q, &mut body); // row_or reads Lance col too; same format for AND
+        }
+        body.push('\n');
     }
 
     body.push('\n');

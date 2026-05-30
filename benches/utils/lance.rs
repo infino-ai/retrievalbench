@@ -30,13 +30,14 @@ use std::time::Instant;
 
 use arrow_array_lance::{
     Array, FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator, RecordBatchReader,
-    UInt32Array,
+    StringArray, UInt32Array,
 };
 use arrow_schema_lance::{DataType, Field, Schema};
 use futures::TryStreamExt;
 use lancedb::DistanceType;
 use lancedb::Table;
 use lancedb::index::Index;
+use lancedb::index::scalar::{FtsIndexBuilder, FtsQuery, FullTextSearchQuery, MatchQuery, Operator};
 use lancedb::index::vector::IvfPqIndexBuilder;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use tokio::runtime::Runtime;
@@ -228,4 +229,156 @@ pub fn calibrate_lance(
 /// ~33% larger PQ codes (64 B vs 48 B / vec).
 pub fn default_n_sub_vectors() -> u32 {
     64
+}
+
+/// Build a Lance table at `path` with a full-text search (FTS / inverted)
+/// index, return it open and ready for queries. Times the whole pipeline
+/// (data load + index write).
+pub fn build_lance_fts_table(
+    rt: &Runtime,
+    path: &Path,
+    docs: &[String],
+    n_docs: usize,
+) -> (Table, std::time::Duration) {
+    let t0 = Instant::now();
+    let table = rt.block_on(async move {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::UInt32, false),
+            Field::new("text", DataType::Utf8, false),
+        ]));
+
+        let ids = UInt32Array::from((0..n_docs as u32).collect::<Vec<_>>());
+        let texts = StringArray::from(docs.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(ids), Arc::new(texts)])
+            .expect("build RecordBatch");
+        let reader: Box<dyn RecordBatchReader + Send> =
+            Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema.clone()));
+
+        let db = lancedb::connect(path.to_str().expect("path to_str"))
+            .execute()
+            .await
+            .expect("await async result");
+        let table = db
+            .create_table("fts", reader)
+            .execute()
+            .await
+            .expect("create lance table");
+
+        // Disable stemming, stop-word removal, and ASCII folding: our
+        // synthetic corpus terms (e.g. "term00001") get no recall benefit
+        // from these filters, and each filter adds query-time tokenization
+        // overhead. This matches what the Tantivy bench uses: only
+        // SimpleTokenizer + LowerCaser.
+        let fts_params = FtsIndexBuilder::default()
+            .stem(false)
+            .remove_stop_words(false)
+            .ascii_folding(false);
+        table
+            .create_index(&["text"], Index::FTS(fts_params))
+            .execute()
+            .await
+            .expect("await async result");
+
+        // Prewarm: load all FTS posting lists into memory so search
+        // measurements don't pay cold I/O latency. The index name is
+        // the column name + "_idx" (lancedb convention).
+        let idx_name = table
+            .list_indices()
+            .await
+            .expect("await async result")
+            .into_iter()
+            .next()
+            .map(|c| c.name)
+            .unwrap_or_else(|| "text_idx".into());
+        table
+            .prewarm_index(&idx_name)
+            .await
+            .expect("await async result");
+
+        table
+    });
+    (table, t0.elapsed())
+}
+
+/// Execute a pre-built `FullTextSearchQuery` and return the raw result rows
+/// as `(id, score)` pairs. Used for correctness checks and calibration
+/// outside the benchmark hot path. For benchmarking use
+/// `bench_lance_fts_query` instead, which excludes result deserialization.
+pub fn search_lance_fts_query(
+    rt: &Runtime,
+    table: &Table,
+    fts_query: FullTextSearchQuery,
+    k: usize,
+) -> Vec<(u32, f32)> {
+    rt.block_on(async move {
+        let stream = table
+            .query()
+            .full_text_search(fts_query)
+            .limit(k)
+            .execute()
+            .await
+            .expect("await async result");
+        let batches: Vec<RecordBatch> = stream.try_collect().await.expect("collect stream");
+        let mut out = Vec::with_capacity(k);
+        for b in batches {
+            let id_col = b
+                .column_by_name("id")
+                .expect("column by name")
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .expect("downcast");
+            let score_col = b
+                .column_by_name("_score")
+                .expect("column by name")
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .expect("downcast");
+            for i in 0..b.num_rows() {
+                out.push((id_col.value(i), score_col.value(i)));
+            }
+        }
+        out
+    })
+}
+
+/// Benchmark-only variant: executes the query and collects the Arrow stream
+/// but does **not** deserialize the RecordBatch columns into `(id, score)`
+/// pairs. Returns the total number of result rows so the compiler cannot
+/// elide the work. Result deserialization is Arrow overhead unrelated to
+/// search engine performance — keeping it off the hot path matches how
+/// Tantivy bench functions return raw `Vec<(Score, DocAddress)>` without
+/// further field extraction.
+pub fn bench_lance_fts_query(
+    rt: &Runtime,
+    table: &Table,
+    fts_query: FullTextSearchQuery,
+    k: usize,
+) -> usize {
+    rt.block_on(async move {
+        let stream = table
+            .query()
+            .full_text_search(fts_query)
+            .limit(k)
+            .execute()
+            .await
+            .expect("await async result");
+        let batches: Vec<RecordBatch> = stream.try_collect().await.expect("collect stream");
+        batches.iter().map(|b| b.num_rows()).sum()
+    })
+}
+
+/// Build an OR `FullTextSearchQuery` for the given query string with WAND
+/// enabled. Construct this once outside `b.iter()` and pass `.clone()` to
+/// `search_lance_fts_query` each iteration.
+pub fn make_lance_fts_or_query(query: &str) -> FullTextSearchQuery {
+    FullTextSearchQuery::new(query.to_string()).wand_factor(Some(1.0))
+}
+
+/// Build an AND `FullTextSearchQuery` for the given space-separated terms.
+/// Construct this once outside `b.iter()` and pass `.clone()` to
+/// `search_lance_fts_query` each iteration.
+pub fn make_lance_fts_and_query(terms: &[String]) -> FullTextSearchQuery {
+    let joined = terms.join(" ");
+    let match_q = MatchQuery::new(joined).with_operator(Operator::And);
+    FullTextSearchQuery::new_query(FtsQuery::Match(match_q)).wand_factor(Some(1.0))
 }
