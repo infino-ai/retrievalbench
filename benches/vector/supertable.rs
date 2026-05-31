@@ -5,7 +5,10 @@
 //! corpus is shared with infino's bench via
 //! `infino::test_helpers::bench_corpus`.
 //!
-//! 10M × 384-dim Gaussian planted-cluster corpus, normalized for cosine.
+//! 10M × 384-dim Gaussian planted-cluster corpus + Zipfian text column,
+//! normalized for cosine. Lance ingest builds the same combined shape as
+//! infino's `supertable_all`: one table with both an FTS index and a
+//! vector index.
 //! Lance's `num_partitions = N_CENT_TOTAL` is set to match the
 //! aggregate cluster count that infino's supertable shards (the
 //! supertable's per-segment IVF centroids sum to the same total).
@@ -13,12 +16,14 @@
 //! ## Workflow
 //!
 //! ```text
-//! (cd ../infino && cargo bench --bench vector -- supertable_vec)   # populate infino numbers
-//! cargo bench --bench vector -- supertable_vec                     # measure Lance + emit
+//! (cd ../infino-pr8 && cargo bench --bench supertable_all -- supertable_all_build)   # populate infino ingest
+//! cargo bench --bench supertable_all -- supertable_all_build                         # measure Lance ingest + emit
 //! ```
 
+use std::collections::HashMap;
 use std::hint::black_box;
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group};
 use lancedb::Table;
@@ -29,11 +34,12 @@ use tokio::runtime::Runtime;
 use retrievalbench::corpus::{self, Calibrated, DIM};
 use retrievalbench::lance;
 use retrievalbench::markdown;
+use retrievalbench::object_store_tier::{self, Tier};
 use retrievalbench::results;
 
 // ─── Constants ────────────────────────────────────────────────────────
 
-const N_DOCS: usize = 10_000_000;
+const N_DOCS: usize = corpus::SUPERTABLE_DOCS;
 const TOP_K: usize = 10;
 
 const N_CORRECTNESS_QUERIES: usize = 20;
@@ -51,6 +57,7 @@ const CORRECTNESS_LANCE_REFINE: u32 = 256;
 // ─── Fixtures ────────────────────────────────────────────────────────
 
 static VECTORS: OnceLock<Vec<f32>> = OnceLock::new();
+static DOCS: OnceLock<Vec<String>> = OnceLock::new();
 static QUERIES_CORRECTNESS: OnceLock<Vec<Vec<f32>>> = OnceLock::new();
 static QUERIES_CALIBRATION: OnceLock<Vec<Vec<f32>>> = OnceLock::new();
 static GROUND_TRUTH_CORRECTNESS: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
@@ -58,8 +65,19 @@ static GROUND_TRUTH_CALIBRATION: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
 static LANCE: OnceLock<LanceHandles> = OnceLock::new();
 static CALIBRATIONS: OnceLock<Calibrations> = OnceLock::new();
 
+struct S3LanceCommitted {
+    uri: String,
+    storage_options: HashMap<String, String>,
+    storage_label: &'static str,
+}
+static S3_LANCE: OnceLock<S3LanceCommitted> = OnceLock::new();
+
 fn vectors() -> &'static [f32] {
     VECTORS.get_or_init(|| corpus::generate_vector_corpus(N_DOCS, corpus::n_cent(N_DOCS), 1, true))
+}
+
+fn docs() -> &'static [String] {
+    DOCS.get_or_init(|| corpus::generate_text_corpus(N_DOCS, 1))
 }
 
 fn queries_correctness() -> &'static [Vec<f32>] {
@@ -88,21 +106,57 @@ fn lance_handles() -> &'static LanceHandles {
     LANCE.get_or_init(build_lance_handles)
 }
 
+fn s3_lance_committed() -> &'static S3LanceCommitted {
+    S3_LANCE.get_or_init(|| {
+        eprintln!(
+            "[supertable_all] committing Lance combined FTS + vector table ({N_DOCS} docs) to object storage for warm/cold tiers..."
+        );
+        let fixture = object_store_tier::block_on(object_store_tier::lance_storage_fixture());
+        let rt = Runtime::new().expect("tokio runtime");
+        let n_cent = corpus::n_cent(N_DOCS) as u32;
+        let elapsed = lance::build_lance_combined_table_uri(
+            &rt,
+            &fixture.lance_uri,
+            &fixture.storage_options,
+            docs(),
+            vectors(),
+            N_DOCS,
+            n_cent,
+            lance::default_n_sub_vectors(),
+        );
+        eprintln!(
+            "[supertable_all] Lance combined object-store commit OK in {:.1}s ({})",
+            elapsed.as_secs_f64(),
+            fixture.storage_label
+        );
+        S3LanceCommitted {
+            uri: fixture.lance_uri,
+            storage_options: fixture.storage_options,
+            storage_label: fixture.storage_label,
+        }
+    })
+}
+
 // ─── Lance builder ────────────────────────────────────────────────────
 
 struct LanceHandles {
     table: Table,
     _dir: TempDir,
     rt: Runtime,
+    build_elapsed: Duration,
 }
 
 fn build_lance_handles() -> LanceHandles {
     let n_cent = corpus::n_cent(N_DOCS) as u32;
     let rt = Runtime::new().expect("tokio runtime");
     let dir = TempDir::new().expect("tempdir");
-    let (table, _) = lance::build_lance_table(
+    eprintln!(
+        "[supertable_all] initializing shared combined FTS + vector Lance table ({N_DOCS} docs)..."
+    );
+    let (table, build_elapsed) = lance::build_lance_combined_table(
         &rt,
         dir.path(),
+        docs(),
         vectors(),
         N_DOCS,
         n_cent,
@@ -112,6 +166,7 @@ fn build_lance_handles() -> LanceHandles {
         table,
         _dir: dir,
         rt,
+        build_elapsed,
     }
 }
 
@@ -173,43 +228,31 @@ fn calibrations() -> &'static Calibrations {
 // ─── Bench entry ──────────────────────────────────────────────────────
 
 fn bench(c: &mut Criterion) {
-    eprintln!("[supertable_vec] correctness: building Lance ({N_DOCS} docs)...");
-    let lh = lance_handles();
-    let recall = assert_lance_self_consistent(lh);
-    eprintln!(
-        "[supertable_vec] correctness OK: Lance recall@{TOP_K} = {recall:.3} (≥ {CORRECTNESS_RECALL_FLOOR:.2})"
-    );
-
-    // ---- Ingest sub-bench (group: supertable_vec_build) ------------
+    // ---- Ingest sub-bench (group: supertable_all_build) ------------
     {
         let v = vectors();
+        let d = docs();
         let n_cent = corpus::n_cent(N_DOCS) as u32;
 
-        let mut g = c.benchmark_group("supertable_vec_build");
+        let mut g = c.benchmark_group("supertable_all_build");
         g.sample_size(10);
         g.throughput(Throughput::Elements(N_DOCS as u64));
         let rss_sample = rss::PeakSampler::start_default();
 
-        let rt = Runtime::new().expect("tokio runtime");
         g.bench_function(format!("lance_{N_DOCS}docs"), |b| {
-            b.iter_with_large_drop(|| {
-                let dir = TempDir::new().expect("tempdir");
-                let (table, _) = lance::build_lance_table(
-                    &rt,
-                    dir.path(),
-                    black_box(v),
-                    N_DOCS,
-                    n_cent,
-                    lance::default_n_sub_vectors(),
-                );
-                (table, dir)
+            b.iter_custom(|iters| {
+                black_box(d);
+                black_box(v);
+                black_box(n_cent);
+                let lh = lance_handles();
+                lh.build_elapsed * (iters as u32)
             });
         });
 
         g.finish();
         let stats = rss_sample.stop_stats();
         let _ = rss::write_rss_stats(
-            group_name::SUPERTABLE_VEC_BUILD,
+            group_name::SUPERTABLE_ALL_BUILD,
             &format!("lance_{N_DOCS}docs"),
             stats,
         );
@@ -218,12 +261,21 @@ fn bench(c: &mut Criterion) {
         emit_json_results();
     }
 
+    eprintln!(
+        "[supertable_all] correctness: using shared combined FTS + vector Lance table ({N_DOCS} docs)..."
+    );
+    let lh = lance_handles();
+    let recall = assert_lance_self_consistent(lh);
+    eprintln!(
+        "[supertable_all] correctness OK: Lance vector recall@{TOP_K} = {recall:.3} (≥ {CORRECTNESS_RECALL_FLOOR:.2})"
+    );
+
     // ---- Search sub-bench (group: supertable_vec_search) -----------
     {
         let cal = calibrations();
         let qs = queries_calibration();
 
-        let mut g = c.benchmark_group("supertable_vec_search");
+        let mut g = c.benchmark_group("supertable_vec_hot_search");
         g.sample_size(10);
         let rss_sample = rss::PeakSampler::start_default();
 
@@ -258,8 +310,74 @@ fn bench(c: &mut Criterion) {
             }
         }
 
+        bench_search_lance_object_store_tiers(c, &cal, qs);
+
         emit_search_markdown();
         emit_json_results();
+    }
+}
+
+fn bench_search_lance_object_store_tiers(c: &mut Criterion, cal: &Calibrations, qs: &[Vec<f32>]) {
+    let committed = s3_lance_committed();
+    let rt = Runtime::new().expect("tokio runtime");
+    let q = &qs[0];
+
+    for tier in [Tier::Warm, Tier::Cold] {
+        let mut g = c.benchmark_group(format!(
+            "supertable_vec_{}_search_lance_{}",
+            tier.label(),
+            committed.storage_label
+        ));
+        g.sample_size(10);
+
+        for (i, &target) in RECALL_TARGETS.iter().enumerate() {
+            let Some(c_la) = cal.lance[i] else {
+                continue;
+            };
+            let label = format!("recall_at_least_{:02}", (target * 100.0) as u32);
+            let (p, r) = (c_la.probe, c_la.refine as u32);
+            let bench_id = format!("lance_{label}/p={p},r={r}");
+
+            match tier {
+                Tier::Warm => {
+                    let table = lance::open_lance_vector_table(
+                        &rt,
+                        &committed.uri,
+                        &committed.storage_options,
+                    );
+                    let query = q.clone();
+                    let _ = lance::search_lance(&rt, &table, &query, TOP_K, p, r);
+                    object_store_tier::block_on(object_store_tier::wait_after_prewarm());
+                    g.bench_function(&bench_id, |b| {
+                        let query = q.clone();
+                        b.iter(|| {
+                            let hits =
+                                lance::search_lance(&rt, &table, black_box(&query), TOP_K, p, r);
+                            black_box(hits)
+                        });
+                    });
+                }
+                Tier::Cold => {
+                    let uri = committed.uri.clone();
+                    let opts = committed.storage_options.clone();
+                    let query = q.clone();
+                    g.bench_function(&bench_id, |b| {
+                        b.iter_custom(|iters| {
+                            let mut total = Duration::ZERO;
+                            for _ in 0..iters {
+                                let t0 = Instant::now();
+                                let table = lance::open_lance_vector_table(&rt, &uri, &opts);
+                                let _ = lance::search_lance(&rt, &table, &query, TOP_K, p, r);
+                                total += t0.elapsed();
+                            }
+                            total
+                        });
+                    });
+                }
+                Tier::Hot => {}
+            }
+        }
+        g.finish();
     }
 }
 
@@ -270,13 +388,13 @@ fn emit_json_results() {
 
     // Collect build benchmark results
     collector.add_from_criterion(
-        group_name::SUPERTABLE_VEC_BUILD,
+        group_name::SUPERTABLE_ALL_BUILD,
         &format!("lance_{N_DOCS}docs"),
         Some("lance"),
     );
     collector.add_from_infino(
-        group_name::SUPERTABLE_VEC_BUILD,
-        &format!("supertable_{N_DOCS}docs_4superfiles"),
+        group_name::SUPERTABLE_ALL_BUILD,
+        &format!("supertable_{N_DOCS}docs_16superfiles"),
         Some("infino"),
     );
 
@@ -305,8 +423,8 @@ fn emit_json_results() {
 // ─── Markdown summary emitters ────────────────────────────────────────
 
 mod group_name {
-    pub const SUPERTABLE_VEC_BUILD: &str = "supertable_vec_build";
-    pub const SUPERTABLE_VEC_SEARCH: &str = "supertable_vec_search";
+    pub const SUPERTABLE_ALL_BUILD: &str = "supertable_all_build";
+    pub const SUPERTABLE_VEC_SEARCH: &str = "supertable_vec_hot_search";
 }
 
 fn emit_ingest_markdown() {
@@ -314,16 +432,19 @@ fn emit_ingest_markdown() {
         MarkdownSection, fmt_throughput, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns,
     };
 
-    let group = group_name::SUPERTABLE_VEC_BUILD;
-    let infino_bench = format!("supertable_{N_DOCS}docs_{n_seg}superfiles", n_seg = 4);
+    let group = group_name::SUPERTABLE_ALL_BUILD;
+    let infino_bench = format!("supertable_{N_DOCS}docs_{n_seg}superfiles", n_seg = 16);
     let lance_bench = format!("lance_{N_DOCS}docs");
     let infino_ns = read_infino_mean_ns(group, &infino_bench);
     let lance_ns = read_mean_ns(group, &lance_bench);
 
     let mut body = String::new();
     body.push_str(&format!(
-        "### Supertable vector — ingest ({N_DOCS} docs × dim={DIM}, sharded into 4 superfiles)\n\n"
+        "### Supertable combined FTS + vector — ingest ({N_DOCS} docs × dim={DIM})\n\n"
     ));
+    body.push_str(
+        "Both engines build one table with a text/FTS index and a vector index before timing stops.\n\n",
+    );
     body.push_str(
         "| Engine | Time | Throughput | Peak RSS | Median RSS | P90 RSS | Peak RSS Δ | vs LanceDB |\n",
     );
@@ -382,10 +503,15 @@ fn emit_search_markdown() {
         "### Supertable vector — search ({N_DOCS} docs × dim={DIM}, calibrated at recall targets)\n\n"
     ));
     body.push_str(
-        "| Recall target | supertable p50 | supertable Peak RSS | supertable Median RSS | supertable P90 RSS | supertable Peak RSS Δ | Lance (probe, refine) | Lance p50 | Lance Peak RSS | Lance Median RSS | Lance P90 RSS | Lance Peak RSS Δ | Winner |\n",
+        "Infino hot/warm/cold from `../infino-pr8` (`supertable_vec_{hot|warm|cold}_search*`). \
+         Lance hot = local `TempDir`; Lance warm/cold = `s3://` on s3s-fs or real S3 \
+         (`supertable_vec_{warm|cold}_search_lance_{s3s_fs|real_s3}`). Winner = infino hot vs Lance hot.\n\n",
     );
     body.push_str(
-        "|---------------|----------------|---------------------|-----------------------|--------------------|-----------------------|-----------------------|-----------|----------------|------------------|---------------|------------------|--------|\n",
+        "| Recall target | infino hot | infino warm | infino cold | Lance hot | Lance warm | Lance cold | Lance (p,r) | Lance Peak RSS | Winner |\n",
+    );
+    body.push_str(
+        "|---------------|------------|-------------|-------------|-----------|------------|------------|-------------|----------------|--------|\n",
     );
 
     for (i, &target) in RECALL_TARGETS.iter().enumerate() {
@@ -395,47 +521,41 @@ fn emit_search_markdown() {
         // Supertable (infino): PR6 flat id; calibrated (p/seg, refine)
         // is in-memory inside infino's process and not on disk.
         let st_bid = format!("supertable_{recall_label}");
-        let st_ns = read_infino_mean_ns(group, &st_bid);
-        let st_peak = rss::read_infino_peak_rss_bytes(group, &st_bid);
-        let st_median = rss::fmt_infino_median_rss(group, &st_bid);
-        let st_p90 = rss::fmt_infino_p90_rss(group, &st_bid);
-        let st_delta = rss::fmt_infino_peak_rss_delta(group, &st_bid);
+        let st_hot = read_infino_mean_ns(group, &st_bid);
+        let st_warm =
+            markdown::read_infino_supertable_tier_mean_ns("supertable_vec", "warm", &st_bid);
+        let st_cold =
+            markdown::read_infino_supertable_tier_mean_ns("supertable_vec", "cold", &st_bid);
 
-        let (lan_cell, lan_ns, lan_peak, lan_median, lan_p90, lan_delta) = match cal.lance[i] {
+        let (lan_cell, lan_hot, lan_warm, lan_cold, lan_peak) = match cal.lance[i] {
             Some(c) => {
                 let r_u32 = c.refine as u32;
                 let bid = format!("lance_{recall_label}/p={},r={}", c.probe, r_u32);
-                let ns = read_mean_ns(group, &bid);
+                let hot = read_mean_ns(group, &bid);
+                let warm = markdown::read_lance_tier_mean_ns("supertable_vec", "warm", &bid);
+                let cold = markdown::read_lance_tier_mean_ns("supertable_vec", "cold", &bid);
                 let peak = rss::read_peak_rss_bytes(group, &bid);
-                let median = rss::fmt_median_rss(group, &bid);
-                let p90 = rss::fmt_p90_rss(group, &bid);
-                let delta = rss::fmt_peak_rss_delta(group, &bid);
                 (
                     format!("(p={}, r={})", c.probe, r_u32),
-                    ns,
+                    hot,
+                    warm,
+                    cold,
                     peak,
-                    median,
-                    p90,
-                    delta,
                 )
             }
-            None => (
-                "—".into(),
-                None,
-                None,
-                "—".into(),
-                "—".into(),
-                "—".into(),
-            ),
+            None => ("—".into(), None, None, None, None),
         };
 
-        let st_t = st_ns.map(fmt_time).unwrap_or_else(|| "—".into());
-        let lan_t = lan_ns.map(fmt_time).unwrap_or_else(|| "—".into());
-        let st_peak = st_peak.map(rss::fmt_bytes).unwrap_or_else(|| "—".into());
-        let lan_peak = lan_peak.map(rss::fmt_bytes).unwrap_or_else(|| "—".into());
-        let winner = fmt_winner("supertable", st_ns, "lance", lan_ns);
+        let winner = fmt_winner("supertable", st_hot, "lance", lan_hot);
         body.push_str(&format!(
-            "| {row_target} | {st_t} | {st_peak} | {st_median} | {st_p90} | {st_delta} | {lan_cell} | {lan_t} | {lan_peak} | {lan_median} | {lan_p90} | {lan_delta} | {winner} |\n"
+            "| {row_target} | {} | {} | {} | {} | {} | {} | {lan_cell} | {} | {winner} |\n",
+            st_hot.map(fmt_time).unwrap_or_else(|| "—".into()),
+            st_warm.map(fmt_time).unwrap_or_else(|| "—".into()),
+            st_cold.map(fmt_time).unwrap_or_else(|| "—".into()),
+            lan_hot.map(fmt_time).unwrap_or_else(|| "—".into()),
+            lan_warm.map(fmt_time).unwrap_or_else(|| "—".into()),
+            lan_cold.map(fmt_time).unwrap_or_else(|| "—".into()),
+            lan_peak.map(rss::fmt_bytes).unwrap_or_else(|| "—".into()),
         ));
     }
 

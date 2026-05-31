@@ -53,11 +53,10 @@ are non-trivial.
 
 | Bundle      | Default scale         | Raw corpus | Rationale |
 |-------------|-----------------------|-----------:|-----------|
-| `fts/superfile`     | 1M docs × 2010 B   | ~2.0 GB | Single-superfile shape — production superfiles are rarely much larger; the supertable handles scale-out. |
-| `fts/supertable`    | 10M docs × 2010 B  | ~20.1 GB | Scale-out shape; sharded into N superfiles (writer-pool size dictates N). |
-| `vector/superfile`  | 1M × dim=384 × f32 | ~1.5 GB | Single-segment vector index — IVF + RaBitQ + rerank measurement. |
-| `vector/supertable` | 10M × dim=384 × f32 | ~15.4 GB | Cross-segment kNN fan-out + global top-K merge. |
-| `scale`     | 10K–43M docs (configurable) | varies | Calibrated recall + memory budget + 100 GB-on-disk stress. |
+| `superfile_fts`     | 1M docs × 2010 B   | ~2.0 GB | Single-superfile shape — production superfiles are rarely much larger; the supertable handles scale-out. |
+| `superfile_vector`  | 1M × dim=384 × f32 | ~1.5 GB | Single-segment vector index — IVF + RaBitQ + rerank measurement. |
+| `supertable_all`    | 10M docs / 10M vectors | ~20.1 GB text + ~15.4 GB vectors | Scale-out shape; runs the supertable FTS and vector comparisons together. |
+| `scale`     | 10K–43M docs (configurable) | varies | Opt-in calibrated recall + memory budget + 100 GB-on-disk stress. |
 
 The 64 GB reference machine fits the 10M-doc supertable corpora in
 RAM with headroom for engine indices + ground-truth caches; smaller
@@ -147,8 +146,11 @@ a criterion filter only refreshes the matching section.
 
 ## Layout
 
-Single criterion binary per topic. `Cargo.toml` has four
-`[[bench]]` stanzas: `fts`, `vector`, `e2e`, `scale`.
+Single criterion binary per topic. `Cargo.toml` has `fts`, `vector`,
+`hybrid`, and `scale` bench targets. Each superfile (1M) and supertable
+(10M) search bench emits **hot / warm / cold** criterion groups; infino
+warm/cold use object storage + disk cache, Lance warm/cold use `s3://`,
+Tantivy warm/cold use a disk-backed index.
 
 ```
 benches/
@@ -180,34 +182,30 @@ benches/
 ## Invocation
 
 ```sh
-# Run everything (cold ~30 min for fts on 64 GB / M4 Max)
-cargo bench --bench fts
-cargo bench --bench vector
-cargo bench --bench e2e
-cargo bench --bench scale
+# Regular comparison benches
+cargo bench --bench superfile_fts
+cargo bench --bench superfile_vector
+cargo bench --bench supertable_all
 
 # Filter to a sub-group (criterion regex/prefix on the group name)
-cargo bench --bench fts -- superfile_fts_build           # superfile FTS ingest
-cargo bench --bench fts -- superfile_fts_search          # superfile FTS search
-cargo bench --bench fts -- supertable_fts_build          # supertable FTS ingest
-cargo bench --bench fts -- supertable_fts_search         # supertable FTS search
-cargo bench --bench vector -- superfile_vec_build        # superfile vector ingest
-cargo bench --bench vector -- superfile_vec_search       # superfile vector search
-cargo bench --bench vector -- supertable_vec_build       # supertable vector ingest
-cargo bench --bench vector -- supertable_vec_search      # supertable vector search
-cargo bench --bench fts -- _build                        # both FTS ingest groups
-cargo bench --bench vector -- _search                    # both vector search groups
+cargo bench --bench superfile_fts -- superfile_fts_build          # superfile FTS ingest
+cargo bench --bench superfile_fts -- superfile_fts_search         # superfile FTS search
+cargo bench --bench superfile_vector -- superfile_vec_build       # superfile vector ingest
+cargo bench --bench superfile_vector -- superfile_vec_search      # superfile vector search
+cargo bench --bench supertable_all -- supertable_fts_build        # supertable FTS ingest
+cargo bench --bench supertable_all -- supertable_fts_search       # supertable FTS search
+cargo bench --bench supertable_all -- supertable_all_build        # combined FTS + vector ingest
+cargo bench --bench supertable_all -- supertable_vec_search       # supertable vector search
 
 # Knobs (env-driven, via the standard config stack)
-INFINO_SUPERTABLE__WRITER_THREADS=32 cargo bench --bench fts -- supertable_fts_build
-INFINO_BENCH_UPDATE_README=1 cargo bench --bench fts        # rewrites the FTS result sections
-INFINO_BENCH_UPDATE_README=1 cargo bench --bench vector     # rewrites the vector result sections
+INFINO_SUPERTABLE__WRITER_THREADS=32 cargo bench --bench supertable_all -- supertable_fts_build
+INFINO_BENCH_UPDATE_README=1 cargo bench --bench supertable_all
 
 # Scale bench (release-only correctness oracles + stress runners)
-cargo bench --bench scale -- supertable_ingest_once         # single-shot 10M FTS ingest head-to-head
-cargo bench --bench scale -- oracle_calibrated_recall       # supertable-vs-Lance recall + Jaccard
-cargo bench --bench scale -- fts_recall                     # 20K-doc Zipfian strict FTS recall
-cargo bench --bench scale -- vector_recall                  # vector pinned-recall thresholds
+cargo bench --features bench-diagnostics --bench scale -- supertable_ingest_once
+cargo bench --features bench-diagnostics --bench scale -- oracle_calibrated_recall
+cargo bench --features bench-diagnostics --bench scale -- fts_recall
+cargo bench --features bench-diagnostics --bench scale -- vector_recall
 ```
 
 The correctness phase runs unconditionally on every invocation;
@@ -332,7 +330,9 @@ cross-engine match before timing starts.
 ### Vector — supertable (multi-superfile, 10M × dim=384)
 
 <!-- BEGIN: bench/vector/supertable/ingest -->
-### Supertable vector — ingest (10000000 docs × dim=384, sharded into 4 superfiles)
+### Supertable combined FTS + vector — ingest (10000000 docs × dim=384)
+
+Both engines build one table with a text/FTS index and a vector index before timing stops.
 
 | Engine | Time | Throughput | Peak RSS | Median RSS | P90 RSS | Peak RSS Δ | vs LanceDB |
 |--------|------|------------|----------|------------|---------|------------|------------|

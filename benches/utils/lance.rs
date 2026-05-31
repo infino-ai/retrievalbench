@@ -24,6 +24,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -37,16 +38,151 @@ use futures::TryStreamExt;
 use lancedb::DistanceType;
 use lancedb::Table;
 use lancedb::index::Index;
-use lancedb::index::scalar::{FtsIndexBuilder, FtsQuery, FullTextSearchQuery, MatchQuery, Operator};
+use lancedb::index::scalar::{
+    FtsIndexBuilder, FtsQuery, FullTextSearchQuery, MatchQuery, Operator,
+};
 use lancedb::index::vector::IvfPqIndexBuilder;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use tokio::runtime::Runtime;
 
 use crate::corpus::{Calibrated, DIM, Hit, p50_micros, recall_at_k};
 
-/// Build the Lance table at `path` with an IVF-PQ index, return it
-/// open and ready for queries. Times the whole pipeline (data load
-/// + IVF train + index write).
+const LANCE_VECTOR_TABLE: &str = "v";
+
+async fn connect_lance(
+    uri: &str,
+    storage_options: Option<&HashMap<String, String>>,
+) -> lancedb::Connection {
+    let mut builder = lancedb::connect(uri);
+    if let Some(opts) = storage_options {
+        builder = builder.storage_options(opts.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    }
+    builder.execute().await.expect("lancedb connect")
+}
+
+async fn build_lance_vector_table_async(
+    uri: &str,
+    storage_options: Option<&HashMap<String, String>>,
+    vectors: &[f32],
+    n_docs: usize,
+    n_partitions: u32,
+    n_sub_vectors: u32,
+) -> Table {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::UInt32, false),
+        Field::new(
+            "vector",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                DIM as i32,
+            ),
+            false,
+        ),
+    ]));
+
+    let ids = UInt32Array::from((0..n_docs as u32).collect::<Vec<_>>());
+    let flat = Float32Array::from(vectors.to_vec());
+    let item_field = Arc::new(Field::new("item", DataType::Float32, true));
+    let fsl = FixedSizeListArray::try_new(item_field, DIM as i32, Arc::new(flat), None)
+        .expect("build FixedSizeListArray");
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(ids), Arc::new(fsl)])
+        .expect("build RecordBatch");
+    let reader: Box<dyn RecordBatchReader + Send> =
+        Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema.clone()));
+
+    let db = connect_lance(uri, storage_options).await;
+    let table = db
+        .create_table(LANCE_VECTOR_TABLE, reader)
+        .execute()
+        .await
+        .expect("create lance table");
+
+    table
+        .create_index(
+            &["vector"],
+            Index::IvfPq(
+                IvfPqIndexBuilder::default()
+                    .num_partitions(n_partitions)
+                    .num_sub_vectors(n_sub_vectors)
+                    .distance_type(DistanceType::Cosine),
+            ),
+        )
+        .execute()
+        .await
+        .expect("create IVF-PQ index");
+    table
+}
+
+async fn build_lance_combined_table_async(
+    uri: &str,
+    storage_options: Option<&HashMap<String, String>>,
+    docs: &[String],
+    vectors: &[f32],
+    n_docs: usize,
+    n_partitions: u32,
+    n_sub_vectors: u32,
+) -> Table {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::UInt32, false),
+        Field::new("title", DataType::Utf8, false),
+        Field::new(
+            "vector",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                DIM as i32,
+            ),
+            false,
+        ),
+    ]));
+
+    let ids = UInt32Array::from((0..n_docs as u32).collect::<Vec<_>>());
+    let titles = StringArray::from(docs.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+    let flat = Float32Array::from(vectors.to_vec());
+    let item_field = Arc::new(Field::new("item", DataType::Float32, true));
+    let fsl = FixedSizeListArray::try_new(item_field, DIM as i32, Arc::new(flat), None)
+        .expect("build FixedSizeListArray");
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(ids), Arc::new(titles), Arc::new(fsl)],
+    )
+    .expect("build RecordBatch");
+    let reader: Box<dyn RecordBatchReader + Send> =
+        Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema.clone()));
+
+    let db = connect_lance(uri, storage_options).await;
+    let table = db
+        .create_table(LANCE_VECTOR_TABLE, reader)
+        .execute()
+        .await
+        .expect("create lance combined table");
+
+    let fts_params = FtsIndexBuilder::default()
+        .stem(false)
+        .remove_stop_words(false)
+        .ascii_folding(false);
+    table
+        .create_index(&["title"], Index::FTS(fts_params))
+        .execute()
+        .await
+        .expect("create Lance FTS index");
+
+    table
+        .create_index(
+            &["vector"],
+            Index::IvfPq(
+                IvfPqIndexBuilder::default()
+                    .num_partitions(n_partitions)
+                    .num_sub_vectors(n_sub_vectors)
+                    .distance_type(DistanceType::Cosine),
+            ),
+        )
+        .execute()
+        .await
+        .expect("create Lance IVF-PQ index");
+    table
+}
+
+/// Build the Lance table at local `path` (hot tier — no object store).
 pub fn build_lance_table(
     rt: &Runtime,
     path: &Path,
@@ -56,55 +192,101 @@ pub fn build_lance_table(
     n_sub_vectors: u32,
 ) -> (Table, std::time::Duration) {
     let t0 = Instant::now();
-    let table = rt.block_on(async move {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::UInt32, false),
-            Field::new(
-                "vector",
-                DataType::FixedSizeList(
-                    Arc::new(Field::new("item", DataType::Float32, true)),
-                    DIM as i32,
-                ),
-                false,
-            ),
-        ]));
-
-        let ids = UInt32Array::from((0..n_docs as u32).collect::<Vec<_>>());
-        let flat = Float32Array::from(vectors.to_vec());
-        let item_field = Arc::new(Field::new("item", DataType::Float32, true));
-        let fsl = FixedSizeListArray::try_new(item_field, DIM as i32, Arc::new(flat), None)
-            .expect("build FixedSizeListArray");
-        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(ids), Arc::new(fsl)])
-            .expect("build RecordBatch");
-        let reader: Box<dyn RecordBatchReader + Send> =
-            Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema.clone()));
-
-        let db = lancedb::connect(path.to_str().expect("path to_str"))
-            .execute()
-            .await
-            .expect("await async result");
-        let table = db
-            .create_table("v", reader)
-            .execute()
-            .await
-            .expect("create lance table");
-
-        table
-            .create_index(
-                &["vector"],
-                Index::IvfPq(
-                    IvfPqIndexBuilder::default()
-                        .num_partitions(n_partitions)
-                        .num_sub_vectors(n_sub_vectors)
-                        .distance_type(DistanceType::Cosine),
-                ),
-            )
-            .execute()
-            .await
-            .expect("await async result");
-        table
-    });
+    let table = rt.block_on(build_lance_vector_table_async(
+        path.to_str().expect("path to_str"),
+        None,
+        vectors,
+        n_docs,
+        n_partitions,
+        n_sub_vectors,
+    ));
     (table, t0.elapsed())
+}
+
+/// Build the Lance table at local `path` with both `title` FTS and
+/// `vector` IVF-PQ indexes. Used for supertable ingest parity with
+/// infino's shared combined FTS + vector supertable.
+pub fn build_lance_combined_table(
+    rt: &Runtime,
+    path: &Path,
+    docs: &[String],
+    vectors: &[f32],
+    n_docs: usize,
+    n_partitions: u32,
+    n_sub_vectors: u32,
+) -> (Table, std::time::Duration) {
+    let t0 = Instant::now();
+    let table = rt.block_on(build_lance_combined_table_async(
+        path.to_str().expect("path to_str"),
+        None,
+        docs,
+        vectors,
+        n_docs,
+        n_partitions,
+        n_sub_vectors,
+    ));
+    (table, t0.elapsed())
+}
+
+/// Build the Lance table on `s3://…` (warm/cold tier producer).
+pub fn build_lance_table_uri(
+    rt: &Runtime,
+    uri: &str,
+    storage_options: &HashMap<String, String>,
+    vectors: &[f32],
+    n_docs: usize,
+    n_partitions: u32,
+    n_sub_vectors: u32,
+) -> std::time::Duration {
+    let t0 = Instant::now();
+    let _ = rt.block_on(build_lance_vector_table_async(
+        uri,
+        Some(storage_options),
+        vectors,
+        n_docs,
+        n_partitions,
+        n_sub_vectors,
+    ));
+    t0.elapsed()
+}
+
+/// Build the combined FTS + vector Lance table on `s3://…`.
+pub fn build_lance_combined_table_uri(
+    rt: &Runtime,
+    uri: &str,
+    storage_options: &HashMap<String, String>,
+    docs: &[String],
+    vectors: &[f32],
+    n_docs: usize,
+    n_partitions: u32,
+    n_sub_vectors: u32,
+) -> std::time::Duration {
+    let t0 = Instant::now();
+    let _ = rt.block_on(build_lance_combined_table_async(
+        uri,
+        Some(storage_options),
+        docs,
+        vectors,
+        n_docs,
+        n_partitions,
+        n_sub_vectors,
+    ));
+    t0.elapsed()
+}
+
+/// Open an existing Lance vector table from `uri` (consumer / cold iteration).
+pub fn open_lance_vector_table(
+    rt: &Runtime,
+    uri: &str,
+    storage_options: &HashMap<String, String>,
+) -> Table {
+    rt.block_on(async {
+        let db = connect_lance(uri, Some(storage_options)).await;
+        db.open_table(LANCE_VECTOR_TABLE)
+            .execute()
+            .await
+            .expect("open lance vector table")
+    })
 }
 
 /// One Lance kNN call. Returns `(id, distance)` pairs sorted by
