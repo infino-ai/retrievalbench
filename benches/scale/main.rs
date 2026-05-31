@@ -8,16 +8,16 @@
 //! ## Invocation
 //!
 //! ```text
-//! cargo bench --bench scale                                     # run every scale bench at default smoke scale
-//! cargo bench --bench scale -- 100gb_laptop                     # only the 100GB laptop runner
-//! cargo bench --bench scale -- 1m_segments                      # only the 1M-segment manifest stress
-//! cargo bench --bench scale -- fts_recall                       # 20-check FTS pinned-recall battery (20K-doc Zipf)
-//! cargo bench --bench scale -- vector_recall                    # 4-check vector pinned-recall battery (10K × 384)
-//! cargo bench --bench scale -- oracle_calibrated_recall          # supertable-vs-Lance recall + Jaccard parity (5K × 384, 500 queries)
-//! INFINO_BENCH_100GB=1 cargo bench --bench scale -- 100gb_laptop          # 43M docs (~100 GB)
-//! INFINO_BENCH_M14_N_DOCS=1000000 cargo bench --bench scale -- 100gb_laptop   # 1M-doc smoke
-//! INFINO_BENCH_M15D_MEDIUM=1 cargo bench --bench scale -- 1m_segments        # 10K superfiles
-//! INFINO_BENCH_M15D_FULL=1   cargo bench --bench scale -- 1m_segments        # 1M superfiles
+//! cargo bench --features bench-diagnostics --bench scale
+//! cargo bench --features bench-diagnostics --bench scale -- 100gb_laptop
+//! cargo bench --features bench-diagnostics --bench scale -- 1m_segments
+//! cargo bench --features bench-diagnostics --bench scale -- fts_recall
+//! cargo bench --features bench-diagnostics --bench scale -- vector_recall
+//! cargo bench --features bench-diagnostics --bench scale -- oracle_calibrated_recall
+//! INFINO_BENCH_100GB=1 cargo bench --features bench-diagnostics --bench scale -- 100gb_laptop
+//! INFINO_BENCH_M14_N_DOCS=1000000 cargo bench --features bench-diagnostics --bench scale -- 100gb_laptop
+//! INFINO_BENCH_M15D_MEDIUM=1 cargo bench --features bench-diagnostics --bench scale -- 1m_segments
+//! INFINO_BENCH_M15D_FULL=1 cargo bench --features bench-diagnostics --bench scale -- 1m_segments
 //! ```
 
 mod fts_recall;

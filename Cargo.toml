@@ -15,7 +15,8 @@ path = "benches/utils/mod.rs"
 # The crate under test. Path dep on the sibling `infino` repo
 # (cloned alongside this one by the workspace bootstrap script).
 # `test-helpers` exposes `infino::test_helpers::*` for fixture builders.
-infino = { path = "../infino", features = ["test-helpers"] }
+# Temporary: tier benches live on infino-pr8 until merged into ../infino.
+infino = { path = "../infino-pr8", features = ["test-helpers"] }
 
 # Reference engines.
 tantivy = "0.26"
@@ -50,25 +51,28 @@ fastbloom = "0.17"
 memmap2 = "0.9"
 num_cpus = "1"
 zstd = "0.13"
+s3s = "0.13"
+s3s-fs = "0.13"
+hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
+
+[features]
+# Opt-in stress / recall / diagnostic benches. Plain `cargo bench`
+# should run the regular comparison benches only.
+bench-diagnostics = []
 
 [[bench]]
-name = "fts"
+name = "superfile_fts"
 path = "benches/fts/main.rs"
 harness = false
 
 [[bench]]
-name = "fts-superfile"
-path = "benches/fts/main_superfile.rs"
-harness = false
-
-[[bench]]
-name = "fts-supertable"
-path = "benches/fts/main_supertable.rs"
-harness = false
-
-[[bench]]
-name = "vector"
+name = "superfile_vector"
 path = "benches/vector/main.rs"
+harness = false
+
+[[bench]]
+name = "supertable_all"
+path = "benches/supertable/main.rs"
 harness = false
 
 [[bench]]
@@ -80,6 +84,7 @@ harness = false
 name = "scale"
 path = "benches/scale/main.rs"
 harness = false
+required-features = ["bench-diagnostics"]
 
 [[bench]]
 name = "data_structures"

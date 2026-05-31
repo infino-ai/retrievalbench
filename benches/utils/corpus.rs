@@ -37,6 +37,11 @@ pub const VOCAB_SIZE: usize = 10_000;
 /// (all-MiniLM-L6-v2 = 384, BGE-small = 384).
 pub const DIM: usize = 384;
 
+/// Run an infino async API from sync bench code (current-thread executor).
+pub fn block_on_inmem<F: std::future::Future>(fut: F) -> F::Output {
+    futures::executor::block_on(fut)
+}
+
 pub type Hit = (u32, f32);
 
 #[derive(Debug, Clone, Copy)]
@@ -47,12 +52,21 @@ pub struct Calibrated {
     pub p50_micros: f64,
 }
 
-/// Resolved doc count for generic benches.
+/// Doc count for superfile-shape comparison benches (1M).
+pub const SUPERFILE_DOCS: usize = 1_000_000;
+
+/// Doc count for supertable-shape comparison benches (10M). Matches
+/// infino's [`SUPERTABLE_DOCS`] and the pinned `N_DOCS` in
+/// `benches/{vector,fts}/supertable.rs`.
+pub const SUPERTABLE_DOCS: usize = 10_000_000;
+
+/// Resolved doc count for hybrid / generic benches still gated by
+/// `INFINO_BENCH_FULL` (10M when set, 1M otherwise).
 pub fn n_docs() -> usize {
     if std::env::var("INFINO_BENCH_FULL").is_ok() {
-        10_000_000
+        SUPERTABLE_DOCS
     } else {
-        1_000_000
+        SUPERFILE_DOCS
     }
 }
 
@@ -264,7 +278,7 @@ pub fn build_vector_index(
         n_cent,
         rot_seed: 7,
         metric,
-        rerank_codec: RerankCodec::Sq8,
+        rerank_codec: RerankCodec::Sq8Residual,
     })
     .expect("register column");
     for i in 0..n_docs {
@@ -310,7 +324,7 @@ pub fn build_superfile(docs: &[String], vectors: &[f32], n_cent: usize) -> Vec<u
             n_cent,
             rot_seed: 7,
             metric: Metric::Cosine,
-            rerank_codec: RerankCodec::Sq8,
+            rerank_codec: RerankCodec::Sq8Residual,
         }],
         Some(default_tokenizer()),
     );

@@ -1,8 +1,9 @@
 # Vector benches
 
-All vector benches live in one bundled criterion binary (`cargo
-bench --bench vector`). Filter with a criterion regex, e.g.
-`cargo bench --bench vector -- search_vs_lance`.
+Superfile vector benches live in `cargo bench --bench
+superfile_vector`; supertable vector comparisons live in
+`cargo bench --bench supertable_all`. Filter with a criterion regex,
+e.g. `cargo bench --bench superfile_vector -- search_vs_lance`.
 
 Default scale is 1M docs × 384-dim cosine on planted-cluster
 Gaussian corpora. `INFINO_BENCH_FULL=1` bumps to 10M docs ×
@@ -12,8 +13,7 @@ LanceDB is pinned at `=0.27.2` (0.x API churns across versions).
 
 ## Sequence
 
-Build → search → recall calibration → Lance comparisons →
-diagnostic profiler → supertable-layer.
+Build → search → recall calibration → Lance comparisons.
 
 ### `superfile/build` — single-segment vector build throughput
 

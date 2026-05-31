@@ -13,12 +13,14 @@
 //! ## Workflow
 //!
 //! ```text
-//! (cd ../infino && cargo bench --bench vector -- superfile_vec)   # populate infino numbers
-//! cargo bench --bench vector -- superfile_vec                     # measure Lance + emit
+//! (cd ../infino-pr8 && cargo bench --bench superfile_vector -- superfile_vec)   # populate infino numbers
+//! cargo bench --bench superfile_vector -- superfile_vec                        # measure Lance + emit
 //! ```
 
+use std::collections::HashMap;
 use std::hint::black_box;
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group};
 use lancedb::Table;
@@ -29,10 +31,11 @@ use tokio::runtime::Runtime;
 use retrievalbench::corpus::{self, Calibrated, DIM};
 use retrievalbench::lance;
 use retrievalbench::markdown;
+use retrievalbench::object_store_tier::{self, Tier};
 
 // ─── Constants ────────────────────────────────────────────────────────
 
-const N_DOCS: usize = 1_000_000;
+const N_DOCS: usize = corpus::SUPERFILE_DOCS;
 
 const TOP_K: usize = 10;
 const N_CORRECTNESS_QUERIES: usize = 20;
@@ -56,6 +59,42 @@ static GROUND_TRUTH_CORRECTNESS: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
 static GROUND_TRUTH_CALIBRATION: OnceLock<Vec<Vec<u32>>> = OnceLock::new();
 static LANCE: OnceLock<LanceHandles> = OnceLock::new();
 static CALIBRATIONS: OnceLock<Calibrations> = OnceLock::new();
+
+struct S3LanceCommitted {
+    uri: String,
+    storage_options: HashMap<String, String>,
+    storage_label: &'static str,
+}
+static S3_LANCE: OnceLock<S3LanceCommitted> = OnceLock::new();
+
+fn s3_lance_committed() -> &'static S3LanceCommitted {
+    S3_LANCE.get_or_init(|| {
+        eprintln!(
+            "[superfile_vec] committing Lance {N_DOCS} docs to object storage for warm/cold tiers..."
+        );
+        let fixture = object_store_tier::block_on(object_store_tier::lance_storage_fixture());
+        let rt = Runtime::new().expect("tokio runtime");
+        let elapsed = lance::build_lance_table_uri(
+            &rt,
+            &fixture.lance_uri,
+            &fixture.storage_options,
+            vectors(),
+            N_DOCS,
+            corpus::n_cent(N_DOCS) as u32,
+            lance::default_n_sub_vectors(),
+        );
+        eprintln!(
+            "[superfile_vec] Lance object-store commit OK in {:.1}s ({})",
+            elapsed.as_secs_f64(),
+            fixture.storage_label
+        );
+        S3LanceCommitted {
+            uri: fixture.lance_uri,
+            storage_options: fixture.storage_options,
+            storage_label: fixture.storage_label,
+        }
+    })
+}
 
 fn vectors() -> &'static [f32] {
     VECTORS.get_or_init(|| corpus::generate_vector_corpus(N_DOCS, corpus::n_cent(N_DOCS), 1, true))
@@ -229,7 +268,7 @@ fn bench(c: &mut Criterion) {
         let cal = calibrations();
         let qs = queries_calibration();
 
-        let mut g = c.benchmark_group("superfile_vec_search");
+        let mut g = c.benchmark_group("superfile_vec_hot_search");
         g.sample_size(10);
         let rss_sample = rss::PeakSampler::start_default();
 
@@ -265,7 +304,71 @@ fn bench(c: &mut Criterion) {
             }
         }
 
+        bench_search_lance_object_store_tiers(c, &cal, qs);
+
         emit_search_markdown();
+    }
+}
+
+fn bench_search_lance_object_store_tiers(c: &mut Criterion, cal: &Calibrations, qs: &[Vec<f32>]) {
+    let committed = s3_lance_committed();
+    let rt = Runtime::new().expect("tokio runtime");
+    let q = &qs[0];
+
+    for tier in [Tier::Warm, Tier::Cold] {
+        let mut g = c.benchmark_group(format!(
+            "superfile_vec_{}_search_lance_{}",
+            tier.label(),
+            committed.storage_label
+        ));
+        g.sample_size(10);
+
+        for (i, &target) in RECALL_TARGETS.iter().enumerate() {
+            let Some(c_la) = cal.lance[i] else {
+                continue;
+            };
+            let label = format!("recall_at_least_{:02}", (target * 100.0) as u32);
+            let (p, r) = (c_la.probe, c_la.refine as u32);
+            let bench_id = format!("lance_{label}/p={p},r={r}");
+
+            match tier {
+                Tier::Warm => {
+                    let table = lance::open_lance_vector_table(
+                        &rt,
+                        &committed.uri,
+                        &committed.storage_options,
+                    );
+                    let query = q.clone();
+                    let _ = lance::search_lance(&rt, &table, &query, TOP_K, p, r);
+                    object_store_tier::block_on(object_store_tier::wait_after_prewarm());
+                    g.bench_function(&bench_id, |b| {
+                        b.iter(|| {
+                            let hits = lance::search_lance(&rt, &table, black_box(q), TOP_K, p, r);
+                            black_box(hits)
+                        });
+                    });
+                }
+                Tier::Cold => {
+                    let uri = committed.uri.clone();
+                    let opts = committed.storage_options.clone();
+                    let query = q.clone();
+                    g.bench_function(&bench_id, |b| {
+                        b.iter_custom(|iters| {
+                            let mut total = Duration::ZERO;
+                            for _ in 0..iters {
+                                let t0 = Instant::now();
+                                let table = lance::open_lance_vector_table(&rt, &uri, &opts);
+                                let _ = lance::search_lance(&rt, &table, &query, TOP_K, p, r);
+                                total += t0.elapsed();
+                            }
+                            total
+                        });
+                    });
+                }
+                Tier::Hot => {}
+            }
+        }
+        g.finish();
     }
 }
 
@@ -273,7 +376,7 @@ fn bench(c: &mut Criterion) {
 
 mod group_name {
     pub const SUPERFILE_VEC_BUILD: &str = "superfile_vec_build";
-    pub const SUPERFILE_VEC_SEARCH: &str = "superfile_vec_search";
+    pub const SUPERFILE_VEC_SEARCH: &str = "superfile_vec_hot_search";
 }
 
 fn emit_ingest_markdown() {
@@ -350,10 +453,14 @@ fn emit_search_markdown() {
         "### Superfile vector — search ({N_DOCS} docs × dim={DIM}, calibrated at recall targets)\n\n"
     ));
     body.push_str(
-        "| Recall target | infino p50 | infino Peak RSS | infino Median RSS | infino P90 RSS | infino Peak RSS Δ | Lance (probe, refine) | Lance p50 | Lance Peak RSS | Lance Median RSS | Lance P90 RSS | Lance Peak RSS Δ | Winner |\n",
+        "Infino/Lance hot/warm/cold from `../infino-pr8` + local Lance criterion. \
+         Winner uses infino hot vs Lance hot.\n\n",
     );
     body.push_str(
-        "|---------------|------------|-----------------|-------------------|----------------|-------------------|-----------------------|-----------|----------------|------------------|---------------|------------------|--------|\n",
+        "| Recall target | infino hot | infino warm | infino cold | Lance hot | Lance warm | Lance cold | Lance (p,r) | Lance Peak RSS | Winner |\n",
+    );
+    body.push_str(
+        "|---------------|------------|-------------|-------------|-----------|------------|------------|-------------|----------------|--------|\n",
     );
 
     for (i, &target) in RECALL_TARGETS.iter().enumerate() {
@@ -365,48 +472,35 @@ fn emit_search_markdown() {
         // published to disk, so retrievalbench can only show the
         // recorded timing/RSS, not the calibrated tuple.
         let inf_bid = format!("infino_{recall_label}");
-        let inf_ns = read_infino_mean_ns(group, &inf_bid);
-        let inf_peak = rss::read_infino_peak_rss_bytes(group, &inf_bid);
-        let inf_median = rss::fmt_infino_median_rss(group, &inf_bid);
-        let inf_p90 = rss::fmt_infino_p90_rss(group, &inf_bid);
-        let inf_delta = rss::fmt_infino_peak_rss_delta(group, &inf_bid);
+        let inf_hot = read_infino_mean_ns(group, &inf_bid);
+        let inf_warm = markdown::read_infino_tier_mean_ns("superfile_vec", "warm", &inf_bid);
+        let inf_cold = markdown::read_infino_tier_mean_ns("superfile_vec", "cold", &inf_bid);
 
-        // Lance: from local criterion output + own calibration.
-        let (lan_cell, lan_ns, lan_peak, lan_median, lan_p90, lan_delta) = match cal.lance[i] {
+        let (lan_cell, lan_hot, lan_warm, lan_cold, lan_peak) = match cal.lance[i] {
             Some(c) => {
                 let r_u32 = c.refine as u32;
                 let bid = format!("lance_{recall_label}/p={},r={}", c.probe, r_u32);
-                let ns = read_mean_ns(group, &bid);
-                let peak = rss::read_peak_rss_bytes(group, &bid);
-                let median = rss::fmt_median_rss(group, &bid);
-                let p90 = rss::fmt_p90_rss(group, &bid);
-                let delta = rss::fmt_peak_rss_delta(group, &bid);
                 (
                     format!("(p={}, r={})", c.probe, r_u32),
-                    ns,
-                    peak,
-                    median,
-                    p90,
-                    delta,
+                    read_mean_ns(group, &bid),
+                    markdown::read_lance_tier_mean_ns("superfile_vec", "warm", &bid),
+                    markdown::read_lance_tier_mean_ns("superfile_vec", "cold", &bid),
+                    rss::read_peak_rss_bytes(group, &bid),
                 )
             }
-            None => (
-                "—".into(),
-                None,
-                None,
-                "—".into(),
-                "—".into(),
-                "—".into(),
-            ),
+            None => ("—".into(), None, None, None, None),
         };
 
-        let inf_t = inf_ns.map(fmt_time).unwrap_or_else(|| "—".into());
-        let lan_t = lan_ns.map(fmt_time).unwrap_or_else(|| "—".into());
-        let inf_peak = inf_peak.map(rss::fmt_bytes).unwrap_or_else(|| "—".into());
-        let lan_peak = lan_peak.map(rss::fmt_bytes).unwrap_or_else(|| "—".into());
-        let winner = fmt_winner("infino", inf_ns, "lance", lan_ns);
+        let winner = fmt_winner("infino", inf_hot, "lance", lan_hot);
         body.push_str(&format!(
-            "| {row_target} | {inf_t} | {inf_peak} | {inf_median} | {inf_p90} | {inf_delta} | {lan_cell} | {lan_t} | {lan_peak} | {lan_median} | {lan_p90} | {lan_delta} | {winner} |\n"
+            "| {row_target} | {} | {} | {} | {} | {} | {} | {lan_cell} | {} | {winner} |\n",
+            inf_hot.map(fmt_time).unwrap_or_else(|| "—".into()),
+            inf_warm.map(fmt_time).unwrap_or_else(|| "—".into()),
+            inf_cold.map(fmt_time).unwrap_or_else(|| "—".into()),
+            lan_hot.map(fmt_time).unwrap_or_else(|| "—".into()),
+            lan_warm.map(fmt_time).unwrap_or_else(|| "—".into()),
+            lan_cold.map(fmt_time).unwrap_or_else(|| "—".into()),
+            lan_peak.map(rss::fmt_bytes).unwrap_or_else(|| "—".into()),
         ));
     }
 

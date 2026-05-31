@@ -178,9 +178,54 @@ pub fn read_mean_ns(group: &str, bench: &str) -> Option<f64> {
 /// README and the most actionable signal for "run `cargo bench` in
 /// `../infino` first."
 pub fn read_infino_mean_ns(group: &str, bench: &str) -> Option<f64> {
-    let path = format!("../infino/target/criterion/{group}/{bench}/new/estimates.json");
+    let path = format!(
+        "{}/{group}/{bench}/new/estimates.json",
+        crate::INFINO_CRITERION_ROOT
+    );
     let text = fs::read_to_string(&path).ok()?;
     let v: Value = serde_json::from_str(&text).ok()?;
     v.get("mean")?.get("point_estimate")?.as_f64()
 }
 
+/// Read infino tier search timings from `../infino` criterion groups
+/// (`{family}_hot_search`, `{family}_{warm|cold}_search_{s3s_fs|real_s3}`).
+pub fn read_infino_tier_mean_ns(family: &str, tier: &str, bench: &str) -> Option<f64> {
+    if tier == "hot" {
+        return read_infino_mean_ns(&format!("{family}_hot_search"), bench);
+    }
+    for storage in ["s3s_fs", "real_s3"] {
+        let group = format!("{family}_{tier}_search_{storage}");
+        if let Some(ns) = read_infino_mean_ns(&group, bench) {
+            return Some(ns);
+        }
+    }
+    None
+}
+
+/// Back-compat alias for supertable infino tier rows.
+pub fn read_infino_supertable_tier_mean_ns(family: &str, tier: &str, bench: &str) -> Option<f64> {
+    read_infino_tier_mean_ns(family, tier, bench)
+}
+
+/// Lance tier rows (`{family}_hot_search` or `{family}_{tier}_search_lance_{storage}`).
+pub fn read_lance_tier_mean_ns(family: &str, tier: &str, bench: &str) -> Option<f64> {
+    if tier == "hot" {
+        return read_mean_ns(&format!("{family}_hot_search"), bench);
+    }
+    for storage in ["s3s_fs", "real_s3"] {
+        let group = format!("{family}_{tier}_search_lance_{storage}");
+        if let Some(ns) = read_mean_ns(&group, bench) {
+            return Some(ns);
+        }
+    }
+    None
+}
+
+/// Tantivy tier rows (disk-backed warm/cold; hot in-RAM).
+pub fn read_tantivy_tier_mean_ns(family: &str, tier: &str, bench: &str) -> Option<f64> {
+    if tier == "hot" {
+        return read_mean_ns(&format!("{family}_hot_search"), bench);
+    }
+    let group = format!("{family}_{tier}_search_tantivy");
+    read_mean_ns(&group, bench)
+}

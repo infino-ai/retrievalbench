@@ -57,7 +57,7 @@ Each results file contains:
 Results are automatically collected when benchmarks run. To see results from a benchmark run:
 
 ```bash
-cargo bench --bench fts-superfile
+cargo bench --bench superfile_fts
 ```
 
 The JSON results will be written to `results/YYYY-MM-DD_HH-MM-SS.json`.

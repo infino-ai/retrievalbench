@@ -3,9 +3,9 @@
 //! ## Invocation
 //!
 //! ```text
-//! cargo bench --bench fts-superfile                            # run all superfile FTS
-//! cargo bench --bench fts-superfile -- <filter>               # criterion regex filter
-//! INFINO_BENCH_UPDATE_README=1 cargo bench --bench fts-superfile
+//! cargo bench --bench superfile_fts                            # run all superfile FTS
+//! cargo bench --bench superfile_fts -- <filter>                # criterion regex filter
+//! INFINO_BENCH_UPDATE_README=1 cargo bench --bench superfile_fts
 //! ```
 
 mod superfile;

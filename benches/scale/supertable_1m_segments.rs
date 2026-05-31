@@ -126,6 +126,7 @@ fn make_cache(storage: Arc<dyn StorageProvider>, cache_root: &Path) -> Arc<DiskC
         mmap_sweep_interval_secs: 0,
         eviction: Box::new(LruPolicy::new()),
         verify_crc_on_open: true,
+        prefetch_concurrency: 8,
     };
     let pinned: Arc<dyn Fn() -> HashSet<_> + Send + Sync> = Arc::new(HashSet::new);
     DiskCacheStore::new(storage, cfg, pinned).expect("cache")
@@ -232,6 +233,7 @@ fn build_synthetic_parts(
                 vector_summary: HashMap::new(),
                 partition_key: 0u32.to_le_bytes().to_vec(),
                 partition_hint: Some(0),
+                subsection_offsets: None,
             }));
         }
 
@@ -392,10 +394,13 @@ fn phase_c_high_selectivity_query(st: &Supertable, target_part_idx: usize) {
     let pre = open_snapshot(st);
     let term = unique_term_for(target_part_idx);
     let t0 = Instant::now();
-    let hits = st
-        .reader()
-        .bm25_search("title", &term, 10, BoolMode::Or)
-        .expect("bm25");
+    let hits = retrievalbench::corpus::block_on_inmem(st.reader().bm25_search(
+        "title",
+        &term,
+        10,
+        BoolMode::Or,
+    ))
+    .expect("bm25");
     let wall = t0.elapsed();
     let post = open_snapshot(st);
     let delta = post.n_parts_loaded.saturating_sub(pre.n_parts_loaded);
@@ -417,10 +422,13 @@ fn phase_c_high_selectivity_query(st: &Supertable, target_part_idx: usize) {
 fn phase_d_low_selectivity_query(st: &Supertable) {
     let pre = open_snapshot(st);
     let t0 = Instant::now();
-    let _ = st
-        .reader()
-        .bm25_search("title", COMMON_TERM, 10, BoolMode::Or)
-        .expect("bm25");
+    let _ = retrievalbench::corpus::block_on_inmem(st.reader().bm25_search(
+        "title",
+        COMMON_TERM,
+        10,
+        BoolMode::Or,
+    ))
+    .expect("bm25");
     let wall = t0.elapsed();
     let post = open_snapshot(st);
     eprintln!(

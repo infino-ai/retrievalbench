@@ -399,8 +399,13 @@ fn oracle_and_two_term_overlap_matches_tantivy() {
     let (tan, tf) = build_tantivy_index(&corp);
     assert_top_k_and_set_matches(&infino, &tan, tf, "rust async", 10);
     let want: HashSet<u64> = [0u64, 20, 22].into_iter().collect();
-    let infino_set: HashSet<u64> = infino_top_k_and(&infino, "rust async", 10).into_iter().collect();
-    assert_eq!(infino_set, want, "infino AND(rust, async) must be {{0,20,22}}");
+    let infino_set: HashSet<u64> = infino_top_k_and(&infino, "rust async", 10)
+        .into_iter()
+        .collect();
+    assert_eq!(
+        infino_set, want,
+        "infino AND(rust, async) must be {{0,20,22}}"
+    );
 }
 
 #[test]

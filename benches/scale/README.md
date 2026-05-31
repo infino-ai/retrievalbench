@@ -18,11 +18,11 @@ summaries per phase on stderr. The `scale` bundle dispatches via a
 positional arg after `--`:
 
 ```sh
-cargo bench --bench scale                            # run every runner at default scale
-cargo bench --bench scale -- 100gb_laptop            # only 100GB laptop runner
-cargo bench --bench scale -- 1m_segments             # only 1M-segment manifest stress
-cargo bench --bench scale -- fts_recall              # only FTS pinned-recall battery
-cargo bench --bench scale -- vector_recall           # only vector pinned-recall battery
+cargo bench --features bench-diagnostics --bench scale
+cargo bench --features bench-diagnostics --bench scale -- 100gb_laptop
+cargo bench --features bench-diagnostics --bench scale -- 1m_segments
+cargo bench --features bench-diagnostics --bench scale -- fts_recall
+cargo bench --features bench-diagnostics --bench scale -- vector_recall
 ```
 
 ## Sequence

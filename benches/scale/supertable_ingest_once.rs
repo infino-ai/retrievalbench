@@ -11,7 +11,7 @@
 //! Invocation:
 //!
 //! ```text
-//! cargo bench --bench scale -- supertable_ingest_once
+//! cargo bench --features bench-diagnostics --bench scale -- supertable_ingest_once
 //! ```
 
 use std::sync::Arc;
@@ -64,7 +64,7 @@ fn build_supertable_once(docs: &[String]) -> (Supertable, std::time::Duration) {
     // `min(writer_pool.threads, total_rows)` superfiles, so this
     // knob doubles as the per-commit output-cardinality dial.
     // Examples:
-    //   INFINO_SUPERTABLE__WRITER_THREADS=32 cargo bench --bench scale -- supertable_ingest_once
+    //   INFINO_SUPERTABLE__WRITER_THREADS=32 cargo bench --features bench-diagnostics --bench scale -- supertable_ingest_once
     //     → 32 superfiles (matches Tantivy's 8 internal threads × 4 commits = 32 segments)
     //   (unset)
     //     → cpus/2 superfiles (8 on a 16-core box, the default policy)

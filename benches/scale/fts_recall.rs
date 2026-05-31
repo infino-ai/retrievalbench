@@ -23,7 +23,7 @@
 //! ~5 s optimized. The bug manifests at this scale because k=10 and
 //! Zipfian rank-50/51/52 produce enough triple-overlap docs to fill
 //! the heap with 3-term hits. Runs in the bench-scale lane via
-//! `cargo bench --bench scale -- fts_recall` so it gets the release
+//! `cargo bench --features bench-diagnostics --bench scale -- fts_recall` so it gets the release
 //! profile by default.
 
 // diag_* helpers stay in the binary for manual invocation.
@@ -35,6 +35,7 @@ use infino::superfile::fts::reader::{BoolMode, FtsReader, OrAlgo};
 use infino::test_helpers::default_tokenizer;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
+use retrievalbench::corpus;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 use tantivy::collector::TopDocs;
@@ -148,9 +149,7 @@ fn tantivy() -> &'static TantivyHandles {
 }
 
 fn infino_top_k_scored(terms: &[&str], k: usize) -> Vec<(u32, f32)> {
-    infino()
-        .search("title", terms, k, BoolMode::Or)
-        .expect("search")
+    corpus::block_on_inmem(infino().search("title", terms, k, BoolMode::Or)).expect("search")
 }
 
 fn tantivy_top_k_scored(query: &str, k: usize) -> Vec<(u32, f32)> {
@@ -305,22 +304,20 @@ fn diag_three_similar_scores() {
 
 fn diag_three_similar_wand_vs_bmm() {
     let r = infino();
-    let wand = r
-        .search_with_algo_for_bench(
-            "title",
-            &["term00050", "term00051", "term00052"],
-            15,
-            OrAlgo::WandBmw,
-        )
-        .expect("WAND+BMW search");
-    let bmm = r
-        .search_with_algo_for_bench(
-            "title",
-            &["term00050", "term00051", "term00052"],
-            15,
-            OrAlgo::Bmm,
-        )
-        .expect("MaxScore+BMM search");
+    let wand = corpus::block_on_inmem(r.search_with_algo_for_bench(
+        "title",
+        &["term00050", "term00051", "term00052"],
+        15,
+        OrAlgo::WandBmw,
+    ))
+    .expect("WAND+BMW search");
+    let bmm = corpus::block_on_inmem(r.search_with_algo_for_bench(
+        "title",
+        &["term00050", "term00051", "term00052"],
+        15,
+        OrAlgo::Bmm,
+    ))
+    .expect("MaxScore+BMM search");
     println!("WAND+BMW top-15:");
     for (d, s) in &wand {
         println!("  doc={d:>5}  score={s:.6}");
@@ -531,8 +528,7 @@ fn one_common_one_mid_one_rare_top10() {
 // against the same Tantivy oracle.
 
 fn infino_bmm_top_k(terms: &[&str], k: usize) -> Vec<(u32, f32)> {
-    infino()
-        .search_with_algo_for_bench("title", terms, k, OrAlgo::Bmm)
+    corpus::block_on_inmem(infino().search_with_algo_for_bench("title", terms, k, OrAlgo::Bmm))
         .expect("MaxScore+BMM search")
 }
 

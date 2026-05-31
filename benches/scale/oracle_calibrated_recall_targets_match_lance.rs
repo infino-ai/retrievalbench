@@ -6,7 +6,7 @@
 //! sweep over BOTH engines is ~10–30 s in release but multiple
 //! hours in debug (no SIMD, no LTO, no inlining for IVF + RaBitQ +
 //! Lance's IVF-PQ + brute-force ground truth). Invoked via
-//! `cargo bench --bench scale -- oracle_calibrated_recall`.
+//! `cargo bench --features bench-diagnostics --bench scale -- oracle_calibrated_recall`.
 //!
 //! Mirrors `tests/vector_against_lance.rs` for the supertable
 //! layer. The single-superfile oracle catches per-engine bugs in
@@ -264,9 +264,9 @@ fn supertable_topk(
     options: VectorSearchOptions,
 ) -> Vec<u32> {
     let r = st.reader();
-    let hits: Vec<SuperfileHit> = r
-        .vector_search("emb", query, k, options)
-        .expect("vector_search");
+    let hits: Vec<SuperfileHit> =
+        retrievalbench::corpus::block_on_inmem(r.vector_search("emb", query, k, options))
+            .expect("vector_search");
     let manifest = r.manifest();
     let chunk_size = (N_DOCS / N_SEGMENTS) as u32;
     hits.into_iter()

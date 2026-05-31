@@ -18,18 +18,26 @@
 //! ## Invocation
 //!
 //! ```text
-//! cargo bench --bench fts -- supertable_fts                      # both groups
-//! cargo bench --bench fts -- supertable_fts_build                # ingest only
-//! cargo bench --bench fts -- supertable_fts_search               # search only
+//! cargo bench --bench supertable_all -- supertable_fts           # both groups
+//! cargo bench --bench supertable_all -- supertable_fts_build     # ingest only
+//! cargo bench --bench supertable_all -- supertable_fts_search    # search only
 //! ```
 
 use std::hint::black_box;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
-use criterion::{criterion_group, Criterion, Throughput};
-use rayon::prelude::*;
+use criterion::{Criterion, Throughput, criterion_group};
 use rayon::ThreadPool;
+use rayon::prelude::*;
+use retrievalbench::object_store_tier::Tier;
 use retrievalbench::{corpus, markdown, results, rss};
+use tantivy::DocAddress;
+use tantivy::Index;
+use tantivy::Score;
+use tantivy::Searcher;
+use tantivy::Term;
 use tantivy::collector::Collector;
 use tantivy::collector::TopDocs;
 use tantivy::doc;
@@ -37,18 +45,14 @@ use tantivy::indexer::NoMergePolicy;
 use tantivy::query::Weight;
 use tantivy::query::{BooleanQuery, EnableScoring, Occur, Query, QueryParser, TermQuery};
 use tantivy::schema::{
-    IndexRecordOption, Schema as TSchema, TextFieldIndexing, TextOptions, INDEXED, STORED,
+    INDEXED, IndexRecordOption, STORED, Schema as TSchema, TextFieldIndexing, TextOptions,
 };
 use tantivy::tokenizer::{LowerCaser, SimpleTokenizer, TextAnalyzer};
-use tantivy::DocAddress;
-use tantivy::Index;
-use tantivy::Score;
-use tantivy::Searcher;
-use tantivy::Term;
+use tempfile::TempDir;
 
 // ─── Constants ────────────────────────────────────────────────────────
 
-const N_DOCS: usize = 10_000_000;
+const N_DOCS: usize = corpus::SUPERTABLE_DOCS;
 const SEGMENTS: usize = 4;
 const TOP_K: usize = 10;
 const TANTIVY_HEAP_BYTES: usize = 2_000_000_000;
@@ -57,6 +61,14 @@ const TANTIVY_HEAP_BYTES: usize = 2_000_000_000;
 
 static DOCS: OnceLock<Vec<String>> = OnceLock::new();
 static TANTIVY: OnceLock<TantivyHandles> = OnceLock::new();
+
+/// Disk-backed Tantivy index (warm/cold tiers). Tantivy has no native S3
+/// integration; disk mmap is the closest parity to object-store cold open.
+struct DiskTantivyFixture {
+    _dir: TempDir,
+    title_field: tantivy::schema::Field,
+}
+static TANTIVY_DISK: OnceLock<DiskTantivyFixture> = OnceLock::new();
 
 fn docs() -> &'static [String] {
     DOCS.get_or_init(|| corpus::generate_text_corpus(N_DOCS, 1))
@@ -130,6 +142,66 @@ fn build_supertable_tantivy(docs: &[String]) -> TantivyHandles {
     drop(writer);
 
     TantivyHandles { index, title_field }
+}
+
+fn build_tantivy_on_disk(docs: &[String]) -> DiskTantivyFixture {
+    let dir = TempDir::new().expect("tantivy disk tempdir");
+    let mut sb = TSchema::builder();
+    let id_field = sb.add_u64_field("doc_id", INDEXED | STORED);
+    let title_opts = TextOptions::default().set_indexing_options(
+        TextFieldIndexing::default()
+            .set_tokenizer("default")
+            .set_index_option(IndexRecordOption::WithFreqs),
+    );
+    let title_field = sb.add_text_field("title", title_opts);
+    let schema = sb.build();
+    let index = Index::create_in_dir(dir.path(), schema.clone()).expect("create_in_dir");
+    let analyzer = TextAnalyzer::builder(SimpleTokenizer::default())
+        .filter(LowerCaser)
+        .build();
+    index.tokenizers().register("default", analyzer);
+
+    let mut writer = index.writer(TANTIVY_HEAP_BYTES).expect("writer");
+    writer.set_merge_policy(Box::new(NoMergePolicy));
+    let chunk_size = docs.len().div_ceil(SEGMENTS);
+    for (chunk_idx, chunk) in docs.chunks(chunk_size).enumerate() {
+        let start = chunk_idx * chunk_size;
+        for (i, t) in chunk.iter().enumerate() {
+            writer
+                .add_document(doc!(
+                    id_field => (start + i) as u64,
+                    title_field => t.as_str(),
+                ))
+                .expect("add_document");
+        }
+        writer.commit().expect("commit");
+    }
+    drop(writer);
+    DiskTantivyFixture {
+        _dir: dir,
+        title_field,
+    }
+}
+
+fn open_disk_tantivy(path: &Path, title_field: tantivy::schema::Field) -> Index {
+    let dir = tantivy::directory::MmapDirectory::open(PathBuf::from(path))
+        .expect("mmap directory for disk tantivy index");
+    let index = Index::open(dir).expect("open disk tantivy index");
+    let analyzer = TextAnalyzer::builder(SimpleTokenizer::default())
+        .filter(LowerCaser)
+        .build();
+    index.tokenizers().register("default", analyzer);
+    let _ = title_field;
+    index
+}
+
+fn tantivy_disk_fixture() -> &'static DiskTantivyFixture {
+    TANTIVY_DISK.get_or_init(|| {
+        eprintln!(
+            "[supertable_fts] building disk-backed Tantivy ({N_DOCS} docs) for warm/cold tiers..."
+        );
+        build_tantivy_on_disk(docs())
+    })
 }
 
 /// Sequential Tantivy search — used for the df=1 lookup. Cross-segment
@@ -320,7 +392,7 @@ fn bench_search(c: &mut Criterion) {
         pool.current_num_threads()
     );
 
-    let mut g = c.benchmark_group("supertable_fts_search");
+    let mut g = c.benchmark_group("supertable_fts_hot_search");
     g.sample_size(10);
     let rss_sample = rss::PeakSampler::start_default();
 
@@ -374,8 +446,119 @@ fn bench_search(c: &mut Criterion) {
         );
     }
 
+    bench_search_tantivy_disk_tiers(c, &qs, &pool);
+
     emit_search_markdown();
     emit_json_results();
+}
+
+fn bench_search_tantivy_disk_tiers(c: &mut Criterion, qs: &Battery, pool: &Arc<ThreadPool>) {
+    let disk = tantivy_disk_fixture();
+    let path = disk._dir.path().to_path_buf();
+    let title_field = disk.title_field;
+
+    let queries: &[(&str, &dyn Query)] = &[
+        ("single_rare", qs.q_single_rare.as_ref()),
+        ("single_common", qs.q_single_common.as_ref()),
+        ("two_term_or", qs.q_two.as_ref()),
+        ("three_wide_or", qs.q_three_wide.as_ref()),
+        ("three_similar_or", qs.q_three_similar.as_ref()),
+        ("five_term_or", qs.q_five.as_ref()),
+    ];
+
+    for tier in [Tier::Warm, Tier::Cold] {
+        let mut g = c.benchmark_group(format!("supertable_fts_{}_search_tantivy", tier.label()));
+        g.sample_size(10);
+
+        for (name, query) in queries {
+            let bench_id = format!("{name}_supertable_top10");
+            match tier {
+                Tier::Warm => {
+                    let index = open_disk_tantivy(&path, title_field);
+                    let reader = index.reader().expect("reader");
+                    let searcher = reader.searcher();
+                    let weight = query
+                        .weight(EnableScoring::enabled_from_searcher(&searcher))
+                        .expect("prewarm weight");
+                    let _ = tantivy_search_parallel(TOP_K, pool, &searcher, weight);
+                    g.bench_function(&bench_id, |b| {
+                        let reader = index.reader().expect("reader");
+                        let searcher = reader.searcher();
+                        b.iter(|| {
+                            let weight = query
+                                .weight(EnableScoring::enabled_from_searcher(&searcher))
+                                .expect("weight");
+                            let hits = tantivy_search_parallel(TOP_K, pool, &searcher, weight);
+                            black_box(hits)
+                        });
+                    });
+                }
+                Tier::Cold => {
+                    let path = path.clone();
+                    g.bench_function(&bench_id, |b| {
+                        b.iter_custom(|iters| {
+                            let mut total = Duration::ZERO;
+                            for _ in 0..iters {
+                                let t0 = Instant::now();
+                                let index = open_disk_tantivy(&path, title_field);
+                                let reader = index.reader().expect("reader");
+                                let searcher = reader.searcher();
+                                let weight = query
+                                    .weight(EnableScoring::enabled_from_searcher(&searcher))
+                                    .expect("weight");
+                                let _ = tantivy_search_parallel(TOP_K, pool, &searcher, weight);
+                                total += t0.elapsed();
+                            }
+                            total
+                        });
+                    });
+                }
+                Tier::Hot => {}
+            }
+        }
+
+        g.bench_function("prefix_supertable_top10", |b| match tier {
+            Tier::Warm => {
+                let index = open_disk_tantivy(&path, title_field);
+                let reader = index.reader().expect("reader");
+                let searcher = reader.searcher();
+                let _ = qs
+                    .q_prefix
+                    .weight(EnableScoring::enabled_from_searcher(&searcher))
+                    .expect("prewarm");
+                b.iter(|| {
+                    let weight = qs
+                        .q_prefix
+                        .weight(EnableScoring::enabled_from_searcher(&searcher))
+                        .expect("weight");
+                    let hits = tantivy_search_parallel(TOP_K, pool, &searcher, weight);
+                    black_box(hits)
+                });
+            }
+            Tier::Cold => {
+                let path = path.clone();
+                b.iter_custom(|iters| {
+                    let mut total = Duration::ZERO;
+                    for _ in 0..iters {
+                        let t0 = Instant::now();
+                        let index = open_disk_tantivy(&path, title_field);
+                        let reader = index.reader().expect("reader");
+                        let searcher = reader.searcher();
+                        let weight = qs
+                            .q_prefix
+                            .weight(EnableScoring::enabled_from_searcher(&searcher))
+                            .expect("weight");
+                        let _ = tantivy_search_parallel(TOP_K, pool, &searcher, weight);
+                        total += t0.elapsed();
+                    }
+                    total
+                });
+            }
+            Tier::Hot => {}
+        });
+
+        g.finish();
+    }
 }
 
 // ─── JSON results emitter ─────────────────────────────────────────────
@@ -420,7 +603,7 @@ fn emit_json_results() {
 
 mod group_name {
     pub const SUPERTABLE_FTS_BUILD: &str = "supertable_fts_build";
-    pub const SUPERTABLE_FTS_SEARCH: &str = "supertable_fts_search";
+    pub const SUPERTABLE_FTS_SEARCH: &str = "supertable_fts_hot_search";
 }
 
 const QUERY_NAMES: &[&str] = &[
@@ -435,7 +618,7 @@ const QUERY_NAMES: &[&str] = &[
 
 fn emit_ingest_markdown() {
     use markdown::{
-        fmt_throughput, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns, MarkdownSection,
+        MarkdownSection, fmt_throughput, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns,
     };
 
     let group = group_name::SUPERTABLE_FTS_BUILD;
@@ -503,39 +686,42 @@ fn emit_ingest_markdown() {
 }
 
 fn emit_search_markdown() {
-    use markdown::{fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns, MarkdownSection};
+    use markdown::{MarkdownSection, fmt_time, fmt_winner, read_infino_mean_ns, read_mean_ns};
 
     let group = group_name::SUPERTABLE_FTS_SEARCH;
     let mut body = String::new();
     body.push_str(&format!("### Supertable FTS — search ({N_DOCS} docs)\n\n"));
     body.push_str(
-        "| Query | infino p50 | infino Peak RSS | infino Median RSS | infino P90 RSS | infino Peak RSS Δ | Tantivy p50 | Tantivy Peak RSS | Tantivy Median RSS | Tantivy P90 RSS | Tantivy Peak RSS Δ | Winner |\n",
+        "Infino warm/cold from `../infino-pr8` (`supertable_fts_{hot|warm|cold}_search*`). \
+         Tantivy warm/cold = disk-backed (`supertable_fts_{warm|cold}_search_tantivy`). \
+         Winner = infino hot vs Tantivy hot.\n\n",
     );
     body.push_str(
-        "|-------|------------|-----------------|-------------------|----------------|-------------------|-------------|------------------|--------------------|-----------------|--------------------|--------|\n",
+        "| Query | infino hot | infino warm | infino cold | Tantivy hot | Tantivy warm | Tantivy cold | Winner |\n",
+    );
+    body.push_str(
+        "|-------|------------|-------------|-------------|-------------|--------------|--------------|--------|\n",
     );
     for q in QUERY_NAMES {
         let inf_id = format!("{q}_supertable_top10");
-        let tan_id = format!("{q}_tantivy_top10");
-        let inf = read_infino_mean_ns(group, &inf_id);
-        let tan = read_mean_ns(group, &tan_id);
-        let inf_s = inf.map(fmt_time).unwrap_or_else(|| "—".into());
-        let tan_s = tan.map(fmt_time).unwrap_or_else(|| "—".into());
-        let inf_peak = rss::read_infino_peak_rss_bytes(group, &inf_id)
-            .map(rss::fmt_bytes)
-            .unwrap_or_else(|| "—".into());
-        let inf_median = rss::fmt_infino_median_rss(group, &inf_id);
-        let inf_p90 = rss::fmt_infino_p90_rss(group, &inf_id);
-        let inf_delta = rss::fmt_infino_peak_rss_delta(group, &inf_id);
-        let tan_peak = rss::read_peak_rss_bytes(group, &tan_id)
-            .map(rss::fmt_bytes)
-            .unwrap_or_else(|| "—".into());
-        let tan_median = rss::fmt_median_rss(group, &tan_id);
-        let tan_p90 = rss::fmt_p90_rss(group, &tan_id);
-        let tan_delta = rss::fmt_peak_rss_delta(group, &tan_id);
-        let w = fmt_winner("infino", inf, "tantivy", tan);
+        let tan_hot_id = format!("{q}_tantivy_top10");
+        let inf_hot = read_infino_mean_ns(group, &inf_id);
+        let inf_warm =
+            markdown::read_infino_supertable_tier_mean_ns("supertable_fts", "warm", &inf_id);
+        let inf_cold =
+            markdown::read_infino_supertable_tier_mean_ns("supertable_fts", "cold", &inf_id);
+        let tan_hot = read_mean_ns(group, &tan_hot_id);
+        let tan_warm = markdown::read_tantivy_tier_mean_ns("supertable_fts", "warm", &inf_id);
+        let tan_cold = markdown::read_tantivy_tier_mean_ns("supertable_fts", "cold", &inf_id);
+        let w = fmt_winner("infino", inf_hot, "tantivy", tan_hot);
         body.push_str(&format!(
-            "| {q} | {inf_s} | {inf_peak} | {inf_median} | {inf_p90} | {inf_delta} | {tan_s} | {tan_peak} | {tan_median} | {tan_p90} | {tan_delta} | {w} |\n"
+            "| {q} | {} | {} | {} | {} | {} | {} | {w} |\n",
+            inf_hot.map(fmt_time).unwrap_or_else(|| "—".into()),
+            inf_warm.map(fmt_time).unwrap_or_else(|| "—".into()),
+            inf_cold.map(fmt_time).unwrap_or_else(|| "—".into()),
+            tan_hot.map(fmt_time).unwrap_or_else(|| "—".into()),
+            tan_warm.map(fmt_time).unwrap_or_else(|| "—".into()),
+            tan_cold.map(fmt_time).unwrap_or_else(|| "—".into()),
         ));
     }
 

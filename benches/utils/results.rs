@@ -3,7 +3,7 @@
 //! Stores complete benchmark results as timestamped JSON files in a results directory,
 //! enabling comparison and analysis across benchmark runs via a web interface.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -59,7 +59,13 @@ impl ResultsCollector {
     }
 
     /// Add results from criterion's estimates.json, with separate path group and results group.
-    pub fn add_from_criterion_with_group(&mut self, path_group: &str, results_group: &str, bench: &str, database: Option<&str>) {
+    pub fn add_from_criterion_with_group(
+        &mut self,
+        path_group: &str,
+        results_group: &str,
+        bench: &str,
+        database: Option<&str>,
+    ) {
         let path = format!("target/criterion/{path_group}/{bench}/new/estimates.json");
         if let Ok(text) = fs::read_to_string(&path) {
             if let Ok(v) = serde_json::from_str::<Value>(&text) {
@@ -121,8 +127,17 @@ impl ResultsCollector {
     }
 
     /// Add results from infino's sibling criterion tree, with separate path group and results group.
-    pub fn add_from_infino_with_group(&mut self, path_group: &str, results_group: &str, bench: &str, database: Option<&str>) {
-        let path = format!("../infino/target/criterion/{path_group}/{bench}/new/estimates.json");
+    pub fn add_from_infino_with_group(
+        &mut self,
+        path_group: &str,
+        results_group: &str,
+        bench: &str,
+        database: Option<&str>,
+    ) {
+        let path = format!(
+            "{}/{path_group}/{bench}/new/estimates.json",
+            crate::INFINO_CRITERION_ROOT
+        );
         if let Ok(text) = fs::read_to_string(&path) {
             if let Ok(v) = serde_json::from_str::<Value>(&text) {
                 let mean_ns = v
@@ -130,7 +145,10 @@ impl ResultsCollector {
                     .and_then(|m| m.get("point_estimate"))
                     .and_then(|x| x.as_f64());
 
-                let path = format!("../infino/target/criterion/{path_group}/{bench}/rss.json");
+                let path = format!(
+                    "{}/{path_group}/{bench}/rss.json",
+                    crate::INFINO_CRITERION_ROOT
+                );
                 let peak_rss_bytes = fs::read_to_string(&path)
                     .ok()
                     .and_then(|text| serde_json::from_str::<Value>(&text).ok())
@@ -153,7 +171,10 @@ impl ResultsCollector {
 
     /// Add results from infino's sibling criterion tree.
     pub fn add_from_infino(&mut self, group: &str, bench: &str, database: Option<&str>) {
-        let path = format!("../infino/target/criterion/{group}/{bench}/new/estimates.json");
+        let path = format!(
+            "{}/{group}/{bench}/new/estimates.json",
+            crate::INFINO_CRITERION_ROOT
+        );
         if let Ok(text) = fs::read_to_string(&path) {
             if let Ok(v) = serde_json::from_str::<Value>(&text) {
                 let mean_ns = v
@@ -161,7 +182,7 @@ impl ResultsCollector {
                     .and_then(|m| m.get("point_estimate"))
                     .and_then(|x| x.as_f64());
 
-                let path = format!("../infino/target/criterion/{group}/{bench}/rss.json");
+                let path = format!("{}/{group}/{bench}/rss.json", crate::INFINO_CRITERION_ROOT);
                 let peak_rss_bytes = fs::read_to_string(&path)
                     .ok()
                     .and_then(|text| serde_json::from_str::<Value>(&text).ok())
@@ -291,10 +312,7 @@ fn get_current_commit_hash() -> Option<String> {
         .ok()?;
 
     if output.status.success() {
-        let hash = String::from_utf8(output.stdout)
-            .ok()?
-            .trim()
-            .to_string();
+        let hash = String::from_utf8(output.stdout).ok()?.trim().to_string();
         // Return first 7 characters (short hash)
         Some(hash.chars().take(7).collect())
     } else {

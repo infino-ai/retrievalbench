@@ -82,19 +82,28 @@ fn mixed_load_p99_ns(writer_threads: usize, n_queries: usize) -> u64 {
         let start = Instant::now();
         match i % 3 {
             0 => {
-                let _hits = r
-                    .bm25_search("title", "term00001", TOP_K, BoolMode::Or)
-                    .expect("bm25");
+                let _hits = retrievalbench::corpus::block_on_inmem(r.bm25_search(
+                    "title",
+                    "term00001",
+                    TOP_K,
+                    BoolMode::Or,
+                ))
+                .expect("bm25");
             }
             1 => {
-                let _hits = r
-                    .bm25_search_prefix("title", "term000", TOP_K)
-                    .expect("bm25_prefix");
+                let _hits = retrievalbench::corpus::block_on_inmem(
+                    r.bm25_search_prefix("title", "term000", TOP_K),
+                )
+                .expect("bm25_prefix");
             }
             _ => {
-                let _hits = r
-                    .vector_search("emb", &q, TOP_K, VectorSearchOptions::new())
-                    .expect("vector");
+                let _hits = retrievalbench::corpus::block_on_inmem(r.vector_search(
+                    "emb",
+                    &q,
+                    TOP_K,
+                    VectorSearchOptions::new(),
+                ))
+                .expect("vector");
             }
         }
         let elapsed_ns = start.elapsed().as_nanos();

@@ -1,8 +1,9 @@
 # FTS benches
 
-All FTS benches live in one bundled criterion binary (`cargo
-bench --bench fts`). Filter to a subset with a criterion regex on
-the group or bench name, e.g. `cargo bench --bench fts --
+Superfile FTS benches live in `cargo bench --bench superfile_fts`;
+supertable FTS comparisons live in `cargo bench --bench
+supertable_all`. Filter to a subset with a criterion regex on the
+group or bench name, e.g. `cargo bench --bench superfile_fts --
 search_vs_tantivy`.
 
 Default scale is 1M docs (Zipfian, 200 tokens/doc, 10K vocabulary).
@@ -12,11 +13,9 @@ but ratios stay stable.
 
 ## Sequence
 
-The benches are ordered build → search → microbench →
-supertable-layer, matching how a typical perf investigation
+The benches are ordered build → search → microbench, matching how a typical perf investigation
 flows: prove the build path lands the right bytes, prove the
-search path queries them fast, isolate the codec, then layer the
-multi-segment routing on top.
+search path queries them fast, then isolate the codec.
 
 ### `superfile/build` — single-segment ingestion throughput
 

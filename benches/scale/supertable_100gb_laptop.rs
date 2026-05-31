@@ -448,6 +448,7 @@ fn build_disk_cache(
         mmap_sweep_interval_secs: 0,
         eviction: Box::new(LruPolicy::new()),
         verify_crc_on_open: true,
+        prefetch_concurrency: 8,
     };
     let pinned_fn: Arc<dyn Fn() -> HashSet<_> + Send + Sync> = Arc::new(HashSet::new);
     DiskCacheStore::new(storage, cfg, pinned_fn).expect("disk cache")

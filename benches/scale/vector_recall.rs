@@ -8,7 +8,8 @@
 //!
 //! Runs in the bench-scale lane (release profile) so the 10K-doc
 //! brute-force ground truth completes in ~2 s rather than ~3-4 min
-//! in debug. Invoked via `cargo bench --bench scale -- vector_recall`.
+//! in debug. Invoked via
+//! `cargo bench --features bench-diagnostics --bench scale -- vector_recall`.
 //!
 //! ## Sizing
 //!
@@ -32,7 +33,7 @@ use bytes::Bytes;
 use infino::superfile::VectorSearchOptions;
 use infino::superfile::vector::builder::{VectorBuilder, VectorConfig};
 use infino::superfile::vector::distance::{Metric, distance, normalize};
-use infino::superfile::vector::reader::VectorReader;
+use infino::superfile::vector::reader::{OpenOptions, VectorReader};
 use infino::superfile::vector::rerank_codec::RerankCodec;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -49,6 +50,18 @@ const N_DOCS: usize = 10_000;
 const DIM: usize = 384;
 const N_CENT: usize = 64;
 const N_QUERIES: usize = 50;
+
+/// `VectorReader::search` is async on this branch; the recall body is
+/// a synchronous sweep, so block on each query in place.
+fn search_blocking(
+    reader: &VectorReader,
+    query: &[f32],
+    k: usize,
+    nprobe: usize,
+    rerank_mult: usize,
+) -> Vec<(u32, f32)> {
+    futures::executor::block_on(reader.search("v", query, k, nprobe, rerank_mult)).expect("search")
+}
 
 fn generate_planted_corpus(seed: u64, normalize_each: bool) -> Vec<Vec<f32>> {
     // Generate `n_cent` random "centers" then sample each doc near
@@ -109,7 +122,7 @@ fn build_reader(corpus: &[Vec<f32>], metric: Metric) -> VectorReader {
     for v in corpus {
         b.add(0, v).expect("add to vector builder");
     }
-    let bytes = b.finish().expect("VectorBuilder::finish");
+    let bytes = b.finish().expect("finish vector builder");
     let metric_str = match metric {
         Metric::L2Sq => "l2sq",
         Metric::Cosine => "cosine",
@@ -118,7 +131,15 @@ fn build_reader(corpus: &[Vec<f32>], metric: Metric) -> VectorReader {
     let json = format!(
         r#"[{{"column":"v","dim":{DIM},"n_cent":{N_CENT},"rot_seed":7,"metric":"{metric_str}"}}]"#
     );
-    VectorReader::open(Bytes::from(bytes), &json).expect("open VectorReader")
+    VectorReader::open_with(
+        Bytes::from(bytes),
+        &json,
+        OpenOptions {
+            verify_crc: true,
+            ..OpenOptions::default()
+        },
+    )
+    .expect("open VectorReader")
 }
 
 /// Returns mean recall@k over `queries` against the planted ground
@@ -137,9 +158,7 @@ fn measure_recall(
         let truth: HashSet<u32> = brute_force_top_k(corpus, q, metric, k)
             .into_iter()
             .collect();
-        let approx: HashSet<u32> = reader
-            .search("v", q, k, nprobe, rerank_mult)
-            .expect("search")
+        let approx: HashSet<u32> = search_blocking(reader, q, k, nprobe, rerank_mult)
             .into_iter()
             .map(|(d, _)| d)
             .collect();

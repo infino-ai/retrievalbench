@@ -33,37 +33,38 @@ fn bench_supertable_query(c: &mut Criterion) {
 
     g.bench_function("bm25_or_top10", |b| {
         b.iter(|| {
-            let hits = r
-                .bm25_search(
-                    black_box("title"),
-                    black_box("term00001"),
-                    TOP_K,
-                    BoolMode::Or,
-                )
-                .expect("bm25");
+            let hits = corpus::block_on_inmem(r.bm25_search(
+                black_box("title"),
+                black_box("term00001"),
+                TOP_K,
+                BoolMode::Or,
+            ))
+            .expect("bm25");
             black_box(hits)
         });
     });
 
     g.bench_function("bm25_prefix_top10", |b| {
         b.iter(|| {
-            let hits = r
-                .bm25_search_prefix(black_box("title"), black_box("term000"), TOP_K)
-                .expect("bm25_prefix");
+            let hits = corpus::block_on_inmem(r.bm25_search_prefix(
+                black_box("title"),
+                black_box("term000"),
+                TOP_K,
+            ))
+            .expect("bm25_prefix");
             black_box(hits)
         });
     });
 
     g.bench_function("vector_default_top10", |b| {
         b.iter(|| {
-            let hits = r
-                .vector_search(
-                    black_box("emb"),
-                    black_box(&q),
-                    TOP_K,
-                    VectorSearchOptions::new(),
-                )
-                .expect("vector");
+            let hits = corpus::block_on_inmem(r.vector_search(
+                black_box("emb"),
+                black_box(&q),
+                TOP_K,
+                VectorSearchOptions::new(),
+            ))
+            .expect("vector");
             black_box(hits)
         });
     });

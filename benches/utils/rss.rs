@@ -38,10 +38,8 @@ use std::time::Duration;
 
 const DEFAULT_INTERVAL: Duration = Duration::from_millis(50);
 
-/// Sibling infino criterion tree. Retrievalbench's `Cargo.toml`
-/// pins `infino = { path = "../infino" }`, so the bench harness
-/// reads infino's published numbers from the same relative path.
-const INFINO_CRITERION_REL: &str = "../infino/target/criterion";
+/// Sibling infino criterion tree (see [`crate::INFINO_CRITERION_ROOT`]).
+const INFINO_CRITERION_REL: &str = crate::INFINO_CRITERION_ROOT;
 
 /// One-shot read of the calling process's current VmRSS in
 /// bytes. `None` on non-Linux hosts or if `/proc/self/status`
