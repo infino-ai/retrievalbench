@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - feat/host-benchmarks-on-ga
     paths:
       - 'benchmarkviewer/**'
       - 'results/**'
@@ -25,8 +26,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1
@@ -36,8 +35,8 @@ jobs:
           cd retrievalbench/benchmarkviewer
           bun run build-static.js
 
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v2
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
           path: 'retrievalbench/benchmarkviewer'
 
@@ -50,4 +49,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v2
+        uses: actions/deploy-pages@v4
