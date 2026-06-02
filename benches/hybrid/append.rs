@@ -19,7 +19,8 @@ fn bench_supertable_append(c: &mut Criterion) {
     g.bench_function("single_chunk_append_no_commit", |b| {
         b.iter_with_setup(
             || {
-                let st = Supertable::create(supertable_options(corpus.n_cent, 1));
+                let st = Supertable::create(supertable_options(corpus.n_cent, 1))
+                    .expect("create supertable");
                 let w = st.writer().expect("writer");
                 (st, w)
             },

@@ -82,7 +82,7 @@ fn build_supertable_once(docs: &[String]) -> (Supertable, std::time::Duration) {
     .expect("apply_config")
     .with_commit_threshold_size_mb(0); // auto-flush off; bench buffers everything
 
-    let st = Supertable::create(opts);
+    let st = Supertable::create(opts).expect("create supertable");
     let mut w = st.writer().expect("writer");
     let chunk_size = docs.len().div_ceil(N_INPUT_CHUNKS);
     let schema = schema_id_title();
