@@ -184,16 +184,16 @@ impl ResultsCollector {
 
     /// Emit collected results as a JSON file in the results directory.
     ///
+    /// File naming includes the commit hash. If a file for this commit already exists,
+    /// new results are merged into it; otherwise a new file is created.
+    ///
     /// Returns the path where the file was written, or an error if I/O fails.
     pub fn emit(self) -> std::io::Result<PathBuf> {
         let results_dir = PathBuf::from("results");
         fs::create_dir_all(&results_dir)?;
 
-        let iso_timestamp = format_iso_timestamp(self.timestamp);
-        let filename = format!("{}.json", iso_timestamp);
-        let filepath = results_dir.join(&filename);
-
-        let mut results: HashMap<String, Value> = HashMap::new();
+        // Build the new results structure
+        let mut new_results: HashMap<String, Value> = HashMap::new();
         for (group, group_results) in self.results {
             let mut group_data: HashMap<String, Value> = HashMap::new();
             for result in group_results {
@@ -206,21 +206,90 @@ impl ResultsCollector {
                 if let Some(db) = &result.database {
                     json_result["database"] = Value::String(db.clone());
                 }
-                // Use just the bench_id as the key since group is the parent
                 group_data.insert(result.bench_id, json_result);
             }
-            results.insert(group, serde_json::to_value(group_data)?);
+            new_results.insert(group, serde_json::to_value(group_data)?);
         }
 
+        // Scan results directory for an existing file with the same commit hash
+        let mut existing_file_path: Option<PathBuf> = None;
+        let mut existing_json: Option<Value> = None;
+
+        if let Ok(entries) = fs::read_dir(&results_dir) {
+            for entry in entries.flatten() {
+                if let Some(filename) = entry.file_name().into_string().ok() {
+                    // Extract commit hash from filename (format: YYYY-MM-DD_HH-MM-SS_COMMIT.json)
+                    if let Some(commit_from_file) = extract_commit_hash(&filename) {
+                        if commit_from_file == self.commit_hash {
+                            if let Ok(text) = fs::read_to_string(entry.path()) {
+                                if let Ok(json) = serde_json::from_str::<Value>(&text) {
+                                    existing_file_path = Some(entry.path());
+                                    existing_json = Some(json);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Determine final filepath and merge results if needed
+        let (filepath, final_timestamp, final_iso_timestamp) = if let Some(path) = existing_file_path {
+            let existing = existing_json.unwrap();
+            let ts = existing.get("timestamp").and_then(|t| t.as_u64()).unwrap_or(self.timestamp);
+            let iso_ts = existing.get("iso_timestamp").and_then(|t| t.as_str()).unwrap_or("").to_string();
+
+            // Merge results: new results override existing ones for the same group/bench
+            if let Some(existing_results) = existing.get("results").and_then(|r| r.as_object()) {
+                for (group, group_data) in existing_results {
+                    if !new_results.contains_key(group) {
+                        new_results.insert(group.clone(), group_data.clone());
+                    } else if let (Some(existing_group), Some(new_group)) =
+                        (group_data.as_object(), new_results.get(group).and_then(|v| v.as_object())) {
+                        let mut merged_group = new_group.clone();
+                        for (bench_id, bench_data) in existing_group {
+                            if !merged_group.contains_key(bench_id) {
+                                merged_group.insert(bench_id.clone(), bench_data.clone());
+                            }
+                        }
+                        new_results.insert(group.clone(), serde_json::to_value(merged_group)?);
+                    }
+                }
+            }
+
+            (path, ts, iso_ts)
+        } else {
+            let iso_timestamp = format_iso_timestamp(self.timestamp);
+            let filename = format!("{}_{}.json", iso_timestamp, self.commit_hash);
+            (results_dir.join(&filename), self.timestamp, iso_timestamp)
+        };
+
         let output = json!({
-            "timestamp": self.timestamp,
-            "iso_timestamp": iso_timestamp,
-            "results": results,
+            "timestamp": final_timestamp,
+            "iso_timestamp": final_iso_timestamp,
+            "results": new_results,
         });
 
         fs::write(&filepath, serde_json::to_vec_pretty(&output)?)?;
         eprintln!("[results] emitted {}", filepath.display());
         Ok(filepath)
+    }
+}
+
+/// Extract commit hash from a filename with format YYYY-MM-DD_HH-MM-SS_COMMIT.json
+/// The timestamp part is always 19 characters (YYYY-MM-DD_HH-MM-SS), so the commit
+/// hash starts at position 20 (after the underscore that separates timestamp and commit).
+fn extract_commit_hash(filename: &str) -> Option<String> {
+    if !filename.ends_with(".json") {
+        return None;
+    }
+    let without_ext = &filename[..filename.len() - 5]; // Remove .json
+    // Timestamp is always YYYY-MM-DD_HH-MM-SS (19 chars), then underscore, then commit hash
+    if without_ext.len() > 20 && without_ext.chars().nth(19) == Some('_') {
+        Some(without_ext[20..].to_string())
+    } else {
+        None
     }
 }
 
@@ -322,5 +391,20 @@ mod tests {
         assert!(fmt.contains("2024"));
         assert!(fmt.contains("05"));
         assert!(fmt.contains("27"));
+    }
+
+    #[test]
+    fn test_extract_commit_hash() {
+        assert_eq!(
+            extract_commit_hash("2026-06-02_12-34-56_abc1234.json"),
+            Some("abc1234".to_string())
+        );
+        assert_eq!(
+            extract_commit_hash("2026-06-02_00-10-06_8335a93.json"),
+            Some("8335a93".to_string())
+        );
+        assert_eq!(extract_commit_hash("2026-06-02_12-34-56.json"), None);
+        assert_eq!(extract_commit_hash("invalid.txt"), None);
+        assert_eq!(extract_commit_hash("no-underscore.json"), None);
     }
 }
