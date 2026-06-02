@@ -1,0 +1,85 @@
+{
+  "timestamp": 1780351769,
+  "iso_timestamp": "2026-06-01_22-09-29",
+  "results": {
+    "supertable_fts_search_single_common": {
+      "single_common_supertable_top10_infino": {
+        "commit_hash": "4869378",
+        "os": "linux",
+        "mean_ns": 87821.41219008737,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    },
+    "supertable_fts_search_single_rare": {
+      "single_rare_supertable_top10_infino": {
+        "commit_hash": "4869378",
+        "os": "linux",
+        "mean_ns": 72890.39201324033,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    },
+    "supertable_fts_search_five_term_or": {
+      "five_term_or_supertable_top10_infino": {
+        "commit_hash": "4869378",
+        "os": "linux",
+        "mean_ns": 35551302.12920636,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    },
+    "supertable_fts_search_three_similar_or": {
+      "three_similar_or_supertable_top10_infino": {
+        "commit_hash": "4869378",
+        "os": "linux",
+        "mean_ns": 15818195.66695106,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    },
+    "supertable_fts_build": {
+      "infino_auto_writer_pool_infino": {
+        "commit_hash": "4869378",
+        "os": "linux",
+        "mean_ns": 50859225627.8,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "tantivy_default_threads": {
+        "commit_hash": "4869378",
+        "os": "linux",
+        "mean_ns": 35179158128.3,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      }
+    },
+    "supertable_fts_search_two_term_or": {
+      "two_term_or_supertable_top10_infino": {
+        "commit_hash": "4869378",
+        "os": "linux",
+        "mean_ns": 493925.0456943372,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    },
+    "supertable_fts_search_three_wide_or": {
+      "three_wide_or_supertable_top10_infino": {
+        "commit_hash": "4869378",
+        "os": "linux",
+        "mean_ns": 4694357.929613095,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    },
+    "supertable_fts_search_prefix": {
+      "prefix_supertable_top10_infino": {
+        "commit_hash": "4869378",
+        "os": "linux",
+        "mean_ns": 81010045.29057539,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    }
+  }
+}
