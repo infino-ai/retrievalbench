@@ -1,0 +1,22 @@
+{
+  "timestamp": 1780356802,
+  "iso_timestamp": "2026-06-01_23-33-22",
+  "results": {
+    "supertable_vec_build": {
+      "lance_10000000docs": {
+        "commit_hash": "4869378",
+        "os": "linux",
+        "mean_ns": 283210693361.1,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      },
+      "supertable_10000000docs_4superfiles_infino": {
+        "commit_hash": "4869378",
+        "os": "linux",
+        "mean_ns": 252801437981.4,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    }
+  }
+}

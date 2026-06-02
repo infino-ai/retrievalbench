@@ -1,0 +1,49 @@
+{
+  "timestamp": 1780359006,
+  "iso_timestamp": "2026-06-02_00-10-06",
+  "results": {
+    "supertable_vec_search_recall_at_least_90": {
+      "lance_recall_at_least_90/p=10,r=256": {
+        "commit_hash": "4869378",
+        "os": "linux",
+        "mean_ns": 81846931.70970239,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      }
+    },
+    "supertable_vec_search_recall_at_least_99": {
+      "lance_recall_at_least_99/p=25,r=256": {
+        "commit_hash": "4869378",
+        "os": "linux",
+        "mean_ns": 115909913.8165476,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      }
+    },
+    "supertable_vec_search_recall_at_least_95": {
+      "lance_recall_at_least_95/p=10,r=256": {
+        "commit_hash": "4869378",
+        "os": "linux",
+        "mean_ns": 76813215.12900794,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      }
+    },
+    "supertable_vec_build": {
+      "lance_10000000docs": {
+        "commit_hash": "4869378",
+        "os": "linux",
+        "mean_ns": 283210693361.1,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      },
+      "supertable_10000000docs_4superfiles_infino": {
+        "commit_hash": "4869378",
+        "os": "linux",
+        "mean_ns": 252801437981.4,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    }
+  }
+}
