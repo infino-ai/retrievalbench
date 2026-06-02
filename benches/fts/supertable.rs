@@ -499,10 +499,15 @@ fn bench_search_tantivy_disk_tiers(c: &mut Criterion, qs: &Battery, pool: &Arc<T
                         b.iter_custom(|iters| {
                             let mut total = Duration::ZERO;
                             for _ in 0..iters {
-                                let t0 = Instant::now();
+                                // Mirror infino/Lance cold tiers: opening the index +
+                                // reader is a one-time metadata load (amortized over the
+                                // reader's life in production), excluded from the
+                                // per-query measurement. A fresh open per iteration keeps
+                                // postings cold.
                                 let index = open_disk_tantivy(&path, title_field);
                                 let reader = index.reader().expect("reader");
                                 let searcher = reader.searcher();
+                                let t0 = Instant::now();
                                 let weight = query
                                     .weight(EnableScoring::enabled_from_searcher(&searcher))
                                     .expect("weight");
@@ -540,10 +545,13 @@ fn bench_search_tantivy_disk_tiers(c: &mut Criterion, qs: &Battery, pool: &Arc<T
                 b.iter_custom(|iters| {
                     let mut total = Duration::ZERO;
                     for _ in 0..iters {
-                        let t0 = Instant::now();
+                        // Mirror infino/Lance cold tiers: index + reader open is a
+                        // one-time metadata load, excluded from the per-query
+                        // measurement; fresh open per iteration keeps postings cold.
                         let index = open_disk_tantivy(&path, title_field);
                         let reader = index.reader().expect("reader");
                         let searcher = reader.searcher();
+                        let t0 = Instant::now();
                         let weight = qs
                             .q_prefix
                             .weight(EnableScoring::enabled_from_searcher(&searcher))
@@ -574,7 +582,7 @@ fn emit_json_results() {
     );
     collector.add_from_infino(
         group_name::SUPERTABLE_FTS_BUILD,
-        "infino_auto_writer_pool",
+        &format!("supertable_fts_{N_DOCS}docs"),
         Some("infino"),
     );
 
@@ -622,9 +630,9 @@ fn emit_ingest_markdown() {
     };
 
     let group = group_name::SUPERTABLE_FTS_BUILD;
-    let infino_id = "infino_auto_writer_pool";
+    let infino_id = format!("supertable_fts_{N_DOCS}docs");
     let tantivy_id = "tantivy_default_threads";
-    let infino_ns = read_infino_mean_ns(group, infino_id);
+    let infino_ns = read_infino_mean_ns(group, &infino_id);
     let tantivy_ns = read_mean_ns(group, tantivy_id);
 
     let mut body = String::new();
@@ -639,16 +647,16 @@ fn emit_ingest_markdown() {
     );
     for (label, ns, peak_rss, median, p90, delta, is_baseline) in [
         (
-            infino_id,
+            "infino",
             infino_ns,
-            rss::read_infino_peak_rss_bytes(group, infino_id),
-            rss::fmt_infino_median_rss(group, infino_id),
-            rss::fmt_infino_p90_rss(group, infino_id),
-            rss::fmt_infino_peak_rss_delta(group, infino_id),
+            rss::read_infino_peak_rss_bytes(group, &infino_id),
+            rss::fmt_infino_median_rss(group, &infino_id),
+            rss::fmt_infino_p90_rss(group, &infino_id),
+            rss::fmt_infino_peak_rss_delta(group, &infino_id),
             false,
         ),
         (
-            tantivy_id,
+            "tantivy",
             tantivy_ns,
             rss::read_peak_rss_bytes(group, tantivy_id),
             rss::fmt_median_rss(group, tantivy_id),
