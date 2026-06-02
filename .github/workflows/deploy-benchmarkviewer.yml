@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - feat/host-benchmarks-on-ga
     paths:
       - 'benchmarkviewer/**'
       - 'results/**'
@@ -32,13 +31,13 @@ jobs:
 
       - name: Build static data
         run: |
-          cd retrievalbench/benchmarkviewer
+          cd benchmarkviewer
           bun run build-static.js
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: 'retrievalbench/benchmarkviewer'
+          path: 'benchmarkviewer'
 
   deploy:
     environment:
