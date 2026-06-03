@@ -232,7 +232,8 @@ fn run_build_phase(storage_root: &Path, n_docs: usize, writer_threads: usize) ->
     let storage: Arc<dyn StorageProvider> =
         Arc::new(LocalFsStorageProvider::new(storage_root).expect("local fs provider"));
     let n_cent = corpus::n_cent(n_docs);
-    let st = Supertable::create(build_options(Arc::clone(&storage), n_cent, writer_threads));
+    let st = Supertable::create(build_options(Arc::clone(&storage), n_cent, writer_threads))
+        .expect("create supertable");
 
     let n_chunks = n_docs.div_ceil(CHUNK_DOCS);
     eprintln!(
@@ -489,7 +490,8 @@ fn run_steady_state_phase(_storage_root: &Path, _n_docs: usize) {
     // per-commit segment count predictable.
     let st = Supertable::create(
         build_options(Arc::clone(&storage), n_cent, 1).with_disk_cache(Arc::clone(&cache)),
-    );
+    )
+    .expect("create supertable");
 
     let duration = std::time::Duration::from_secs(10);
     let n_readers: usize = 4;

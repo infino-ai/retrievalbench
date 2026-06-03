@@ -146,7 +146,8 @@ fn batch_chunk(corpus: &Corpus, chunk_idx: usize, n_chunks: usize) -> RecordBatc
 /// Build a supertable end-to-end using the pre-built chunked
 /// batches (see [`batches`]).
 pub fn build_supertable(corpus: &Corpus, writer_threads: usize) -> Supertable {
-    let st = Supertable::create(supertable_options(corpus.n_cent, writer_threads));
+    let st = Supertable::create(supertable_options(corpus.n_cent, writer_threads))
+        .expect("create supertable");
     let mut w = st.writer().expect("writer");
     for batch in batches() {
         w.append(batch).expect("append");
