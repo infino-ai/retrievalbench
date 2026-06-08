@@ -34,12 +34,6 @@ fn mixed_load_p99_ns(writer_threads: usize, n_queries: usize) -> u64 {
     let corpus = corpus();
     let st = build_supertable(corpus, writer_threads);
 
-    // Pin a reader before the background commit storm starts.
-    // Concurrent commits won't perturb this snapshot — the ArcSwap
-    // guarantee — so the bench measures *contention*, not visibility
-    // drift.
-    let r = st.reader();
-
     // Background thread: hammer commits on a separate Supertable
     // (writer slot is exclusive per Supertable, so we can't share
     // st's writer). The contention point is the rayon writer pool's
@@ -82,17 +76,17 @@ fn mixed_load_p99_ns(writer_threads: usize, n_queries: usize) -> u64 {
         let start = Instant::now();
         match i % 3 {
             0 => {
-                let _hits = r
+                let _hits = st
                     .bm25_search("title", "term00001", TOP_K, BoolMode::Or)
                     .expect("bm25");
             }
             1 => {
-                let _hits = r
+                let _hits = st
                     .bm25_search_prefix("title", "term000", TOP_K)
                     .expect("bm25_prefix");
             }
             _ => {
-                let _hits = r
+                let _hits = st
                     .vector_search("emb", &q, TOP_K, VectorSearchOptions::new())
                     .expect("vector");
             }

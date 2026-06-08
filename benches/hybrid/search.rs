@@ -15,7 +15,6 @@ use std::hint::black_box;
 
 fn bench_supertable_query(c: &mut Criterion) {
     let st = prebuilt_supertable();
-    let r = st.reader();
 
     // Deterministic unit-norm query vector for the vector search shape.
     let mut rng = StdRng::seed_from_u64(101);
@@ -33,7 +32,7 @@ fn bench_supertable_query(c: &mut Criterion) {
 
     g.bench_function("bm25_or_top10", |b| {
         b.iter(|| {
-            let hits = r
+            let hits = st
                 .bm25_search(
                     black_box("title"),
                     black_box("term00001"),
@@ -47,7 +46,7 @@ fn bench_supertable_query(c: &mut Criterion) {
 
     g.bench_function("bm25_prefix_top10", |b| {
         b.iter(|| {
-            let hits = r
+            let hits = st
                 .bm25_search_prefix(black_box("title"), black_box("term000"), TOP_K)
                 .expect("bm25_prefix");
             black_box(hits)
@@ -56,7 +55,7 @@ fn bench_supertable_query(c: &mut Criterion) {
 
     g.bench_function("vector_default_top10", |b| {
         b.iter(|| {
-            let hits = r
+            let hits = st
                 .vector_search(
                     black_box("emb"),
                     black_box(&q),
