@@ -225,11 +225,11 @@ cross-engine match before timing starts.
 
 | Engine | Time | Throughput | Peak RSS | Median RSS | P90 RSS | Peak RSS Δ | vs Tantivy |
 |--------|------|------------|----------|------------|---------|------------|------------|
-| infino_1thread | 10.69 s | 93.5 K/s | 5.51 GiB | 4.03 GiB | 4.27 GiB | +0.0% no change | **infino wins, 1.9× faster than tantivy** |
-| tantivy_1thread | 19.98 s | 50.1 K/s | 17.49 GiB | 13.42 GiB | 16.71 GiB | -0.2% no change | — |
-| infino_rayon_default_threads | 2.03 s | 491.8 K/s | 5.49 GiB | 5.02 GiB | 5.46 GiB | +0.4% no change | **infino wins, 2.0× faster than tantivy** |
-| tantivy_default_threads | 4.06 s | 246.2 K/s | 17.49 GiB | 13.42 GiB | 16.71 GiB | -0.2% no change | — |
-| lance_fts | 15.10 s | 66.2 K/s | 17.49 GiB | 13.42 GiB | 16.71 GiB | -0.2% no change | **lance_fts wins, 1.3× faster than tantivy** |
+| infino_1thread | 14.60 s | 68.5 K/s | 5.91 GiB | 4.15 GiB | 4.65 GiB | -0.6% no change | **infino wins, 1.4× faster than tantivy** |
+| tantivy_1thread | 19.78 s | 50.6 K/s | 17.45 GiB | 13.39 GiB | 16.66 GiB | -0.3% no change | — |
+| infino_rayon_default_threads | 3.50 s | 285.8 K/s | 6.92 GiB | 5.77 GiB | 6.51 GiB | -0.1% no change | **infino wins, 1.2× faster than tantivy** |
+| tantivy_default_threads | 4.06 s | 246.4 K/s | 17.45 GiB | 13.39 GiB | 16.66 GiB | -0.3% no change | — |
+| lance_fts | 15.03 s | 66.5 K/s | 17.45 GiB | 13.39 GiB | 16.66 GiB | -0.3% no change | **lance_fts wins, 1.3× faster than tantivy** |
 
 <!-- END: bench/fts/superfile/ingest -->
 
@@ -240,22 +240,22 @@ cross-engine match before timing starts.
 
 | Query             | infino     | infino RSS | Tantivy    | Tantivy RSS | CoreDB    | CoreDB RSS  | Lance FTS  | Lance RSS  | Winner                |
 |-------------------|------------|------------|------------|-------------|------------|------------|------------|------------|-----------------------|
-| single_rare       | 454 ns     | 4.27 GiB   | 7.43 µs    | 11.60 GiB   | 649 ns     | —          | 672.88 µs  | 11.60 GiB  | **infino wins, 16.4× faster than tantivy** |
-| single_df1        | 213 ns     | 4.27 GiB   | 1.32 µs    | 11.60 GiB   | 263 ns     | —          | 455.12 µs  | 11.60 GiB  | **infino wins, 6.2× faster than tantivy** |
-| single_common     | 8.68 µs    | 4.27 GiB   | 102.28 µs  | 11.60 GiB   | 87.28 µs   | —          | 63.61 ms   | 11.60 GiB  | **infino wins, 11.8× faster than tantivy** |
-| two_term_or       | 150.02 µs  | 4.27 GiB   | 692.40 µs  | 11.60 GiB   | 124.35 µs  | —          | 22.43 ms   | 11.60 GiB  | **infino wins, 4.6× faster than tantivy** |
-| three_wide_or     | 2.26 ms    | 4.27 GiB   | 4.80 ms    | 11.60 GiB   | 146.90 µs  | —          | 13.78 ms   | 11.60 GiB  | **infino wins, 2.1× faster than tantivy** |
-| three_similar_or  | 9.00 ms    | 4.27 GiB   | 12.81 ms   | 11.60 GiB   | 104.78 µs  | —          | 31.32 ms   | 11.60 GiB  | **infino wins, 1.4× faster than tantivy** |
-| five_term_or      | 17.54 ms   | 4.27 GiB   | 27.01 ms   | 11.60 GiB   | 181.18 µs  | —          | 61.27 ms   | 11.60 GiB  | **infino wins, 1.5× faster than tantivy** |
+| single_rare       | 454 ns     | 4.27 GiB   | 7.42 µs    | 11.58 GiB   | 644 ns     | —          | 675.00 µs  | 11.58 GiB  | **infino wins, 16.4× faster than tantivy** |
+| single_df1        | 213 ns     | 4.27 GiB   | 1.29 µs    | 11.58 GiB   | 274 ns     | —          | 456.52 µs  | 11.58 GiB  | **infino wins, 6.0× faster than tantivy** |
+| single_common     | 8.68 µs    | 4.27 GiB   | 102.03 µs  | 11.58 GiB   | 83.92 µs   | —          | 63.55 ms   | 11.58 GiB  | **infino wins, 11.7× faster than tantivy** |
+| two_term_or       | 150.02 µs  | 4.27 GiB   | 698.87 µs  | 11.58 GiB   | 119.75 µs  | —          | 22.31 ms   | 11.58 GiB  | **infino wins, 4.7× faster than tantivy** |
+| three_wide_or     | 2.26 ms    | 4.27 GiB   | 4.83 ms    | 11.58 GiB   | 151.18 µs  | —          | 13.70 ms   | 11.58 GiB  | **infino wins, 2.1× faster than tantivy** |
+| three_similar_or  | 9.00 ms    | 4.27 GiB   | 12.85 ms   | 11.58 GiB   | 101.95 µs  | —          | 31.95 ms   | 11.58 GiB  | **infino wins, 1.4× faster than tantivy** |
+| five_term_or      | 17.54 ms   | 4.27 GiB   | 26.99 ms   | 11.58 GiB   | 178.34 µs  | —          | 62.56 ms   | 11.58 GiB  | **infino wins, 1.5× faster than tantivy** |
 
 **AND queries:**
 
 | Query             | infino     | infino RSS | Tantivy    | Tantivy RSS | CoreDB    | CoreDB RSS  | Lance FTS  | Lance RSS  | Winner                |
 |-------------------|------------|------------|------------|-------------|------------|------------|------------|------------|-----------------------|
-| two_term_and      | 173.77 µs  | 4.27 GiB   | 8.77 ms    | 11.60 GiB   | 123.75 µs  | —          | 1.27 ms    | 11.60 GiB  | **infino wins, 50.5× faster than tantivy** |
-| three_wide_and    | 3.22 ms    | 4.27 GiB   | 5.22 ms    | 11.60 GiB   | 145.36 µs  | —          | 9.41 ms    | 11.60 GiB  | **infino wins, 1.6× faster than tantivy** |
-| three_similar_and | 5.31 ms    | 4.27 GiB   | 7.02 ms    | 11.60 GiB   | 103.04 µs  | —          | 14.81 ms   | 11.60 GiB  | **infino wins, 1.3× faster than tantivy** |
-| five_term_and     | 6.39 ms    | 4.27 GiB   | 7.11 ms    | 11.60 GiB   | 176.80 µs  | —          | 13.74 ms   | 11.60 GiB  | **infino wins, 1.1× faster than tantivy** |
+| two_term_and      | 173.77 µs  | 4.27 GiB   | 8.81 ms    | 11.58 GiB   | 128.94 µs  | —          | 1.29 ms    | 11.58 GiB  | **infino wins, 50.7× faster than tantivy** |
+| three_wide_and    | 3.22 ms    | 4.27 GiB   | 5.38 ms    | 11.58 GiB   | 142.80 µs  | —          | 9.56 ms    | 11.58 GiB  | **infino wins, 1.7× faster than tantivy** |
+| three_similar_and | 5.31 ms    | 4.27 GiB   | 7.05 ms    | 11.58 GiB   | 111.88 µs  | —          | 15.00 ms   | 11.58 GiB  | **infino wins, 1.3× faster than tantivy** |
+| five_term_and     | 6.39 ms    | 4.27 GiB   | 7.12 ms    | 11.58 GiB   | 182.55 µs  | —          | 13.86 ms   | 11.58 GiB  | **infino wins, 1.1× faster than tantivy** |
 
 
 **Per-algorithm probes** (infino-only, WAND+BMW vs MaxScore+BMM):
@@ -275,8 +275,8 @@ cross-engine match before timing starts.
 
 | Engine | Time | Throughput | Peak RSS | Median RSS | P90 RSS | Peak RSS Δ | vs Tantivy |
 |--------|------|------------|----------|------------|---------|------------|------------|
-| infino_auto_writer_pool | 50.11 s | 199.6 K/s | 28.88 GiB | 24.60 GiB | 26.98 GiB | -10.7% improved | **tantivy wins, 1.3× faster than infino** |
-| tantivy_default_threads | 37.25 s | 268.5 K/s | 51.41 GiB | 49.27 GiB | 50.26 GiB | +0.0% no change | — |
+| infino_auto_writer_pool | 50.11 s | 199.6 K/s | 28.88 GiB | 24.60 GiB | 26.98 GiB | -10.7% improved | **tantivy wins, 1.4× faster than infino** |
+| tantivy_default_threads | 34.92 s | 286.4 K/s | 51.36 GiB | 49.27 GiB | 50.28 GiB | -0.0% no change | — |
 
 *Output cardinality: infino emits `min(writer_pool.threads, total_rows)` superfiles per commit (auto = cpus/2). Tantivy emits one segment per internal worker thread per commit (≈ 8 × N_chunks segments with NoMergePolicy). Override the infino writer-thread count with `INFINO_SUPERTABLE__WRITER_THREADS=N` to match Tantivy's effective output segment count.*
 
@@ -287,13 +287,13 @@ cross-engine match before timing starts.
 
 | Query | infino p50 | infino Peak RSS | infino Median RSS | infino P90 RSS | infino Peak RSS Δ | Tantivy p50 | Tantivy Peak RSS | Tantivy Median RSS | Tantivy P90 RSS | Tantivy Peak RSS Δ | Winner |
 |-------|------------|-----------------|-------------------|----------------|-------------------|-------------|------------------|--------------------|-----------------|--------------------|--------|
-| single_rare | 71.02 µs | 26.49 GiB | 25.66 GiB | 25.68 GiB | -10.8% improved | 46.22 µs | 47.60 GiB | 47.60 GiB | 47.60 GiB | +0.0% no change | **tantivy wins, 1.5× faster than infino** |
-| single_common | 87.14 µs | 26.49 GiB | 25.66 GiB | 25.68 GiB | -10.8% improved | 4.79 ms | 47.60 GiB | 47.60 GiB | 47.60 GiB | +0.0% no change | **infino wins, 55.0× faster than tantivy** |
-| two_term_or | 490.86 µs | 26.49 GiB | 25.66 GiB | 25.68 GiB | -10.8% improved | 1.29 ms | 47.60 GiB | 47.60 GiB | 47.60 GiB | +0.0% no change | **infino wins, 2.6× faster than tantivy** |
-| three_wide_or | 4.68 ms | 26.49 GiB | 25.66 GiB | 25.68 GiB | -10.8% improved | 9.86 ms | 47.60 GiB | 47.60 GiB | 47.60 GiB | +0.0% no change | **infino wins, 2.1× faster than tantivy** |
-| three_similar_or | 16.04 ms | 26.49 GiB | 25.66 GiB | 25.68 GiB | -10.8% improved | 21.68 ms | 47.60 GiB | 47.60 GiB | 47.60 GiB | +0.0% no change | **infino wins, 1.4× faster than tantivy** |
-| five_term_or | 36.20 ms | 26.49 GiB | 25.66 GiB | 25.68 GiB | -10.8% improved | 50.30 ms | 47.60 GiB | 47.60 GiB | 47.60 GiB | +0.0% no change | **infino wins, 1.4× faster than tantivy** |
-| prefix | 80.19 ms | 26.49 GiB | 25.66 GiB | 25.68 GiB | -10.8% improved | 103.05 ms | 47.60 GiB | 47.60 GiB | 47.60 GiB | +0.0% no change | **infino wins, 1.3× faster than tantivy** |
+| single_rare | 71.02 µs | 26.49 GiB | 25.66 GiB | 25.68 GiB | -10.8% improved | 44.16 µs | 48.01 GiB | 47.63 GiB | 47.63 GiB | +0.8% no change | **tantivy wins, 1.6× faster than infino** |
+| single_common | 87.14 µs | 26.49 GiB | 25.66 GiB | 25.68 GiB | -10.8% improved | 4.79 ms | 48.01 GiB | 47.63 GiB | 47.63 GiB | +0.8% no change | **infino wins, 55.0× faster than tantivy** |
+| two_term_or | 490.86 µs | 26.49 GiB | 25.66 GiB | 25.68 GiB | -10.8% improved | 1.29 ms | 48.01 GiB | 47.63 GiB | 47.63 GiB | +0.8% no change | **infino wins, 2.6× faster than tantivy** |
+| three_wide_or | 4.68 ms | 26.49 GiB | 25.66 GiB | 25.68 GiB | -10.8% improved | 9.95 ms | 48.01 GiB | 47.63 GiB | 47.63 GiB | +0.8% no change | **infino wins, 2.1× faster than tantivy** |
+| three_similar_or | 16.04 ms | 26.49 GiB | 25.66 GiB | 25.68 GiB | -10.8% improved | 21.62 ms | 48.01 GiB | 47.63 GiB | 47.63 GiB | +0.8% no change | **infino wins, 1.3× faster than tantivy** |
+| five_term_or | 36.20 ms | 26.49 GiB | 25.66 GiB | 25.68 GiB | -10.8% improved | 50.72 ms | 48.01 GiB | 47.63 GiB | 47.63 GiB | +0.8% no change | **infino wins, 1.4× faster than tantivy** |
+| prefix | 80.19 ms | 26.49 GiB | 25.66 GiB | 25.68 GiB | -10.8% improved | 103.80 ms | 48.01 GiB | 47.63 GiB | 47.63 GiB | +0.8% no change | **infino wins, 1.3× faster than tantivy** |
 
 <!-- END: bench/fts/supertable/search -->
 
@@ -304,8 +304,8 @@ cross-engine match before timing starts.
 
 | Engine | Time | Throughput | Peak RSS | Median RSS | P90 RSS | Peak RSS Δ | vs LanceDB |
 |--------|------|------------|----------|------------|---------|------------|------------|
-| infino | 21.28 s | 47.0 K/s | 4.11 GiB | 2.75 GiB | 3.74 GiB | -0.1% no change | **infino wins, 3.9× faster than lance** |
-| lance | 82.15 s | 12.2 K/s | 5.84 GiB | 2.66 GiB | 3.14 GiB | +5.6% regressed | — |
+| infino | 22.29 s | 44.9 K/s | 4.37 GiB | 1.80 GiB | 2.99 GiB | +0.2% no change | **infino wins, 3.7× faster than lance** |
+| lance | 82.19 s | 12.2 K/s | 5.51 GiB | 2.70 GiB | 3.18 GiB | -7.6% improved | — |
 
 <!-- END: bench/vector/superfile/ingest -->
 
@@ -314,9 +314,9 @@ cross-engine match before timing starts.
 
 | Recall target | infino p50 | infino Peak RSS | infino Median RSS | infino P90 RSS | infino Peak RSS Δ | Lance (probe, refine) | Lance p50 | Lance Peak RSS | Lance Median RSS | Lance P90 RSS | Lance Peak RSS Δ | Winner |
 |---------------|------------|-----------------|-------------------|----------------|-------------------|-----------------------|-----------|----------------|------------------|---------------|------------------|--------|
-| 0.90 | 213.66 µs | 3.77 GiB | 3.33 GiB | 3.34 GiB | +0.0% no change | (p=5, r=256) | 13.89 ms | 3.58 GiB | 3.48 GiB | 3.49 GiB | +1.0% no change | **infino wins, 65.0× faster than lance** |
-| 0.95 | 344.23 µs | 3.77 GiB | 3.33 GiB | 3.34 GiB | +0.0% no change | (p=5, r=256) | 13.71 ms | 3.58 GiB | 3.48 GiB | 3.49 GiB | +1.0% no change | **infino wins, 39.8× faster than lance** |
-| 0.99 | — | — | — | — | — | (p=5, r=256) | 13.67 ms | 3.58 GiB | 3.48 GiB | 3.49 GiB | +1.0% no change | — |
+| 0.90 | 213.66 µs | 3.77 GiB | 3.33 GiB | 3.34 GiB | +0.0% no change | (p=5, r=256) | 14.61 ms | 3.60 GiB | 3.51 GiB | 3.52 GiB | -4.6% no change | **infino wins, 68.4× faster than lance** |
+| 0.95 | 344.23 µs | 3.77 GiB | 3.33 GiB | 3.34 GiB | +0.0% no change | (p=5, r=256) | 14.62 ms | 3.60 GiB | 3.51 GiB | 3.52 GiB | -4.6% no change | **infino wins, 42.5× faster than lance** |
+| 0.99 | — | — | — | — | — | (p=5, r=256) | 14.55 ms | 3.60 GiB | 3.51 GiB | 3.52 GiB | -4.6% no change | — |
 
 **infino default options** (`nprobe=8, rerank_mult=20` — user-facing latency baseline):
 
@@ -338,7 +338,7 @@ cross-engine match before timing starts.
 | Engine | Time | Throughput | Peak RSS | Median RSS | P90 RSS | Peak RSS Δ | vs LanceDB |
 |--------|------|------------|----------|------------|---------|------------|------------|
 | supertable | 260.68 s | 38.4 K/s | 26.99 GiB | 23.61 GiB | 25.45 GiB | -0.6% no change | **infino wins, 1.1× faster than lance** |
-| lance | 291.40 s | 34.3 K/s | 37.21 GiB | 21.38 GiB | 37.00 GiB | +0.5% no change | — |
+| lance | 294.70 s | 33.9 K/s | 37.18 GiB | 21.37 GiB | 36.91 GiB | +0.0% no change | — |
 
 <!-- END: bench/vector/supertable/ingest -->
 
@@ -347,9 +347,9 @@ cross-engine match before timing starts.
 
 | Recall target | supertable p50 | supertable Peak RSS | supertable Median RSS | supertable P90 RSS | supertable Peak RSS Δ | Lance (probe, refine) | Lance p50 | Lance Peak RSS | Lance Median RSS | Lance P90 RSS | Lance Peak RSS Δ | Winner |
 |---------------|----------------|---------------------|-----------------------|--------------------|-----------------------|-----------------------|-----------|----------------|------------------|---------------|------------------|--------|
-| 0.90 | 3.73 ms | 30.90 GiB | 30.88 GiB | 30.89 GiB | +0.6% no change | (p=10, r=256) | 44.86 ms | 29.09 GiB | 28.97 GiB | 28.99 GiB | +0.0% no change | **supertable wins, 12.0× faster than lance** |
-| 0.95 | — | — | — | — | — | (p=25, r=256) | 66.78 ms | 29.09 GiB | 28.97 GiB | 28.99 GiB | +0.0% no change | — |
-| 0.99 | — | — | — | — | — | (p=50, r=256) | 94.58 ms | 29.09 GiB | 28.97 GiB | 28.99 GiB | +0.0% no change | — |
+| 0.90 | 3.73 ms | 30.90 GiB | 30.88 GiB | 30.89 GiB | +0.6% no change | (p=10, r=256) | 42.48 ms | 29.08 GiB | 28.99 GiB | 29.01 GiB | +0.6% no change | **supertable wins, 11.4× faster than lance** |
+| 0.95 | — | — | — | — | — | (p=25, r=256) | 74.51 ms | 29.08 GiB | 28.99 GiB | 29.01 GiB | -0.0% no change | — |
+| 0.99 | — | — | — | — | — | (p=50, r=256) | 97.24 ms | 29.08 GiB | 28.99 GiB | 29.01 GiB | +0.6% no change | — |
 
 <!-- END: bench/vector/supertable/search -->
 

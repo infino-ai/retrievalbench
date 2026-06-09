@@ -1,0 +1,551 @@
+{
+  "timestamp": 1781033815,
+  "iso_timestamp": "2026-06-09_19-36-55",
+  "results": {
+    "supertable_fts_search_two_term_or": {
+      "two_term_or_tantivy_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 1288543.335547172,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      },
+      "two_term_or_supertable_top10_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 490859.6895022429,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    },
+    "supertable_vec_search_recall_at_least_99": {
+      "lance_recall_at_least_99/p=50,r=256": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 97235286.20150794,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      }
+    },
+    "supertable_vec_search_recall_at_least_90": {
+      "lance_recall_at_least_90/p=10,r=256": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 42480330.382103175,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      }
+    },
+    "superfile_fts_search_five_term_and": {
+      "five_term_and_lance_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 13858832.13,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      },
+      "five_term_and_coredb_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 182554.4926155184,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      },
+      "five_term_and_infino_top10_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 6390122.21625,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "five_term_and_tantivy_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 7121465.2,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      }
+    },
+    "superfile_fts_search_five_term_or": {
+      "five_term_or_infino_top10_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 17539526.74666667,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "five_term_or_lance_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 62556356.58,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      },
+      "five_term_or_coredb_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 178344.3101234899,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      },
+      "five_term_or_tantivy_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 26987405.455,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      }
+    },
+    "supertable_fts_search_five_term_or": {
+      "five_term_or_tantivy_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 50721793.772857144,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      },
+      "five_term_or_supertable_top10_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 36198495.482751325,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    },
+    "supertable_fts_search_single_rare": {
+      "single_rare_supertable_top10_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 71018.01289286025,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "single_rare_tantivy_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 44163.12326473453,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      }
+    },
+    "supertable_vec_build": {
+      "lance_10000000docs": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 294696293840.2,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      },
+      "supertable_10000000docs_4superfiles_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 260678627623.8,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    },
+    "supertable_fts_search_single_common": {
+      "single_common_tantivy_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 4788685.7748266505,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      },
+      "single_common_supertable_top10_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 87143.37693987151,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    },
+    "supertable_vec_search_recall_at_least_95": {
+      "lance_recall_at_least_95/p=25,r=256": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 74510565.44242063,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      }
+    },
+    "superfile_fts_search_two_term_or": {
+      "two_term_or_lance_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 22313547.303333335,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      },
+      "two_term_or_tantivy_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 698866.9297079198,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      },
+      "two_term_or_infino_top10_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 150016.14744656582,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "two_term_or_coredb_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 119745.38378785508,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      }
+    },
+    "superfile_fts_search_single_common": {
+      "single_common_infino_top10_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 8683.979712879192,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "single_common_coredb_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 83921.83727597423,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      },
+      "single_common_lance_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 63552882.35,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      },
+      "single_common_tantivy_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 102028.30325011436,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      }
+    },
+    "superfile_fts_build": {
+      "tantivy_1thread_1000000docs": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 19776233126.1,
+        "peak_rss_bytes": null,
+        "database": "tantivy_1thread"
+      },
+      "infino_1thread_1000000docs_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 14599200111.8,
+        "peak_rss_bytes": null,
+        "database": "infino_1thread"
+      },
+      "tantivy_default_threads_1000000docs": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 4057918575.8,
+        "peak_rss_bytes": null,
+        "database": "tantivy_default_threads"
+      },
+      "infino_rayon_default_threads_1000000docs_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 3499060037.7,
+        "peak_rss_bytes": null,
+        "database": "infino_rayon_default_threads"
+      },
+      "coredb_1000000docs": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 86451660917.5,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      },
+      "lance_fts_1000000docs": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 15026338682.7,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      }
+    },
+    "superfile_fts_search_three_similar_and": {
+      "three_similar_and_coredb_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 111879.62450520963,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      },
+      "three_similar_and_lance_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 15002685.5725,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      },
+      "three_similar_and_tantivy_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 7047620.7425,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      },
+      "three_similar_and_infino_top10_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 5307606.386999998,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    },
+    "supertable_fts_search_prefix": {
+      "prefix_tantivy_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 103803993.13920636,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      },
+      "prefix_supertable_top10_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 80186187.93253967,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    },
+    "superfile_fts_search_single_rare": {
+      "single_rare_tantivy_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 7423.959942506407,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      },
+      "single_rare_lance_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 675002.5603719695,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      },
+      "single_rare_coredb_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 644.3728484201796,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      },
+      "single_rare_infino_top10_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 453.92027727137435,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    },
+    "superfile_fts_search_two_term_and": {
+      "two_term_and_infino_top10_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 173768.73441257645,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "two_term_and_lance_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 1294169.858240973,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      },
+      "two_term_and_coredb_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 128940.85510726244,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      },
+      "two_term_and_tantivy_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 8805361.229999997,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      }
+    },
+    "superfile_fts_search_three_wide_and": {
+      "three_wide_and_infino_top10_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 3220909.82625,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "three_wide_and_lance_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 9560047.903333334,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      },
+      "three_wide_and_tantivy_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 5376821.118,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      },
+      "three_wide_and_coredb_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 142798.1631697195,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      }
+    },
+    "supertable_fts_search_three_similar_or": {
+      "three_similar_or_tantivy_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 21624271.777206343,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      },
+      "three_similar_or_supertable_top10_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 16039295.450747356,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    },
+    "supertable_fts_build": {
+      "tantivy_default_threads": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 34916505037.8,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      },
+      "infino_auto_writer_pool_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 50106405659.2,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      }
+    },
+    "superfile_fts_search_single_df1": {
+      "single_df1_coredb_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 274.09559765415594,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      },
+      "single_df1_infino_top10_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 213.00216525975895,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "single_df1_lance_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 456521.6845202579,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      },
+      "single_df1_tantivy_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 1287.250327008604,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      }
+    },
+    "superfile_fts_search_three_similar_or": {
+      "three_similar_or_lance_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 31947081.58,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      },
+      "three_similar_or_infino_top10_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 9000801.779999996,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "three_similar_or_tantivy_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 12850230.5,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      },
+      "three_similar_or_coredb_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 101947.74748933344,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      }
+    },
+    "supertable_fts_search_three_wide_or": {
+      "three_wide_or_supertable_top10_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 4681131.651623016,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "three_wide_or_tantivy_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 9948612.944511903,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      }
+    },
+    "superfile_fts_search_three_wide_or": {
+      "three_wide_or_infino_top10_infino": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 2263459.152173913,
+        "peak_rss_bytes": null,
+        "database": "infino"
+      },
+      "three_wide_or_lance_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 13701654.3,
+        "peak_rss_bytes": null,
+        "database": "lance"
+      },
+      "three_wide_or_coredb_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 151177.22162733713,
+        "peak_rss_bytes": null,
+        "database": "coredb"
+      },
+      "three_wide_or_tantivy_top10": {
+        "commit_hash": "5f920e0",
+        "os": "linux",
+        "mean_ns": 4830814.16090909,
+        "peak_rss_bytes": null,
+        "database": "tantivy"
+      }
+    }
+  }
+}
