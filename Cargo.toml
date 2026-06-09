@@ -2,90 +2,70 @@
 name = "retrievalbench"
 version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
 publish = false
-description = "Head-to-head comparison benches and cross-engine oracle tests for infino vs Tantivy and LanceDB"
 
-[net]
-git-fetch-with-cli = true
-
-[lib]
-path = "benches/utils/mod.rs"
+# Head-to-head comparison harness. Reuses the engine-generic bench
+# framework that ships in `infino-bench-utils` (infino `main`): the
+# `FtsEngine`/`VectorEngine`/`SqlEngine` traits, the `run_*` drivers, the
+# shared corpus, RSS sampling, and run-to-run delta reporting. This crate
+# only adds peer-engine adapters and per-modality runners. See
+# `claude-plans/todo/020_comparison_harness.md`.
 
 [dependencies]
-# The crate under test. Path dep on the sibling `infino` repo
-# (cloned alongside this one by the workspace bootstrap script).
-# `test-helpers` exposes `infino::test_helpers::*` for fixture builders.
-infino = { path = "../infino", features = ["test-helpers"] }
-
-# Reference engines.
+# infino `main` (sql-opt merged) — the framework + Infino reference engines.
+infino-bench-utils = { path = "../infino/benches/utils" }
 tantivy = "0.26"
-# Pinned: lancedb 0.x is unstable. Bumping requires re-checking the
-# bench harness API surface. lancedb 0.27 builds against arrow 57;
-# infino tracks arrow 58, so the bench imports arrow 57 under a
-# renamed alias to construct batches lancedb can consume.
-lancedb = { version = "=0.27.2", default-features = false }
-arrow-array-lance = { package = "arrow-array", version = "=57.3.0" }
-arrow-schema-lance = { package = "arrow-schema", version = "=57.3.0" }
-coredb = { git="ssh://git@github.com/infinohq/infino.git", branch="main" } # rev=<commitid> doesnt work
-
-# Shared with infino — pinned versions match infino's deps so the
-# RecordBatches we construct here are interchangeable with infino's.
-arrow = "58"
+# LanceDB peer (vector + FTS + SQL, S3-capable). Async — driven through a
+# small tokio runtime inside the adapter. Brings its own arrow; the
+# harness only bridges plain corpus types across the boundary.
+lancedb = { version = "0.30.0", features = ["aws"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+# Arrow at the exact version lancedb 0.30 resolves to (== infino's 58.3.0),
+# used to build the RecordBatches handed to LanceDB. futures drives the
+# async result stream; tempfile backs the local (in-memory tier) dataset.
 arrow-array = "58"
 arrow-schema = "58"
-bytes = "1"
-rand = "0.10"
-rand_distr = "0.6"
-rayon = "1"
-serde_json = "1"
-tempfile = "3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs"] }
 futures = "0.3"
-uuid = { version = "1", features = ["v4"] }
+tempfile = "3"
+# DataFusion at the exact version lancedb 0.30 resolves to (53.1, built
+# against arrow 58). The SQL adapter answers the cross-engine battery by
+# registering the Lance dataset as a DataFusion `TableProvider`
+# (`lancedb::table::datafusion::BaseTableAdapter`) and running `ctx.sql`,
+# so LanceDB is measured through a real Lance scan — the apples-to-apples
+# peer for Infino's supertable + DataFusion path.
+datafusion = "53.1"
 
-# Bench-only utilities.
-criterion = "0.8"
-hdrhistogram = "7"
-fastbloom = "0.17"
-memmap2 = "0.9"
-num_cpus = "1"
-zstd = "0.13"
+# The peer-engine adapters. A library crate so their unit tests run under
+# `cargo test`. Each adapter implements an `infino-bench-utils` engine
+# trait; nothing here re-measures or re-renders — that all comes from
+# infino.
+[lib]
+name = "retrievalbench"
+path = "benches/comparison/engines/mod.rs"
 
 [[bench]]
-name = "fts"
-path = "benches/fts/main.rs"
+name = "comparison-fts"
+path = "benches/comparison/fts.rs"
 harness = false
 
 [[bench]]
-name = "fts-superfile"
-path = "benches/fts/main_superfile.rs"
+name = "comparison-vector"
+path = "benches/comparison/vector.rs"
 harness = false
 
 [[bench]]
-name = "fts-supertable"
-path = "benches/fts/main_supertable.rs"
+name = "comparison-sql"
+path = "benches/comparison/sql.rs"
 harness = false
 
 [[bench]]
-name = "vector"
-path = "benches/vector/main.rs"
-harness = false
-
-[[bench]]
-name = "hybrid"
-path = "benches/hybrid/main.rs"
-harness = false
-
-[[bench]]
-name = "scale"
-path = "benches/scale/main.rs"
-harness = false
-
-[[bench]]
-name = "data_structures"
-path = "benches/data-structures/main.rs"
+name = "comparison-supertable"
+path = "benches/comparison/supertable.rs"
 harness = false
 
 [profile.release]
-# Inherits infino's release profile via the path dep; bench builds
-# pick up infino's `lto = "thin"` automatically.
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = 1
