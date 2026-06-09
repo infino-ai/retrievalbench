@@ -15,6 +15,7 @@ publish = false
 [dependencies]
 # infino `main` (sql-opt merged) — the framework + Infino reference engines.
 infino-bench-utils = { path = "../infino/benches/utils" }
+infino = { path = "../infino", features = ["test-helpers"] }
 tantivy = "0.26"
 # LanceDB peer (vector + FTS + SQL, S3-capable). Async — driven through a
 # small tokio runtime inside the adapter. Brings its own arrow; the
@@ -45,23 +46,8 @@ name = "retrievalbench"
 path = "benches/comparison/engines/mod.rs"
 
 [[bench]]
-name = "comparison-fts"
-path = "benches/comparison/fts.rs"
-harness = false
-
-[[bench]]
-name = "comparison-vector"
-path = "benches/comparison/vector.rs"
-harness = false
-
-[[bench]]
-name = "comparison-sql"
-path = "benches/comparison/sql.rs"
-harness = false
-
-[[bench]]
-name = "comparison-supertable"
-path = "benches/comparison/supertable.rs"
+name = "comparison"
+path = "benches/comparison/main.rs"
 harness = false
 
 [profile.release]

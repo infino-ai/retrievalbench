@@ -88,6 +88,15 @@ async fn connect(uri: &str, storage_options: &[(String, String)]) -> lancedb::Co
         .expect("lancedb connect")
 }
 
+async fn open_sql_table(uri: &str, storage_options: &[(String, String)]) -> Table {
+    connect(uri, storage_options)
+        .await
+        .open_table(SQL_TABLE)
+        .execute()
+        .await
+        .expect("open lance sql table")
+}
+
 async fn build_sql_table(
     uri: &str,
     storage_options: &[(String, String)],
@@ -218,6 +227,24 @@ fn read_index(index: &LanceSqlIndex, sql: &str) -> SqlOutput {
         batches.iter().map(|b| b.num_rows()).sum::<usize>()
     });
     SqlOutput { rows }
+}
+
+impl LanceSqlIndex {
+    /// Reopen the same S3 artifact and run one SQL query. Used by the
+    /// comparison cold tier so cold does not include rebuild time.
+    pub fn cold_read(&self, sql: &str) -> SqlOutput {
+        let uri = self.location.uri.clone();
+        let storage_options = self.location.storage_options.clone();
+        self.rt.block_on(async {
+            let table = open_sql_table(&uri, &storage_options).await;
+            let ctx = register_sql_ctx(&table).await;
+            let df = ctx.sql(sql).await.expect("plan cold sql");
+            let batches = df.collect().await.expect("collect cold sql result");
+            SqlOutput {
+                rows: batches.iter().map(|b| b.num_rows()).sum(),
+            }
+        })
+    }
 }
 
 fn delete_index(index: LanceSqlIndex) {

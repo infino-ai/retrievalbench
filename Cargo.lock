@@ -5832,6 +5832,7 @@ dependencies = [
  "arrow-schema",
  "datafusion",
  "futures",
+ "infino",
  "infino-bench-utils",
  "lancedb",
  "tantivy",

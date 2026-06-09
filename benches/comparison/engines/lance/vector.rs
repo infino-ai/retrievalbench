@@ -103,6 +103,15 @@ async fn connect(uri: &str, storage_options: &[(String, String)]) -> lancedb::Co
         .expect("lancedb connect")
 }
 
+async fn open_vector_table(uri: &str, storage_options: &[(String, String)]) -> Table {
+    connect(uri, storage_options)
+        .await
+        .open_table(VEC_TABLE)
+        .execute()
+        .await
+        .expect("open lance vector table")
+}
+
 async fn build_table(
     uri: &str,
     storage_options: &[(String, String)],
@@ -271,9 +280,14 @@ fn parallel_write_index(
     std::hint::black_box(shards);
 }
 
-fn read_index(index: &LanceVectorIndex, query: &[f32], k: usize, search: VectorSearch) -> Vec<VectorHit> {
-    let table = index.table();
-    index.rt.block_on(async {
+fn read_table(
+    rt: &Runtime,
+    table: &Table,
+    query: &[f32],
+    k: usize,
+    search: VectorSearch,
+) -> Vec<VectorHit> {
+    rt.block_on(async {
         let mut q = table
             .query()
             .nearest_to(query.to_vec())
@@ -309,6 +323,21 @@ fn read_index(index: &LanceVectorIndex, query: &[f32], k: usize, search: VectorS
         }
         out
     })
+}
+
+fn read_index(index: &LanceVectorIndex, query: &[f32], k: usize, search: VectorSearch) -> Vec<VectorHit> {
+    read_table(&index.rt, index.table(), query, k, search)
+}
+
+impl LanceVectorIndex {
+    /// Reopen the same S3 artifact and run one vector query. Used by the
+    /// comparison cold tier so cold does not include rebuild time.
+    pub fn cold_read(&self, query: &[f32], k: usize, search: VectorSearch) -> Vec<VectorHit> {
+        let uri = self.location.uri.clone();
+        let storage_options = self.location.storage_options.clone();
+        let table = self.rt.block_on(open_vector_table(&uri, &storage_options));
+        read_table(&self.rt, &table, query, k, search)
+    }
 }
 
 fn delete_index(index: LanceVectorIndex) {

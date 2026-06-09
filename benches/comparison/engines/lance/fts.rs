@@ -88,6 +88,15 @@ async fn connect(uri: &str, storage_options: &[(String, String)]) -> lancedb::Co
         .expect("lancedb connect")
 }
 
+async fn open_fts_table(uri: &str, storage_options: &[(String, String)]) -> Table {
+    connect(uri, storage_options)
+        .await
+        .open_table(FTS_TABLE)
+        .execute()
+        .await
+        .expect("open lance fts table")
+}
+
 async fn build_fts_table(
     uri: &str,
     storage_options: &[(String, String)],
@@ -198,18 +207,24 @@ fn parallel_write_index(column: &str, docs: &[(u64, &str)], writers: usize, s3: 
     std::hint::black_box(shards);
 }
 
-fn read_index(index: &LanceFtsIndex, terms: &[&str], k: usize, mode: BoolMode) -> Vec<Hit> {
-    let table = index.table();
+fn read_table(
+    rt: &Runtime,
+    table: &Table,
+    column: &str,
+    terms: &[&str],
+    k: usize,
+    mode: BoolMode,
+) -> Vec<Hit> {
     let operator = match mode {
         BoolMode::Or => Operator::Or,
         BoolMode::And => Operator::And,
     };
     let match_q = MatchQuery::new(terms.join(" "))
-        .with_column(Some(index.column.clone()))
+        .with_column(Some(column.to_string()))
         .with_operator(operator);
     let fts_query = FullTextSearchQuery::new_query(FtsQuery::Match(match_q));
 
-    index.rt.block_on(async {
+    rt.block_on(async {
         let stream = table
             .query()
             .full_text_search(fts_query)
@@ -242,6 +257,21 @@ fn read_index(index: &LanceFtsIndex, terms: &[&str], k: usize, mode: BoolMode) -
         }
         out
     })
+}
+
+fn read_index(index: &LanceFtsIndex, terms: &[&str], k: usize, mode: BoolMode) -> Vec<Hit> {
+    read_table(&index.rt, index.table(), &index.column, terms, k, mode)
+}
+
+impl LanceFtsIndex {
+    /// Reopen the same S3 artifact and run one FTS query. Used by the
+    /// comparison cold tier so cold does not include rebuild time.
+    pub fn cold_read(&self, terms: &[&str], k: usize, mode: BoolMode) -> Vec<Hit> {
+        let uri = self.location.uri.clone();
+        let storage_options = self.location.storage_options.clone();
+        let table = self.rt.block_on(open_fts_table(&uri, &storage_options));
+        read_table(&self.rt, &table, &self.column, terms, k, mode)
+    }
 }
 
 fn delete_index(index: LanceFtsIndex) {
