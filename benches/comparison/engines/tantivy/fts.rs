@@ -127,14 +127,20 @@ impl FtsEngine for TantivyFtsEngine {
             std::hint::black_box(build_index(column, docs));
             return;
         }
-        // Parallel build: shard the corpus across `writers` builders,
-        // each emitting its own in-RAM index. Build-only — indices discarded.
+        // Parallel build: shard the corpus across `writers` builders, each
+        // emitting its own in-RAM index on its own thread — concurrent, the
+        // same independent-shard semantics as Infino's `par_chunks` build.
+        // Build-only — indices discarded.
         let shard_len = docs.len().div_ceil(writers);
-        let shards: Vec<(Index, Field, Field)> = docs
-            .chunks(shard_len)
-            .map(|shard| build_index(column, shard))
-            .collect();
-        std::hint::black_box(shards);
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = docs
+                .chunks(shard_len)
+                .map(|shard| scope.spawn(move || std::hint::black_box(build_index(column, shard))))
+                .collect();
+            for h in handles {
+                h.join().expect("tantivy shard build thread panicked");
+            }
+        });
     }
 
     fn read(index: &Self::Index, terms: &[&str], k: usize, mode: BoolMode) -> Vec<Hit> {

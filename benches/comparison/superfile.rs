@@ -228,27 +228,84 @@ pub mod vector {
     // SPDX-FileCopyrightText: Copyright The Infino Authors
 
     //! Vector comparison bench — drives infino and lancedb through the same
-    //! `run_vector` driver and emits a single comparison section.
+    //! `run_vector` build driver and the same recall-calibrated search
+    //! protocol infino's own vector bench uses (`executors::vector`):
+    //! per-engine `(probe, refine)` grid calibration against shared
+    //! brute-force ground truth, reported at matched recall targets.
 
     use std::collections::HashMap;
 
     use infino_bench_utils::corpus::{self, parallel_writers};
+    use infino_bench_utils::executors::vector as exec_vec;
     use infino_bench_utils::harness::{
-        EngineVectorResult, InfinoVectorEngine, VectorMetric, VectorQuery,
-        VectorRunConfig, VectorSearch, run_vector,
+        EngineVectorResult, InfinoVectorEngine, VectorEngine, VectorMetric, VectorQuery,
+        VectorRunConfig, run_vector_with_index,
     };
     use infino_bench_utils::markdown::{fmt_bandwidth, fmt_count, fmt_throughput, fmt_time};
     use infino_bench_utils::report::{Better, Block, Report, Section, metric, text};
     use infino_bench_utils::rss;
-    use infino_bench_utils::superfile::vector::{queries_correctness, vectors};
+    use infino_bench_utils::superfile::vector::{
+        ground_truth_calibration, ground_truth_correctness, queries_calibration,
+        queries_correctness, vectors,
+    };
 
     use retrievalbench::LanceVectorEngine;
 
     const TOP_K: usize = 10;
     const VEC_COLUMN: &str = "v";
-    const CALIBRATION_P50_ITERS: usize = 7;
     const DEFAULT_NPROBE: usize = 8;
     const DEFAULT_RERANK_MULT: usize = 20;
+
+    /// One row of the recall-calibrated search table for one engine.
+    struct CalRow {
+        label: String,
+        point: Option<(usize, usize)>,
+        recall: f32,
+        p50_ns: f64,
+    }
+
+    /// The shared protocol, identical to infino's own vector bench: for
+    /// each recall target, grid-calibrate `(probe, refine)` against the
+    /// shared ground truth and time the cheapest qualifying point; then a
+    /// `default` row at the user-facing defaults.
+    fn calibrated_rows<R: exec_vec::VectorRead>(reader: &R, engine: &str) -> Vec<CalRow> {
+        let qc = queries_calibration();
+        let tc = ground_truth_calibration();
+        let mut rows = Vec::new();
+        for &target in exec_vec::RECALL_TARGETS {
+            eprintln!("[comparison-vector] {engine}: calibrating recall@{target:.2}: grid over probes/refines ({} queries)...", qc.len());
+            match exec_vec::calibrate(reader, VEC_COLUMN, qc, tc, target, TOP_K, "comparison-vector") {
+                Some(c) => {
+                    let t = exec_vec::measure_warm(reader, VEC_COLUMN, &qc[0], TOP_K, c.probe, c.refine);
+                    rows.push(CalRow {
+                        label: format!("{target:.2}"),
+                        point: Some((c.probe, c.refine)),
+                        recall: c.recall,
+                        p50_ns: t.p50_ns,
+                    });
+                }
+                None => rows.push(CalRow {
+                    label: format!("{target:.2}"),
+                    point: None,
+                    recall: f32::NAN,
+                    p50_ns: f64::NAN,
+                }),
+            }
+        }
+        let recall = exec_vec::mean_recall(
+            reader, VEC_COLUMN, qc, tc, TOP_K, DEFAULT_NPROBE, DEFAULT_RERANK_MULT,
+        );
+        let t = exec_vec::measure_warm(
+            reader, VEC_COLUMN, &qc[0], TOP_K, DEFAULT_NPROBE, DEFAULT_RERANK_MULT,
+        );
+        rows.push(CalRow {
+            label: "default".into(),
+            point: Some((DEFAULT_NPROBE, DEFAULT_RERANK_MULT)),
+            recall,
+            p50_ns: t.p50_ns,
+        });
+        rows
+    }
 
     fn pct(peer: f64, baseline: f64) -> String {
         if baseline == 0.0 {
@@ -265,35 +322,55 @@ pub mod vector {
     pub fn run() {
         let n_docs = corpus::superfile_docs();
         let vecs = vectors();
-        let queries = queries_correctness();
-        eprintln!("[comparison-vector] {} docs × dim={}, {} queries", fmt_count(n_docs), corpus::DIM, queries.len());
-
-        let qs: Vec<VectorQuery<'_>> = queries
-            .iter()
-            .enumerate()
-            .map(|(i, q)| VectorQuery {
-                name: Box::leak(format!("q{i}").into_boxed_str()),
-                vector: q,
-                search: VectorSearch {
-                    nprobe: DEFAULT_NPROBE,
-                    rerank_mult: DEFAULT_RERANK_MULT,
-                },
-            })
-            .collect();
+        eprintln!(
+            "[comparison-vector] {} docs × dim={}, recall-calibrated protocol",
+            fmt_count(n_docs),
+            corpus::DIM
+        );
 
         let cfg = VectorRunConfig {
             column: VEC_COLUMN,
             dim: corpus::DIM,
             metric: VectorMetric::Cosine,
             k: TOP_K,
-            iters: CALIBRATION_P50_ITERS,
+            iters: exec_vec::CALIBRATION_P50_ITERS,
             parallel: parallel_writers(),
         };
 
-        let results: Vec<(&str, EngineVectorResult)> = vec![
-            ("infino", run_vector::<InfinoVectorEngine>(cfg, vecs, &qs)),
-            ("lancedb", run_vector::<LanceVectorEngine>(cfg, vecs, &qs)),
-        ];
+        // Build through the shared driver; keep both indexes alive for the
+        // calibrated search protocol below (no fixed-default query battery —
+        // search rows come from the recall-target calibration).
+        let no_queries: Vec<VectorQuery<'_>> = Vec::new();
+        let (infino_res, mut infino_idx) =
+            run_vector_with_index::<InfinoVectorEngine>(cfg, vecs, &no_queries);
+        let (lance_res, mut lance_idx) =
+            run_vector_with_index::<LanceVectorEngine>(cfg, vecs, &no_queries);
+        let results: Vec<(&str, EngineVectorResult)> =
+            vec![("infino", infino_res), ("lancedb", lance_res)];
+
+        // Correctness gate (shared battery + thresholds) — reported, and
+        // asserted for infino exactly like its own bench.
+        let qcorr = queries_correctness();
+        let tcorr = ground_truth_correctness();
+        let infino_gate = exec_vec::mean_recall(
+            infino_idx.reader(), VEC_COLUMN, qcorr, tcorr, TOP_K,
+            exec_vec::CORRECTNESS_NPROBE, exec_vec::CORRECTNESS_RERANK_MULT,
+        );
+        let lance_gate = exec_vec::mean_recall(
+            &lance_idx, VEC_COLUMN, qcorr, tcorr, TOP_K,
+            exec_vec::CORRECTNESS_NPROBE, exec_vec::CORRECTNESS_RERANK_MULT,
+        );
+        eprintln!(
+            "[comparison-vector] correctness recall@{TOP_K}: infino={infino_gate:.3} lancedb={lance_gate:.3} (floor {:.2})",
+            exec_vec::CORRECTNESS_RECALL_FLOOR
+        );
+        assert!(
+            infino_gate >= exec_vec::CORRECTNESS_RECALL_FLOOR,
+            "infino correctness gate failed: {infino_gate:.3}"
+        );
+
+        let infino_rows = calibrated_rows(infino_idx.reader(), "infino");
+        let lance_rows = calibrated_rows(&lance_idx, "lancedb");
 
         let input_bytes = (n_docs * corpus::DIM * std::mem::size_of::<f32>()) as f64;
         let mut report = Report::load("comparison-vector");
@@ -301,10 +378,6 @@ pub mod vector {
         let build_map: HashMap<(&str, usize), _> = results
             .iter()
             .flat_map(|(name, res)| res.builds.iter().map(move |b| ((*name, b.writers), b)))
-            .collect();
-        let query_map: HashMap<(&str, &str), _> = results
-            .iter()
-            .flat_map(|(name, res)| res.queries.iter().map(move |q| ((*name, q.name), q)))
             .collect();
 
         let engines = ["infino", "lancedb"];
@@ -403,51 +476,59 @@ pub mod vector {
             "lancedb Δ".into(),
         ];
 
-        let mut query_lat_rows = Vec::new();
-        let mut query_rss_rows = Vec::new();
-
-        for qname in queries.iter().enumerate().map(|(i, _)| format!("q{i}")) {
-            let base = query_map.get(&("infino", qname.as_str())).expect("infino query");
-            let base_ns = base.p50.as_secs_f64() * 1e9;
-            let base_rss = base.rss.peak_rss_bytes as f64;
-
-            let mut lat_row = vec![text(qname.clone())];
-            let mut rss_row = vec![text(qname.clone())];
-
-            for eng in &engines {
-                let q = query_map.get(&(eng, qname.as_str())).expect("query stat");
-                let ns = q.p50.as_secs_f64() * 1e9;
-                lat_row.push(metric(ns, fmt_time(ns), Better::Lower));
-                rss_row.push(metric(
-                    q.rss.peak_rss_bytes as f64,
-                    rss::fmt_bytes(q.rss.peak_rss_bytes),
+        // Recall-calibrated search table: one row per recall target plus
+        // the defaults row, each engine at its own cheapest qualifying
+        // (probe, refine) point — latency compared at matched recall.
+        let mut recall_rows = Vec::new();
+        for (inf, lan) in infino_rows.iter().zip(&lance_rows) {
+            let fmt_point = |p: Option<(usize, usize)>| match p {
+                Some((probe, refine)) => format!("p={probe}, r={refine}"),
+                None => "—".into(),
+            };
+            let fmt_recall = |r: f32| if r.is_nan() { "—".into() } else { format!("{r:.3}") };
+            let mut row = vec![
+                text(inf.label.clone()),
+                text(fmt_point(inf.point)),
+                text(fmt_recall(inf.recall)),
+                metric(inf.p50_ns, fmt_time(inf.p50_ns), Better::Lower),
+                text(fmt_point(lan.point)),
+                text(fmt_recall(lan.recall)),
+            ];
+            if lan.p50_ns.is_nan() {
+                row.push(text(String::from("—")));
+                row.push(text(String::from("—")));
+            } else {
+                row.push(metric(lan.p50_ns, fmt_time(lan.p50_ns), Better::Lower));
+                row.push(metric(
+                    lan.p50_ns - inf.p50_ns,
+                    pct(lan.p50_ns, inf.p50_ns),
                     Better::Lower,
                 ));
             }
-
-            for peer in &peers {
-                let q = query_map.get(&(peer, qname.as_str())).expect("peer query");
-                let ns = q.p50.as_secs_f64() * 1e9;
-                let rss = q.rss.peak_rss_bytes as f64;
-                lat_row.push(metric(ns - base_ns, pct(ns, base_ns), Better::Lower));
-                rss_row.push(metric(rss - base_rss, pct(rss, base_rss), Better::Lower));
-            }
-
-            query_lat_rows.push(lat_row);
-            query_rss_rows.push(rss_row);
+            recall_rows.push(row);
         }
 
-        let query_headers = vec![
-            "Query".into(),
-            "infino".into(),
-            "lancedb".into(),
+        let recall_headers: Vec<String> = vec![
+            "Recall target".into(),
+            "infino (p, r)".into(),
+            "infino recall".into(),
+            "infino p50".into(),
+            "lancedb (p, r)".into(),
+            "lancedb recall".into(),
+            "lancedb p50".into(),
             "lancedb Δ".into(),
         ];
 
         report.emit(&Section {
             anchor: "comparison/vector".into(),
             title: format!("Vector comparison ({} docs × dim={})", fmt_count(n_docs), corpus::DIM),
-            note: "All engines driven through the same `run_vector` driver, corpus, and query set. Δ is vs infino baseline.".into(),
+            note: format!(
+                "All engines driven through the same build driver, corpus, ground truth, and \
+                 recall-calibration grid (infino's own vector protocol). Search rows compare \
+                 latency at matched recall: each engine's lowest-p50 (probe, refine) point \
+                 clearing the target. Correctness gate recall@{TOP_K}: infino {infino_gate:.3}, \
+                 lancedb {lance_gate:.3}. Δ is vs infino p50."
+            ),
             blocks: vec![
                 Block { subtitle: "Build — Time".into(), headers: build_headers.clone(), rows: build_time_rows },
                 Block { subtitle: "Build — Throughput".into(), headers: build_headers.clone(), rows: build_thr_rows },
@@ -455,12 +536,16 @@ pub mod vector {
                 Block { subtitle: "Build — Peak RSS".into(), headers: build_headers.clone(), rows: build_peak_rows },
                 Block { subtitle: "Build — Median RSS".into(), headers: build_headers.clone(), rows: build_med_rows },
                 Block { subtitle: "Build — P90 RSS".into(), headers: build_headers.clone(), rows: build_p90_rows },
-                Block { subtitle: "Query — Latency".into(), headers: query_headers.clone(), rows: query_lat_rows },
-                Block { subtitle: "Query — Peak RSS".into(), headers: query_headers.clone(), rows: query_rss_rows },
+                Block { subtitle: "Search — recall-calibrated (warm p50)".into(), headers: recall_headers, rows: recall_rows },
             ],
         });
 
         report.save();
+
+        InfinoVectorEngine::close(&mut infino_idx);
+        InfinoVectorEngine::delete(infino_idx);
+        LanceVectorEngine::close(&mut lance_idx);
+        LanceVectorEngine::delete(lance_idx);
     }
 }
 

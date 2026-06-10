@@ -24,6 +24,7 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 use infino_bench_utils::corpus;
+use infino_bench_utils::executors::vector::VectorRead;
 use infino_bench_utils::harness::{
     Capabilities, VectorEngine, VectorHit, VectorMetric, VectorSearch,
 };
@@ -186,6 +187,34 @@ impl LanceVectorIndex {
     }
 }
 
+/// Shared recall-calibration hook: lets the engine-generic
+/// `executors::vector::calibrate` grid drive Lance with the same
+/// `(probe, refine)` vocabulary it uses for Infino. Lance ids are the
+/// row's insertion position (`0..n_docs`), so they are already global.
+impl VectorRead for LanceVectorIndex {
+    fn topk_global(
+        &self,
+        _column: &str,
+        query: &[f32],
+        k: usize,
+        nprobe: usize,
+        rerank: usize,
+    ) -> Vec<(u32, f32)> {
+        read_index(
+            self,
+            query,
+            k,
+            VectorSearch {
+                nprobe,
+                rerank_mult: rerank,
+            },
+        )
+        .into_iter()
+        .map(|h| (h.doc_id as u32, h.distance))
+        .collect()
+    }
+}
+
 fn create_index(
     column: &str,
     dim: usize,
@@ -249,35 +278,44 @@ fn parallel_write_index(
         std::hint::black_box(&table);
         return;
     }
+    // Concurrent shard builds — the same independent-shard semantics as
+    // Infino's `par_chunks` parallel build. Build-only — tables discarded.
     let n_docs = vectors.len() / dim;
     let docs_per_shard = n_docs.div_ceil(writers);
-    let shards: Vec<Table> = (0..writers)
-        .filter_map(|shard| {
-            let start_doc = shard * docs_per_shard;
-            if start_doc >= n_docs {
-                return None;
-            }
-            let len_docs = docs_per_shard.min(n_docs - start_doc);
-            let start = start_doc * dim;
-            let end = (start_doc + len_docs) * dim;
-            let rt = new_runtime();
-            let location = if s3 {
-                LanceLocation::s3(&format!("vector-shard-{shard}"))
-            } else {
-                LanceLocation::local()
-            };
-            let num_partitions = partitions_for(corpus::n_cent(len_docs), len_docs);
-            Some(rt.block_on(build_table(
-                &location.uri,
-                &location.storage_options,
-                &vectors[start..end],
-                dim,
-                metric,
-                num_partitions,
-            )))
-        })
-        .collect();
-    std::hint::black_box(shards);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..writers)
+            .filter_map(|shard| {
+                let start_doc = shard * docs_per_shard;
+                if start_doc >= n_docs {
+                    return None;
+                }
+                let len_docs = docs_per_shard.min(n_docs - start_doc);
+                let slice = &vectors[start_doc * dim..(start_doc + len_docs) * dim];
+                Some(scope.spawn(move || {
+                    let rt = new_runtime();
+                    let location = if s3 {
+                        LanceLocation::s3(&format!("vector-shard-{shard}"))
+                    } else {
+                        LanceLocation::local()
+                    };
+                    let num_partitions = partitions_for(corpus::n_cent(len_docs), len_docs);
+                    let table = rt.block_on(build_table(
+                        &location.uri,
+                        &location.storage_options,
+                        slice,
+                        dim,
+                        metric,
+                        num_partitions,
+                    ));
+                    std::hint::black_box(&table);
+                    drop(table);
+                }))
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("lance vector shard build thread panicked");
+        }
+    });
 }
 
 fn read_table(

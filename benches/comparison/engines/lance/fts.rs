@@ -185,26 +185,36 @@ fn parallel_write_index(column: &str, docs: &[(u64, &str)], writers: usize, s3: 
         std::hint::black_box(&table);
         return;
     }
+    // Concurrent shard builds — the same independent-shard semantics as
+    // Infino's `par_chunks` parallel build. Build-only — tables discarded.
     let shard_len = docs.len().div_ceil(writers);
-    let shards: Vec<Table> = docs
-        .chunks(shard_len)
-        .enumerate()
-        .map(|(i, shard)| {
-            let rt = new_runtime();
-            let location = if s3 {
-                LanceLocation::s3(&format!("fts-shard-{i}"))
-            } else {
-                LanceLocation::local()
-            };
-            rt.block_on(build_fts_table(
-                &location.uri,
-                &location.storage_options,
-                column,
-                shard,
-            ))
-        })
-        .collect();
-    std::hint::black_box(shards);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = docs
+            .chunks(shard_len)
+            .enumerate()
+            .map(|(i, shard)| {
+                scope.spawn(move || {
+                    let rt = new_runtime();
+                    let location = if s3 {
+                        LanceLocation::s3(&format!("fts-shard-{i}"))
+                    } else {
+                        LanceLocation::local()
+                    };
+                    let table = rt.block_on(build_fts_table(
+                        &location.uri,
+                        &location.storage_options,
+                        column,
+                        shard,
+                    ));
+                    std::hint::black_box(&table);
+                    drop(table);
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("lance fts shard build thread panicked");
+        }
+    });
 }
 
 fn read_table(
