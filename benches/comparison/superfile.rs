@@ -257,20 +257,25 @@ pub mod vector {
     const DEFAULT_RERANK_MULT: usize = 20;
 
     /// One row of the recall-calibrated search table for one engine.
-    struct CalRow {
-        label: String,
-        point: Option<(usize, usize)>,
-        recall: f32,
-        p50_ns: f64,
+    pub(crate) struct CalRow {
+        pub(crate) label: String,
+        pub(crate) point: Option<(usize, usize)>,
+        pub(crate) recall: f32,
+        pub(crate) p50_ns: f64,
     }
 
     /// The shared protocol, identical to infino's own vector bench: for
     /// each recall target, grid-calibrate `(probe, refine)` against the
-    /// shared ground truth and time the cheapest qualifying point; then a
-    /// `default` row at the user-facing defaults.
-    fn calibrated_rows<R: exec_vec::VectorRead>(reader: &R, engine: &str) -> Vec<CalRow> {
-        let qc = queries_calibration();
-        let tc = ground_truth_calibration();
+    /// supplied calibration battery + ground truth and time the cheapest
+    /// qualifying point; then a `default` row at the user-facing defaults.
+    /// Shared by the superfile and supertable comparison cells (each
+    /// passes fixtures sized to its own corpus).
+    pub(crate) fn calibrated_rows<R: exec_vec::VectorRead>(
+        reader: &R,
+        engine: &str,
+        qc: &[Vec<f32>],
+        tc: &[Vec<u32>],
+    ) -> Vec<CalRow> {
         let mut rows = Vec::new();
         for &target in exec_vec::RECALL_TARGETS {
             eprintln!("[comparison-vector] {engine}: calibrating recall@{target:.2}: grid over probes/refines ({} queries)...", qc.len());
@@ -369,8 +374,10 @@ pub mod vector {
             "infino correctness gate failed: {infino_gate:.3}"
         );
 
-        let infino_rows = calibrated_rows(infino_idx.reader(), "infino");
-        let lance_rows = calibrated_rows(&lance_idx, "lancedb");
+        let qc = queries_calibration();
+        let tc = ground_truth_calibration();
+        let infino_rows = calibrated_rows(infino_idx.reader(), "infino", qc, tc);
+        let lance_rows = calibrated_rows(&lance_idx, "lancedb", qc, tc);
 
         let input_bytes = (n_docs * corpus::DIM * std::mem::size_of::<f32>()) as f64;
         let mut report = Report::load_plain("comparison-vector");

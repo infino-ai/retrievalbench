@@ -211,6 +211,16 @@ fn lance_sql_ingest_row(n_docs: usize) -> Vec<Cell> {
 }
 
 pub fn run() {
+    // Each supertable cell (fts / vector / sql) requests the ingest
+    // comparison during its build phase; the measurement is identical, so
+    // emit it once per process instead of once per cell.
+    static INGEST_ONCE: std::sync::Once = std::sync::Once::new();
+    let mut first = false;
+    INGEST_ONCE.call_once(|| first = true);
+    if !first {
+        return;
+    }
+
     if let Err(reason) = tiers::supertable_backend_check() {
         eprintln!("[comparison-supertable] skipped: {reason}");
         return;
@@ -431,7 +441,9 @@ pub mod fts {
 
 pub mod vector {
     use super::*;
+    use crate::superfile::vector::calibrated_rows;
     use infino::superfile::reader::VectorSearchOptions;
+    use infino_bench_utils::executors::vector as exec_vec;
 
     pub fn run(build: bool, warm: bool, cold: bool) {
         if let Err(reason) = tiers::supertable_backend_check() {
@@ -447,17 +459,10 @@ pub mod vector {
 
         let n_docs = supertable::n_docs();
         let infino_built = supertable::build_on_storage(supertable::Modality::Vector);
+        // Same seed as the ingested corpus (`CORPUS_VEC_SEED = 1`), so the
+        // regenerated vectors are bit-identical to what was committed and
+        // brute-force ground truth is valid for both engines.
         let vectors = MmapVectorCorpus::generate(n_docs, corpus::n_cent(n_docs), 1, true);
-        let query = vec![1.0 / (corpus::DIM as f32).sqrt(); corpus::DIM];
-        let search = VectorSearch {
-            nprobe: 8,
-            rerank_mult: 20,
-        };
-        let query_spec = [VectorQuery {
-            name: "knn_default",
-            vector: &query,
-            search,
-        }];
         let cfg = VectorRunConfig {
             column: VEC_COLUMN,
             dim: corpus::DIM,
@@ -466,47 +471,167 @@ pub mod vector {
             iters: WARM_ITERS,
             parallel: 1,
         };
-        let (lance_warm, lance_index) =
-            run_vector_with_index::<LanceS3VectorEngine>(cfg, vectors.as_slice(), &query_spec);
+        // Build only; warm rows come from the recall-calibrated protocol.
+        let (_lance_build, lance_index) =
+            run_vector_with_index::<LanceS3VectorEngine>(cfg, vectors.as_slice(), EMPTY_VECTOR_QUERIES);
 
         let mut report = Report::load_plain("comparison-supertable-vector");
-        if warm {
-            let infino_warm = measure_infino_warm(&infino_built, &query);
-            let lance_warm_rows: Vec<_> = lance_warm
-                .queries
-                .iter()
-                .map(|q| (q.name, q.p50))
-                .collect();
-            emit_latency_comparison(
-                &mut report,
-                "comparison/supertable/vector/warm",
-                format!(
-                    "Supertable vector comparison — warm search ({} docs × dim={})",
+        {
+            // Shared fixtures (same seeds/protocol as infino's own
+            // supertable vector bench). Calibration runs for either phase:
+            // warm rows time the calibrated points on warm readers; cold
+            // rows re-time the SAME points on fresh consumers/tables —
+            // higher recall targets probe more clusters, which on the cold
+            // path means more object-store fetches, so cold must walk the
+            // recall axis too.
+            let vslice = vectors.as_slice();
+            let q_corr = corpus::generate_realistic_queries(
+                vslice, n_docs, exec_vec::N_CORRECTNESS_QUERIES,
+                exec_vec::QUERY_CORRECTNESS_SEED, true, exec_vec::QUERY_SIGMA,
+            );
+            let gt_corr = corpus::ground_truth(vslice, n_docs, &q_corr, TOP_K);
+            let q_cal = corpus::generate_realistic_queries(
+                vslice, n_docs, exec_vec::N_CALIBRATION_QUERIES,
+                exec_vec::QUERY_CALIBRATION_SEED, true, exec_vec::QUERY_SIGMA,
+            );
+            let gt_cal = corpus::ground_truth(vslice, n_docs, &q_cal, TOP_K);
+
+            // Infino: warm consumer, promoted to the mmap tier like the
+            // in-tree supertable bench does before its warm rows.
+            let (_cache_dir, table) = open_infino_consumer(&infino_built);
+            let _ = table
+                .reader()
+                .vector_search(VEC_COLUMN, &q_cal[0], TOP_K, search_opts(), None)
+                .expect("warm prewarm vector_search");
+            table
+                .wait_until_warm(Duration::from_secs(600))
+                .expect("supertable warm promotion");
+
+            // Correctness gate doubles as a cache warmer for both engines
+            // (one full pass over the correctness battery each).
+            let infino_gate = exec_vec::mean_recall(
+                &table, VEC_COLUMN, &q_corr, &gt_corr, TOP_K,
+                exec_vec::CORRECTNESS_NPROBE, exec_vec::CORRECTNESS_RERANK_MULT,
+            );
+            let lance_gate = exec_vec::mean_recall(
+                &lance_index, VEC_COLUMN, &q_corr, &gt_corr, TOP_K,
+                exec_vec::CORRECTNESS_NPROBE, exec_vec::CORRECTNESS_RERANK_MULT,
+            );
+            eprintln!(
+                "[comparison-supertable-vector] correctness recall@{TOP_K}: infino={infino_gate:.3} lancedb-s3={lance_gate:.3}",
+            );
+
+            let infino_rows = calibrated_rows(&table, "infino", &q_cal, &gt_cal);
+            let lance_rows = calibrated_rows(&lance_index, "lancedb-s3", &q_cal, &gt_cal);
+
+            const NS_PER_SEC: f64 = 1e9;
+            let mut rows = Vec::new();
+            for (inf, lan) in infino_rows.iter().zip(&lance_rows) {
+                let fmt_point = |p: Option<(usize, usize)>| match p {
+                    Some((probe, refine)) => format!("p={probe}, r={refine}"),
+                    None => "—".into(),
+                };
+                let fmt_recall =
+                    |r: f32| if r.is_nan() { "—".into() } else { format!("{r:.3}") };
+                let mut row = vec![
+                    text(inf.label.clone()),
+                    text(fmt_point(inf.point)),
+                    text(fmt_recall(inf.recall)),
+                ];
+                if warm {
+                    row.push(metric(inf.p50_ns, fmt_time(inf.p50_ns), Better::Lower));
+                }
+                if cold {
+                    match inf.point {
+                        Some((probe, refine)) => {
+                            let c = cold_p50_infino(&infino_built, &q_cal[0], probe, refine);
+                            row.push(metric(
+                                c.as_secs_f64() * NS_PER_SEC,
+                                fmt_time(c.as_secs_f64() * NS_PER_SEC),
+                                Better::Lower,
+                            ));
+                        }
+                        None => row.push(text(String::from("—"))),
+                    }
+                }
+                row.push(text(fmt_point(lan.point)));
+                row.push(text(fmt_recall(lan.recall)));
+                match lan.point {
+                    Some((probe, refine)) => {
+                        if warm {
+                            row.push(metric(lan.p50_ns, fmt_time(lan.p50_ns), Better::Lower));
+                        }
+                        if cold {
+                            let c = cold_p50_lance(&lance_index, &q_cal[0], probe, refine);
+                            row.push(metric(
+                                c.as_secs_f64() * NS_PER_SEC,
+                                fmt_time(c.as_secs_f64() * NS_PER_SEC),
+                                Better::Lower,
+                            ));
+                        }
+                        if warm {
+                            row.push(metric(
+                                lan.p50_ns - inf.p50_ns,
+                                pct(lan.p50_ns, inf.p50_ns),
+                                Better::Lower,
+                            ));
+                        }
+                    }
+                    None => {
+                        let blanks = usize::from(warm) * 2 + usize::from(cold);
+                        for _ in 0..blanks {
+                            row.push(text(String::from("—")));
+                        }
+                    }
+                }
+                rows.push(row);
+            }
+
+            let mut headers = vec![
+                "Recall target".into(),
+                "infino (p, r)".into(),
+                "infino recall".into(),
+            ];
+            if warm {
+                headers.push("infino warm".into());
+            }
+            if cold {
+                headers.push("infino cold".into());
+            }
+            headers.push("lancedb-s3 (p, r)".into());
+            headers.push("lancedb-s3 recall".into());
+            if warm {
+                headers.push("lancedb-s3 warm".into());
+            }
+            if cold {
+                headers.push("lancedb-s3 cold".into());
+            }
+            if warm {
+                headers.push("lancedb-s3 warm Δ".into());
+            }
+
+            report.emit(&Section {
+                anchor: "comparison/supertable/vector".into(),
+                title: format!(
+                    "Supertable vector comparison — recall-calibrated search ({} docs × dim={})",
                     fmt_count(n_docs),
                     corpus::DIM
                 ),
-                "warm = object-store table opened with a warm consumer/cache. Engines without this tier are omitted.",
-                "warm",
-                &infino_warm,
-                &lance_warm_rows,
-            );
-        }
-        if cold {
-            let infino_cold = measure_infino_cold(&infino_built, &query);
-            let lance_cold = measure_lance_cold(&lance_index, &query, search);
-            emit_latency_comparison(
-                &mut report,
-                "comparison/supertable/vector/cold",
-                format!(
-                    "Supertable vector comparison — cold search ({} docs × dim={})",
-                    fmt_count(n_docs),
-                    corpus::DIM
+                note: format!(
+                    "Same corpus, queries, ground truth, and calibration grid as infino's \
+                     own supertable vector bench; rows compare latency at matched recall. \
+                     warm = promoted consumer cache / warmed table; cold = fresh consumer \
+                     or fresh table per iteration at the SAME calibrated point (higher \
+                     recall probes more clusters, so cold cost rises with the target). \
+                     Correctness gate recall@{TOP_K}: infino {infino_gate:.3}, lancedb-s3 \
+                     {lance_gate:.3}. Engines without this tier are omitted."
                 ),
-                "Cold = fresh object-store read path per iteration; rebuild time is excluded.",
-                "cold",
-                &infino_cold,
-                &lance_cold,
-            );
+                blocks: vec![Block {
+                    subtitle: "Search — recall-calibrated".into(),
+                    headers,
+                    rows,
+                }],
+            });
         }
         report.save();
 
@@ -534,52 +659,45 @@ pub mod vector {
             .with_rerank_mult(20)
     }
 
-    fn measure_infino_warm(
+    /// Cold p50 at one calibrated `(probe, refine)` point: a fresh
+    /// consumer + cache per iteration, timing the first search.
+    fn cold_p50_infino(
         built: &supertable::IngestResult,
         query: &[f32],
-    ) -> Vec<(&'static str, Duration)> {
-        let (_cache_dir, table) = open_infino_consumer(built);
-        let reader = table.reader();
-        let _ = reader
-            .vector_search(VEC_COLUMN, query, TOP_K, search_opts(), None)
-            .expect("warmup infino vector");
-        let mut samples = Vec::with_capacity(WARM_ITERS);
-        for _ in 0..WARM_ITERS {
-            let t = Instant::now();
-            let hits = reader
-                .vector_search(VEC_COLUMN, query, TOP_K, search_opts(), None)
-                .expect("warm infino vector");
-            std::hint::black_box(hits);
-            samples.push(t.elapsed());
-        }
-        vec![("knn_default", p50(&mut samples))]
-    }
-
-    fn measure_infino_cold(
-        built: &supertable::IngestResult,
-        query: &[f32],
-    ) -> Vec<(&'static str, Duration)> {
+        probe: usize,
+        refine: usize,
+    ) -> Duration {
+        let opts = VectorSearchOptions::new()
+            .with_nprobe(probe)
+            .with_rerank_mult(refine);
         let mut samples = Vec::with_capacity(COLD_ITERS);
         for _ in 0..COLD_ITERS {
             let (cache_dir, table) = open_infino_consumer(built);
             let t = Instant::now();
             let hits = table
                 .reader()
-                .vector_search(VEC_COLUMN, query, TOP_K, search_opts(), None)
+                .vector_search(VEC_COLUMN, query, TOP_K, opts, None)
                 .expect("cold infino vector");
             std::hint::black_box(hits);
             samples.push(t.elapsed());
             drop(table);
             drop(cache_dir);
         }
-        vec![("knn_default", p50(&mut samples))]
+        p50(&mut samples)
     }
 
-    fn measure_lance_cold(
+    /// Cold p50 at one calibrated `(probe, refine)` point: a fresh table
+    /// open from object storage per iteration.
+    fn cold_p50_lance(
         index: &retrievalbench::lance::vector::LanceVectorIndex,
         query: &[f32],
-        search: VectorSearch,
-    ) -> Vec<(&'static str, Duration)> {
+        probe: usize,
+        refine: usize,
+    ) -> Duration {
+        let search = VectorSearch {
+            nprobe: probe,
+            rerank_mult: refine,
+        };
         let mut samples = Vec::with_capacity(COLD_ITERS);
         for _ in 0..COLD_ITERS {
             let t = Instant::now();
@@ -587,7 +705,7 @@ pub mod vector {
             std::hint::black_box(hits);
             samples.push(t.elapsed());
         }
-        vec![("knn_default", p50(&mut samples))]
+        p50(&mut samples)
     }
 }
 
