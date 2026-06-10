@@ -46,7 +46,7 @@ name = "retrievalbench"
 path = "benches/comparison/engines/mod.rs"
 
 [[bench]]
-name = "comparison"
+name = "bench"
 path = "benches/comparison/main.rs"
 harness = false
 

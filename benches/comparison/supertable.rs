@@ -3,8 +3,9 @@
 
 //! Supertable object-store comparison bench.
 //!
-//! Mirrors Infino's `supertable_all` ingest benchmark shape and uses the
-//! existing Infino supertable bench utilities as the baseline source of truth.
+//! Mirrors the ingest shape of infino's own supertable bench (`cargo bench
+//! -- supertable`) and uses the existing Infino supertable bench utilities
+//! as the baseline source of truth.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -260,7 +261,7 @@ pub fn run() {
             infino_bench_utils::corpus::DIM,
             N_COMMIT_CHUNKS
         ),
-        note: "Infino baseline rows are produced by the same isolated shape measurement used by `supertable_all`: `SupertableWriter::append` + `commit` to object storage, one subprocess per shape. Peer rows use existing comparison drivers with public object-store configuration; LanceDB FTS/vector/SQL rows are driven by `run_fts`/`run_vector`/`run_sql` with S3-configured adapters.".into(),
+        note: "Infino baseline rows are produced by the same isolated shape measurement as infino's own supertable bench: `SupertableWriter::append` + `commit` to object storage, one subprocess per shape. Peer rows use existing comparison drivers with public object-store configuration; LanceDB FTS/vector/SQL rows are driven by `run_fts`/`run_vector`/`run_sql` with S3-configured adapters.".into(),
         blocks: vec![Block {
             subtitle: "Ingest".into(),
             headers: vec![
@@ -521,8 +522,8 @@ pub mod vector {
                 "[comparison-supertable-vector] correctness recall@{TOP_K}: infino={infino_gate:.3} lancedb-s3={lance_gate:.3}",
             );
 
-            let infino_rows = calibrated_rows(&table, "infino", &q_cal, &gt_cal);
-            let lance_rows = calibrated_rows(&lance_index, "lancedb-s3", &q_cal, &gt_cal);
+            let infino_rows = calibrated_rows(&table, "infino", VEC_COLUMN, &q_cal, &gt_cal);
+            let lance_rows = calibrated_rows(&lance_index, "lancedb-s3", VEC_COLUMN, &q_cal, &gt_cal);
 
             const NS_PER_SEC: f64 = 1e9;
             let mut rows = Vec::new();

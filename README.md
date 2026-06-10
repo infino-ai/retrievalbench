@@ -14,18 +14,22 @@ DuckDB and CoreDB are not wired in this branch.
 
 ## Invocation
 
+Single binary, same positional grammar as infino's own bench suite:
+`cargo bench -- [tier] [modality] [phase ...]`.
+
 ```sh
 # Run every current comparison.
-cargo bench --bench comparison
+cargo bench
 
-# Run one or more superfile comparisons.
-cargo bench --bench comparison -- superfile_fts
-cargo bench --bench comparison -- superfile_vector superfile_sql
+# Run one tier or one cell.
+cargo bench -- superfile
+cargo bench -- superfile fts
+cargo bench -- superfile vector sql
 
-# Run one or more supertable comparisons.
-cargo bench --bench comparison -- supertable_fts warm
-cargo bench --bench comparison -- supertable_vector cold
-cargo bench --bench comparison -- supertable_sql build warm cold
+# Supertable cells, optionally narrowed by phase.
+cargo bench -- supertable fts warm
+cargo bench -- supertable vector cold
+cargo bench -- supertable sql build warm cold
 ```
 
 The superfile comparisons run Infino vs the in-memory peer adapters. The

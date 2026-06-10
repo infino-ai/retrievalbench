@@ -1,18 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 
-//! Unified third-party comparison bench entry point.
+//! The single comparison benchmark binary — same positional grammar as
+//! infino's own bench binary.
 //!
 //! Current engine scope is the adapters already present in this harness:
 //! LanceDB for FTS/vector/SQL and Tantivy for FTS. DuckDB/CoreDB are not
 //! wired here.
 //!
 //! ```text
-//! cargo bench --bench comparison
-//! cargo bench --bench comparison -- superfile_fts
-//! cargo bench --bench comparison -- superfile_vector superfile_sql
-//! cargo bench --bench comparison -- supertable_fts warm
+//! cargo bench                            # everything, all phases
+//! cargo bench -- all                     # same as above
+//! cargo bench -- superfile               # all 3 superfile modalities
+//! cargo bench -- superfile vector        # one cell
+//! cargo bench -- supertable fts warm     # one cell, one phase
+//! cargo bench -- supertable sql build cold
 //! ```
+//!
+//! Token vocabulary:
+//!   tier        : `superfile` | `supertable`        (omitted => both)
+//!   modality    : `fts` | `vector` | `sql`          (omitted => all three)
+//!   phase       : `build` | `warm` | `cold` | `search` (= warm+cold)
+//!                 (omitted => all three phases)
+//!   `all`       : explicit "every tier × modality × phase" (the default).
+//!
+//! The cells run = (selected tiers) × (selected modalities). Phases apply
+//! to the supertable tier; superfile cells always run build + search.
+//!
+//! Scale (`INFINO_BENCH_SUPERFILE_DOCS`, `INFINO_BENCH_SUPERTABLE_DOCS`)
+//! and object-store backend (`INFINO_BENCH_STORE`) are env knobs.
 
 #[path = "superfile.rs"]
 mod superfile;
@@ -20,13 +36,16 @@ mod superfile;
 mod supertable;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Test {
-    SuperfileFts,
-    SuperfileVector,
-    SuperfileSql,
-    SupertableFts,
-    SupertableVector,
-    SupertableSql,
+enum Tier {
+    Superfile,
+    Supertable,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Modality {
+    Fts,
+    Vector,
+    Sql,
 }
 
 #[derive(Clone, Copy)]
@@ -36,81 +55,138 @@ struct Phases {
     cold: bool,
 }
 
-impl Test {
-    const ALL: [Test; 6] = [
-        Test::SuperfileFts,
-        Test::SuperfileVector,
-        Test::SuperfileSql,
-        Test::SupertableFts,
-        Test::SupertableVector,
-        Test::SupertableSql,
-    ];
+const ALL_PHASES: Phases = Phases {
+    build: true,
+    warm: true,
+    cold: true,
+};
 
-    fn key(self) -> &'static str {
-        match self {
-            Test::SuperfileFts => "superfile_fts",
-            Test::SuperfileVector => "superfile_vector",
-            Test::SuperfileSql => "superfile_sql",
-            Test::SupertableFts => "supertable_fts",
-            Test::SupertableVector => "supertable_vector",
-            Test::SupertableSql => "supertable_sql",
+fn run_cell(tier: Tier, modality: Modality, phases: Phases) {
+    let label = match (tier, modality) {
+        (Tier::Superfile, Modality::Fts) => "superfile fts",
+        (Tier::Superfile, Modality::Vector) => "superfile vector",
+        (Tier::Superfile, Modality::Sql) => "superfile sql",
+        (Tier::Supertable, Modality::Fts) => "supertable fts",
+        (Tier::Supertable, Modality::Vector) => "supertable vector",
+        (Tier::Supertable, Modality::Sql) => "supertable sql",
+    };
+    eprintln!(
+        "[comparison] === {label} (build={}, warm={}, cold={}) ===",
+        phases.build, phases.warm, phases.cold
+    );
+    match (tier, modality) {
+        (Tier::Superfile, Modality::Fts) => superfile::fts::run(),
+        (Tier::Superfile, Modality::Vector) => superfile::vector::run(),
+        (Tier::Superfile, Modality::Sql) => superfile::sql::run(),
+        (Tier::Supertable, Modality::Fts) => {
+            supertable::fts::run(phases.build, phases.warm, phases.cold)
         }
-    }
-
-    fn from_arg(arg: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|test| test.key() == arg)
-    }
-
-    fn run(self, phases: Phases) {
-        match self {
-            Test::SuperfileFts => superfile::fts::run(),
-            Test::SuperfileVector => superfile::vector::run(),
-            Test::SuperfileSql => superfile::sql::run(),
-            Test::SupertableFts => supertable::fts::run(phases.build, phases.warm, phases.cold),
-            Test::SupertableVector => {
-                supertable::vector::run(phases.build, phases.warm, phases.cold)
-            }
-            Test::SupertableSql => supertable::sql::run(phases.build, phases.warm, phases.cold),
+        (Tier::Supertable, Modality::Vector) => {
+            supertable::vector::run(phases.build, phases.warm, phases.cold)
+        }
+        (Tier::Supertable, Modality::Sql) => {
+            supertable::sql::run(phases.build, phases.warm, phases.cold)
         }
     }
 }
 
-fn parse_args() -> (Vec<Test>, Phases) {
-    let mut tests = Vec::new();
+fn print_usage_and_exit(code: i32) -> ! {
+    eprintln!(
+        "Usage:\n  cargo bench -- [tier] [modality] [phase ...]\n\
+         \n\
+         Tier      : superfile | supertable        (omitted => both)\n\
+         Modality  : fts | vector | sql            (omitted => all three)\n\
+         Phase     : build | warm | cold | search  (search = warm+cold; omitted => all)\n\
+         all       : every tier x modality x phase (the default for a bare `cargo bench`)\n\
+         \n\
+         Examples:\n\
+         \x20 cargo bench\n\
+         \x20 cargo bench -- supertable\n\
+         \x20 cargo bench -- superfile fts\n\
+         \x20 cargo bench -- supertable sql warm\n"
+    );
+    std::process::exit(code);
+}
+
+fn parse_args() -> (Vec<Tier>, Vec<Modality>, Phases) {
+    // Drop harness flags (e.g. a stray `--bench`); only positional tokens
+    // are ours.
+    let args: Vec<String> = std::env::args()
+        .skip(1)
+        .filter(|a| !a.starts_with('-'))
+        .collect();
+
+    if std::env::args().any(|a| matches!(a.as_str(), "help" | "-h" | "--help")) {
+        print_usage_and_exit(0);
+    }
+
+    let mut tiers: Vec<Tier> = Vec::new();
+    let mut modalities: Vec<Modality> = Vec::new();
     let mut build = false;
     let mut warm = false;
     let mut cold = false;
-    for arg in std::env::args().skip(1).filter(|arg| !arg.starts_with('-')) {
-        if let Some(test) = Test::from_arg(&arg) {
-            if !tests.contains(&test) {
-                tests.push(test);
-            }
-        } else {
-            match arg.as_str() {
-                "build" => build = true,
-                "warm" => warm = true,
-                "cold" => cold = true,
-                "search" => {
-                    warm = true;
-                    cold = true;
+    let mut unknown: Vec<String> = Vec::new();
+
+    for arg in &args {
+        match arg.as_str() {
+            "all" => {}
+            "superfile" => {
+                if !tiers.contains(&Tier::Superfile) {
+                    tiers.push(Tier::Superfile);
                 }
-                _ => eprintln!("[comparison] ignoring unknown selector {arg:?}"),
             }
+            "supertable" => {
+                if !tiers.contains(&Tier::Supertable) {
+                    tiers.push(Tier::Supertable);
+                }
+            }
+            "fts" => {
+                if !modalities.contains(&Modality::Fts) {
+                    modalities.push(Modality::Fts);
+                }
+            }
+            "vector" => {
+                if !modalities.contains(&Modality::Vector) {
+                    modalities.push(Modality::Vector);
+                }
+            }
+            "sql" => {
+                if !modalities.contains(&Modality::Sql) {
+                    modalities.push(Modality::Sql);
+                }
+            }
+            "build" => build = true,
+            "warm" => warm = true,
+            "cold" => cold = true,
+            "search" => {
+                warm = true;
+                cold = true;
+            }
+            other => unknown.push(other.to_string()),
         }
     }
-    if tests.is_empty() {
-        tests.extend(Test::ALL);
+
+    if !unknown.is_empty() {
+        eprintln!("[comparison] unknown selector(s): {}", unknown.join(", "));
+        print_usage_and_exit(2);
     }
+
+    let tiers = if tiers.is_empty() {
+        vec![Tier::Superfile, Tier::Supertable]
+    } else {
+        tiers
+    };
+    let modalities = if modalities.is_empty() {
+        vec![Modality::Fts, Modality::Vector, Modality::Sql]
+    } else {
+        modalities
+    };
     let phases = if build || warm || cold {
         Phases { build, warm, cold }
     } else {
-        Phases {
-            build: true,
-            warm: true,
-            cold: true,
-        }
+        ALL_PHASES
     };
-    (tests, phases)
+    (tiers, modalities, phases)
 }
 
 fn main() {
@@ -123,15 +199,10 @@ fn main() {
         return;
     }
 
-    let (tests, phases) = parse_args();
-    for test in tests {
-        eprintln!(
-            "[comparison] === {} (build={}, warm={}, cold={}) ===",
-            test.key(),
-            phases.build,
-            phases.warm,
-            phases.cold
-        );
-        test.run(phases);
+    let (tiers, modalities, phases) = parse_args();
+    for tier in tiers {
+        for &modality in &modalities {
+            run_cell(tier, modality, phases);
+        }
     }
 }

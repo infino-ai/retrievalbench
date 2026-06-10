@@ -269,19 +269,21 @@ pub mod vector {
     /// supplied calibration battery + ground truth and time the cheapest
     /// qualifying point; then a `default` row at the user-facing defaults.
     /// Shared by the superfile and supertable comparison cells (each
-    /// passes fixtures sized to its own corpus).
+    /// passes fixtures sized to its own corpus, plus its own vector
+    /// column name — the tiers ingest under different schemas).
     pub(crate) fn calibrated_rows<R: exec_vec::VectorRead>(
         reader: &R,
         engine: &str,
+        column: &str,
         qc: &[Vec<f32>],
         tc: &[Vec<u32>],
     ) -> Vec<CalRow> {
         let mut rows = Vec::new();
         for &target in exec_vec::RECALL_TARGETS {
             eprintln!("[comparison-vector] {engine}: calibrating recall@{target:.2}: grid over probes/refines ({} queries)...", qc.len());
-            match exec_vec::calibrate(reader, VEC_COLUMN, qc, tc, target, TOP_K, "comparison-vector") {
+            match exec_vec::calibrate(reader, column, qc, tc, target, TOP_K, "comparison-vector") {
                 Some(c) => {
-                    let t = exec_vec::measure_warm(reader, VEC_COLUMN, &qc[0], TOP_K, c.probe, c.refine);
+                    let t = exec_vec::measure_warm(reader, column, &qc[0], TOP_K, c.probe, c.refine);
                     rows.push(CalRow {
                         label: format!("{target:.2}"),
                         point: Some((c.probe, c.refine)),
@@ -298,10 +300,10 @@ pub mod vector {
             }
         }
         let recall = exec_vec::mean_recall(
-            reader, VEC_COLUMN, qc, tc, TOP_K, DEFAULT_NPROBE, DEFAULT_RERANK_MULT,
+            reader, column, qc, tc, TOP_K, DEFAULT_NPROBE, DEFAULT_RERANK_MULT,
         );
         let t = exec_vec::measure_warm(
-            reader, VEC_COLUMN, &qc[0], TOP_K, DEFAULT_NPROBE, DEFAULT_RERANK_MULT,
+            reader, column, &qc[0], TOP_K, DEFAULT_NPROBE, DEFAULT_RERANK_MULT,
         );
         rows.push(CalRow {
             label: "default".into(),
@@ -376,8 +378,8 @@ pub mod vector {
 
         let qc = queries_calibration();
         let tc = ground_truth_calibration();
-        let infino_rows = calibrated_rows(infino_idx.reader(), "infino", qc, tc);
-        let lance_rows = calibrated_rows(&lance_idx, "lancedb", qc, tc);
+        let infino_rows = calibrated_rows(infino_idx.reader(), "infino", VEC_COLUMN, qc, tc);
+        let lance_rows = calibrated_rows(&lance_idx, "lancedb", VEC_COLUMN, qc, tc);
 
         let input_bytes = (n_docs * corpus::DIM * std::mem::size_of::<f32>()) as f64;
         let mut report = Report::load_plain("comparison-vector");
