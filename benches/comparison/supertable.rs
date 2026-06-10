@@ -29,7 +29,7 @@ use retrievalbench::{LanceS3FtsEngine, LanceS3SqlEngine, LanceS3VectorEngine};
 const EMPTY_FTS_QUERIES: &[FtsQuery] = &[];
 const EMPTY_VECTOR_QUERIES: &[VectorQuery<'_>] = &[];
 const EMPTY_SQL_QUERIES: &[SqlQuery] = &[];
-const warm_ITERS: usize = 20;
+const WARM_ITERS: usize = 20;
 const COLD_ITERS: usize = 5;
 const TOP_K: usize = 10;
 
@@ -301,7 +301,7 @@ pub mod fts {
             &docs,
             infino_bench_utils::executors::fts::FTS_BATTERY,
             TOP_K,
-            warm_ITERS,
+            WARM_ITERS,
             1,
         );
 
@@ -374,8 +374,8 @@ pub mod fts {
                 let _ = reader
                     .bm25_search(TEXT_COLUMN, &query, TOP_K, mode, None)
                     .expect("warmup infino bm25");
-                let mut samples = Vec::with_capacity(warm_ITERS);
-                for _ in 0..warm_ITERS {
+                let mut samples = Vec::with_capacity(WARM_ITERS);
+                for _ in 0..WARM_ITERS {
                     let t = Instant::now();
                     let hits = reader
                         .bm25_search(TEXT_COLUMN, &query, TOP_K, mode, None)
@@ -463,7 +463,7 @@ pub mod vector {
             dim: corpus::DIM,
             metric: VectorMetric::Cosine,
             k: TOP_K,
-            iters: warm_ITERS,
+            iters: WARM_ITERS,
             parallel: 1,
         };
         let (lance_warm, lance_index) =
@@ -543,8 +543,8 @@ pub mod vector {
         let _ = reader
             .vector_search(VEC_COLUMN, query, TOP_K, search_opts(), None)
             .expect("warmup infino vector");
-        let mut samples = Vec::with_capacity(warm_ITERS);
-        for _ in 0..warm_ITERS {
+        let mut samples = Vec::with_capacity(WARM_ITERS);
+        for _ in 0..WARM_ITERS {
             let t = Instant::now();
             let hits = reader
                 .vector_search(VEC_COLUMN, query, TOP_K, search_opts(), None)
@@ -612,7 +612,7 @@ pub mod sql {
         let corpus_rows = corpus.rows();
         let rows = sql_rows(&corpus_rows);
         let cfg = SqlRunConfig {
-            iters: warm_ITERS,
+            iters: WARM_ITERS,
             parallel: 1,
         };
         let (lance_warm, lance_index) =
@@ -676,8 +676,8 @@ pub mod sql {
             .map(|q| {
                 let reader = table.reader();
                 let _ = reader.query_sql(q.sql).expect("warmup infino sql");
-                let mut samples = Vec::with_capacity(warm_ITERS);
-                for _ in 0..warm_ITERS {
+                let mut samples = Vec::with_capacity(WARM_ITERS);
+                for _ in 0..WARM_ITERS {
                     let t = Instant::now();
                     let batches = reader.query_sql(q.sql).expect("warm infino sql");
                     std::hint::black_box(batches);
