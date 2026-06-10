@@ -114,6 +114,15 @@ fn parse_args() -> (Vec<Test>, Phases) {
 }
 
 fn main() {
+    // Isolated per-shape supertable ingest child (the supertable runner
+    // re-execs this binary with `INFINO_BENCH_SUPERTABLE_SHAPE` set).
+    // Without this intercept the child ignores the shape protocol and
+    // re-runs the whole comparison suite — recursively, since its own
+    // supertable cells spawn further children.
+    if infino_bench_utils::supertable::handle_shape_child_from_env() {
+        return;
+    }
+
     let (tests, phases) = parse_args();
     for test in tests {
         eprintln!(
