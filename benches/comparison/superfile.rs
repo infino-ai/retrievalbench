@@ -13,7 +13,8 @@ pub mod fts {
     use std::collections::HashMap;
 
     use infino_bench_utils::corpus::{MmapTextCorpus, parallel_writers, superfile_docs};
-    use infino_bench_utils::superfile::fts::{FTS_BATTERY, FTS_COLUMN, HOT_ITERS, K};
+    use infino_bench_utils::executors::fts::FTS_BATTERY;
+    use infino_bench_utils::superfile::fts::{FTS_COLUMN, K, WARM_ITERS};
     use infino_bench_utils::harness::{EngineFtsResult, InfinoFtsEngine, run_fts};
     use infino_bench_utils::markdown::{fmt_bandwidth, fmt_count, fmt_throughput, fmt_time};
     use infino_bench_utils::report::{Better, Block, Report, Section, metric, text};
@@ -41,9 +42,9 @@ pub mod fts {
         let parallel = parallel_writers();
 
         let results: Vec<(&str, EngineFtsResult)> = vec![
-            ("infino", run_fts::<InfinoFtsEngine>(FTS_COLUMN, &docs, FTS_BATTERY, K, HOT_ITERS, parallel)),
-            ("lancedb", run_fts::<LanceFtsEngine>(FTS_COLUMN, &docs, FTS_BATTERY, K, HOT_ITERS, parallel)),
-            ("tantivy", run_fts::<TantivyFtsEngine>(FTS_COLUMN, &docs, FTS_BATTERY, K, HOT_ITERS, parallel)),
+            ("infino", run_fts::<InfinoFtsEngine>(FTS_COLUMN, &docs, FTS_BATTERY, K, WARM_ITERS, parallel)),
+            ("lancedb", run_fts::<LanceFtsEngine>(FTS_COLUMN, &docs, FTS_BATTERY, K, WARM_ITERS, parallel)),
+            ("tantivy", run_fts::<TantivyFtsEngine>(FTS_COLUMN, &docs, FTS_BATTERY, K, WARM_ITERS, parallel)),
         ];
 
         let input_bytes = corpus.total_bytes() as f64;
@@ -477,7 +478,8 @@ pub mod sql {
     use infino_bench_utils::markdown::{fmt_count, fmt_time};
     use infino_bench_utils::report::{Better, Block, Report, Section, metric, text};
     use infino_bench_utils::rss;
-    use infino_bench_utils::superfile::sql::{ITERS, SQL_BATTERY, sql_rows};
+    use infino_bench_utils::executors::sql::{ITERS, SQL_BATTERY};
+    use infino_bench_utils::superfile::sql::sql_rows;
 
     use retrievalbench::LanceSqlEngine;
 

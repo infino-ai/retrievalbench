@@ -29,7 +29,7 @@ use retrievalbench::{LanceS3FtsEngine, LanceS3SqlEngine, LanceS3VectorEngine};
 const EMPTY_FTS_QUERIES: &[FtsQuery] = &[];
 const EMPTY_VECTOR_QUERIES: &[VectorQuery<'_>] = &[];
 const EMPTY_SQL_QUERIES: &[SqlQuery] = &[];
-const HOT_ITERS: usize = 20;
+const warm_ITERS: usize = 20;
 const COLD_ITERS: usize = 5;
 const TOP_K: usize = 10;
 
@@ -277,7 +277,7 @@ pub mod fts {
     use super::*;
     use infino::superfile::fts::reader::BoolMode as InfinoBoolMode;
 
-    pub fn run(build: bool, hot: bool, cold: bool) {
+    pub fn run(build: bool, warm: bool, cold: bool) {
         if let Err(reason) = tiers::supertable_backend_check() {
             eprintln!("[comparison-supertable-fts] skipped: {reason}");
             return;
@@ -288,7 +288,7 @@ pub mod fts {
             super::run();
         }
 
-        if !(hot || cold) {
+        if !(warm || cold) {
             return;
         }
 
@@ -296,31 +296,31 @@ pub mod fts {
         let infino_built = supertable::build_on_storage(supertable::Modality::Fts);
         let corpus = MmapTextCorpus::generate(n_docs, 1);
         let docs = corpus.rows();
-        let (lance_hot, lance_index) = run_fts_with_index::<LanceS3FtsEngine>(
+        let (lance_warm, lance_index) = run_fts_with_index::<LanceS3FtsEngine>(
             TEXT_COLUMN,
             &docs,
-            infino_bench_utils::superfile::fts::FTS_BATTERY,
+            infino_bench_utils::executors::fts::FTS_BATTERY,
             TOP_K,
-            HOT_ITERS,
+            warm_ITERS,
             1,
         );
 
         let mut report = Report::load("comparison-supertable-fts");
-        if hot {
-            let infino_hot = measure_infino_hot(&infino_built);
-            let lance_hot_rows: Vec<_> = lance_hot
+        if warm {
+            let infino_warm = measure_infino_warm(&infino_built);
+            let lance_warm_rows: Vec<_> = lance_warm
                 .queries
                 .iter()
                 .map(|q| (q.name, q.p50))
                 .collect();
             emit_latency_comparison(
                 &mut report,
-                "comparison/supertable/fts/hot",
-                format!("Supertable FTS comparison — hot search ({} docs)", fmt_count(n_docs)),
-                "Hot = object-store table opened with a warm consumer/cache. Engines without this tier are omitted.",
-                "hot",
-                &infino_hot,
-                &lance_hot_rows,
+                "comparison/supertable/fts/warm",
+                format!("Supertable FTS comparison — warm search ({} docs)", fmt_count(n_docs)),
+                "warm = object-store table opened with a warm consumer/cache. Engines without this tier are omitted.",
+                "warm",
+                &infino_warm,
+                &lance_warm_rows,
             );
         }
         if cold {
@@ -363,23 +363,23 @@ pub mod fts {
         (cache_dir, tiers::open_consumer(opts))
     }
 
-    fn measure_infino_hot(built: &supertable::IngestResult) -> Vec<(&'static str, Duration)> {
+    fn measure_infino_warm(built: &supertable::IngestResult) -> Vec<(&'static str, Duration)> {
         let (_cache_dir, table) = open_infino_consumer(built);
-        infino_bench_utils::superfile::fts::FTS_BATTERY
+        infino_bench_utils::executors::fts::FTS_BATTERY
             .iter()
             .map(|q| {
                 let query = q.terms.join(" ");
                 let mode = to_infino_mode(q.mode);
                 let reader = table.reader();
                 let _ = reader
-                    .bm25_search(TEXT_COLUMN, &query, TOP_K, mode)
+                    .bm25_search(TEXT_COLUMN, &query, TOP_K, mode, None)
                     .expect("warmup infino bm25");
-                let mut samples = Vec::with_capacity(HOT_ITERS);
-                for _ in 0..HOT_ITERS {
+                let mut samples = Vec::with_capacity(warm_ITERS);
+                for _ in 0..warm_ITERS {
                     let t = Instant::now();
                     let hits = reader
-                        .bm25_search(TEXT_COLUMN, &query, TOP_K, mode)
-                        .expect("hot infino bm25");
+                        .bm25_search(TEXT_COLUMN, &query, TOP_K, mode, None)
+                        .expect("warm infino bm25");
                     std::hint::black_box(hits);
                     samples.push(t.elapsed());
                 }
@@ -389,7 +389,7 @@ pub mod fts {
     }
 
     fn measure_infino_cold(built: &supertable::IngestResult) -> Vec<(&'static str, Duration)> {
-        infino_bench_utils::superfile::fts::FTS_BATTERY
+        infino_bench_utils::executors::fts::FTS_BATTERY
             .iter()
             .map(|q| {
                 let query = q.terms.join(" ");
@@ -400,7 +400,7 @@ pub mod fts {
                     let t = Instant::now();
                     let hits = table
                         .reader()
-                        .bm25_search(TEXT_COLUMN, &query, TOP_K, mode)
+                        .bm25_search(TEXT_COLUMN, &query, TOP_K, mode, None)
                         .expect("cold infino bm25");
                     std::hint::black_box(hits);
                     samples.push(t.elapsed());
@@ -413,7 +413,7 @@ pub mod fts {
     }
 
     fn measure_lance_cold(index: &retrievalbench::lance::fts::LanceFtsIndex) -> Vec<(&'static str, Duration)> {
-        infino_bench_utils::superfile::fts::FTS_BATTERY
+        infino_bench_utils::executors::fts::FTS_BATTERY
             .iter()
             .map(|q| {
                 let mut samples = Vec::with_capacity(COLD_ITERS);
@@ -433,7 +433,7 @@ pub mod vector {
     use super::*;
     use infino::superfile::reader::VectorSearchOptions;
 
-    pub fn run(build: bool, hot: bool, cold: bool) {
+    pub fn run(build: bool, warm: bool, cold: bool) {
         if let Err(reason) = tiers::supertable_backend_check() {
             eprintln!("[comparison-supertable-vector] skipped: {reason}");
             return;
@@ -441,7 +441,7 @@ pub mod vector {
         if build {
             super::run();
         }
-        if !(hot || cold) {
+        if !(warm || cold) {
             return;
         }
 
@@ -463,32 +463,32 @@ pub mod vector {
             dim: corpus::DIM,
             metric: VectorMetric::Cosine,
             k: TOP_K,
-            iters: HOT_ITERS,
+            iters: warm_ITERS,
             parallel: 1,
         };
-        let (lance_hot, lance_index) =
+        let (lance_warm, lance_index) =
             run_vector_with_index::<LanceS3VectorEngine>(cfg, vectors.as_slice(), &query_spec);
 
         let mut report = Report::load("comparison-supertable-vector");
-        if hot {
-            let infino_hot = measure_infino_hot(&infino_built, &query);
-            let lance_hot_rows: Vec<_> = lance_hot
+        if warm {
+            let infino_warm = measure_infino_warm(&infino_built, &query);
+            let lance_warm_rows: Vec<_> = lance_warm
                 .queries
                 .iter()
                 .map(|q| (q.name, q.p50))
                 .collect();
             emit_latency_comparison(
                 &mut report,
-                "comparison/supertable/vector/hot",
+                "comparison/supertable/vector/warm",
                 format!(
-                    "Supertable vector comparison — hot search ({} docs × dim={})",
+                    "Supertable vector comparison — warm search ({} docs × dim={})",
                     fmt_count(n_docs),
                     corpus::DIM
                 ),
-                "Hot = object-store table opened with a warm consumer/cache. Engines without this tier are omitted.",
-                "hot",
-                &infino_hot,
-                &lance_hot_rows,
+                "warm = object-store table opened with a warm consumer/cache. Engines without this tier are omitted.",
+                "warm",
+                &infino_warm,
+                &lance_warm_rows,
             );
         }
         if cold {
@@ -534,21 +534,21 @@ pub mod vector {
             .with_rerank_mult(20)
     }
 
-    fn measure_infino_hot(
+    fn measure_infino_warm(
         built: &supertable::IngestResult,
         query: &[f32],
     ) -> Vec<(&'static str, Duration)> {
         let (_cache_dir, table) = open_infino_consumer(built);
         let reader = table.reader();
         let _ = reader
-            .vector_search(VEC_COLUMN, query, TOP_K, search_opts())
+            .vector_search(VEC_COLUMN, query, TOP_K, search_opts(), None)
             .expect("warmup infino vector");
-        let mut samples = Vec::with_capacity(HOT_ITERS);
-        for _ in 0..HOT_ITERS {
+        let mut samples = Vec::with_capacity(warm_ITERS);
+        for _ in 0..warm_ITERS {
             let t = Instant::now();
             let hits = reader
-                .vector_search(VEC_COLUMN, query, TOP_K, search_opts())
-                .expect("hot infino vector");
+                .vector_search(VEC_COLUMN, query, TOP_K, search_opts(), None)
+                .expect("warm infino vector");
             std::hint::black_box(hits);
             samples.push(t.elapsed());
         }
@@ -565,7 +565,7 @@ pub mod vector {
             let t = Instant::now();
             let hits = table
                 .reader()
-                .vector_search(VEC_COLUMN, query, TOP_K, search_opts())
+                .vector_search(VEC_COLUMN, query, TOP_K, search_opts(), None)
                 .expect("cold infino vector");
             std::hint::black_box(hits);
             samples.push(t.elapsed());
@@ -594,7 +594,7 @@ pub mod vector {
 pub mod sql {
     use super::*;
 
-    pub fn run(build: bool, hot: bool, cold: bool) {
+    pub fn run(build: bool, warm: bool, cold: bool) {
         if let Err(reason) = tiers::supertable_backend_check() {
             eprintln!("[comparison-supertable-sql] skipped: {reason}");
             return;
@@ -602,7 +602,7 @@ pub mod sql {
         if build {
             super::run();
         }
-        if !(hot || cold) {
+        if !(warm || cold) {
             return;
         }
 
@@ -612,28 +612,28 @@ pub mod sql {
         let corpus_rows = corpus.rows();
         let rows = sql_rows(&corpus_rows);
         let cfg = SqlRunConfig {
-            iters: HOT_ITERS,
+            iters: warm_ITERS,
             parallel: 1,
         };
-        let (lance_hot, lance_index) =
-            run_sql_with_index::<LanceS3SqlEngine>(cfg, &rows, infino_bench_utils::superfile::sql::SQL_BATTERY);
+        let (lance_warm, lance_index) =
+            run_sql_with_index::<LanceS3SqlEngine>(cfg, &rows, infino_bench_utils::executors::sql::SQL_BATTERY);
 
         let mut report = Report::load("comparison-supertable-sql");
-        if hot {
-            let infino_hot = measure_infino_hot(&infino_built);
-            let lance_hot_rows: Vec<_> = lance_hot
+        if warm {
+            let infino_warm = measure_infino_warm(&infino_built);
+            let lance_warm_rows: Vec<_> = lance_warm
                 .queries
                 .iter()
                 .map(|q| (q.name, q.p50))
                 .collect();
             emit_latency_comparison(
                 &mut report,
-                "comparison/supertable/sql/hot",
-                format!("Supertable SQL comparison — hot queries ({} rows)", fmt_count(n_docs)),
-                "Hot = object-store table opened with a warm consumer/cache. Engines without this tier are omitted.",
-                "hot",
-                &infino_hot,
-                &lance_hot_rows,
+                "comparison/supertable/sql/warm",
+                format!("Supertable SQL comparison — warm queries ({} rows)", fmt_count(n_docs)),
+                "warm = object-store table opened with a warm consumer/cache. Engines without this tier are omitted.",
+                "warm",
+                &infino_warm,
+                &lance_warm_rows,
             );
         }
         if cold {
@@ -669,17 +669,17 @@ pub mod sql {
         (cache_dir, tiers::open_consumer(opts))
     }
 
-    fn measure_infino_hot(built: &supertable::IngestResult) -> Vec<(&'static str, Duration)> {
+    fn measure_infino_warm(built: &supertable::IngestResult) -> Vec<(&'static str, Duration)> {
         let (_cache_dir, table) = open_infino_consumer(built);
-        infino_bench_utils::superfile::sql::SQL_BATTERY
+        infino_bench_utils::executors::sql::SQL_BATTERY
             .iter()
             .map(|q| {
                 let reader = table.reader();
                 let _ = reader.query_sql(q.sql).expect("warmup infino sql");
-                let mut samples = Vec::with_capacity(HOT_ITERS);
-                for _ in 0..HOT_ITERS {
+                let mut samples = Vec::with_capacity(warm_ITERS);
+                for _ in 0..warm_ITERS {
                     let t = Instant::now();
-                    let batches = reader.query_sql(q.sql).expect("hot infino sql");
+                    let batches = reader.query_sql(q.sql).expect("warm infino sql");
                     std::hint::black_box(batches);
                     samples.push(t.elapsed());
                 }
@@ -689,7 +689,7 @@ pub mod sql {
     }
 
     fn measure_infino_cold(built: &supertable::IngestResult) -> Vec<(&'static str, Duration)> {
-        infino_bench_utils::superfile::sql::SQL_BATTERY
+        infino_bench_utils::executors::sql::SQL_BATTERY
             .iter()
             .map(|q| {
                 let mut samples = Vec::with_capacity(COLD_ITERS);
@@ -708,7 +708,7 @@ pub mod sql {
     }
 
     fn measure_lance_cold(index: &retrievalbench::lance::sql::LanceSqlIndex) -> Vec<(&'static str, Duration)> {
-        infino_bench_utils::superfile::sql::SQL_BATTERY
+        infino_bench_utils::executors::sql::SQL_BATTERY
             .iter()
             .map(|q| {
                 let mut samples = Vec::with_capacity(COLD_ITERS);

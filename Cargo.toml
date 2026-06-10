@@ -14,10 +14,10 @@ publish = false
 
 [dependencies]
 # infino `main` (sql-opt merged) — the framework + Infino reference engines.
-infino-bench-utils = { path = "../infino/benches/utils" }
-infino = { path = "../infino", features = ["test-helpers"] }
+infino-bench-utils = { path = "../infino-public-interface/benches/utils" }
+infino = { path = "../infino-public-interface", features = ["test-helpers"] }
 tantivy = "0.26"
-# LanceDB peer (vector + FTS + SQL, S3-capable). Async — driven through a
+# Async — driven through a
 # small tokio runtime inside the adapter. Brings its own arrow; the
 # harness only bridges plain corpus types across the boundary.
 lancedb = { version = "0.30.0", features = ["aws"] }

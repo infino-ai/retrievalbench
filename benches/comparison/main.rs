@@ -11,7 +11,7 @@
 //! cargo bench --bench comparison
 //! cargo bench --bench comparison -- superfile_fts
 //! cargo bench --bench comparison -- superfile_vector superfile_sql
-//! cargo bench --bench comparison -- supertable_fts hot
+//! cargo bench --bench comparison -- supertable_fts warm
 //! ```
 
 #[path = "superfile.rs"]
@@ -32,7 +32,7 @@ enum Test {
 #[derive(Clone, Copy)]
 struct Phases {
     build: bool,
-    hot: bool,
+    warm: bool,
     cold: bool,
 }
 
@@ -66,11 +66,11 @@ impl Test {
             Test::SuperfileFts => superfile::fts::run(),
             Test::SuperfileVector => superfile::vector::run(),
             Test::SuperfileSql => superfile::sql::run(),
-            Test::SupertableFts => supertable::fts::run(phases.build, phases.hot, phases.cold),
+            Test::SupertableFts => supertable::fts::run(phases.build, phases.warm, phases.cold),
             Test::SupertableVector => {
-                supertable::vector::run(phases.build, phases.hot, phases.cold)
+                supertable::vector::run(phases.build, phases.warm, phases.cold)
             }
-            Test::SupertableSql => supertable::sql::run(phases.build, phases.hot, phases.cold),
+            Test::SupertableSql => supertable::sql::run(phases.build, phases.warm, phases.cold),
         }
     }
 }
@@ -78,7 +78,7 @@ impl Test {
 fn parse_args() -> (Vec<Test>, Phases) {
     let mut tests = Vec::new();
     let mut build = false;
-    let mut hot = false;
+    let mut warm = false;
     let mut cold = false;
     for arg in std::env::args().skip(1).filter(|arg| !arg.starts_with('-')) {
         if let Some(test) = Test::from_arg(&arg) {
@@ -88,10 +88,10 @@ fn parse_args() -> (Vec<Test>, Phases) {
         } else {
             match arg.as_str() {
                 "build" => build = true,
-                "hot" => hot = true,
+                "warm" => warm = true,
                 "cold" => cold = true,
                 "search" => {
-                    hot = true;
+                    warm = true;
                     cold = true;
                 }
                 _ => eprintln!("[comparison] ignoring unknown selector {arg:?}"),
@@ -101,12 +101,12 @@ fn parse_args() -> (Vec<Test>, Phases) {
     if tests.is_empty() {
         tests.extend(Test::ALL);
     }
-    let phases = if build || hot || cold {
-        Phases { build, hot, cold }
+    let phases = if build || warm || cold {
+        Phases { build, warm, cold }
     } else {
         Phases {
             build: true,
-            hot: true,
+            warm: true,
             cold: true,
         }
     };
@@ -117,10 +117,10 @@ fn main() {
     let (tests, phases) = parse_args();
     for test in tests {
         eprintln!(
-            "[comparison] === {} (build={}, hot={}, cold={}) ===",
+            "[comparison] === {} (build={}, warm={}, cold={}) ===",
             test.key(),
             phases.build,
-            phases.hot,
+            phases.warm,
             phases.cold
         );
         test.run(phases);

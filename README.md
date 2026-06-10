@@ -23,9 +23,9 @@ cargo bench --bench comparison -- superfile_fts
 cargo bench --bench comparison -- superfile_vector superfile_sql
 
 # Run one or more supertable comparisons.
-cargo bench --bench comparison -- supertable_fts hot
+cargo bench --bench comparison -- supertable_fts warm
 cargo bench --bench comparison -- supertable_vector cold
-cargo bench --bench comparison -- supertable_sql build hot cold
+cargo bench --bench comparison -- supertable_sql build warm cold
 ```
 
 The superfile comparisons run Infino vs the in-memory peer adapters. The
