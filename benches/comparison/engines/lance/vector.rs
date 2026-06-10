@@ -1,0 +1,479 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: Copyright The Infino Authors
+
+//! LanceDB peer implementation of [`VectorEngine`].
+//!
+//! Builds a Lance dataset with an `IVF_PQ` index and queries it via
+//! `nearest_to`. Vector parity with Infino: `num_partitions = n_cent`,
+//! searched with `nprobes` / `refine_factor`.
+
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use arrow_array::{
+    Array, FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator,
+    RecordBatchReader, UInt64Array,
+};
+use arrow_schema::{DataType, Field, Schema};
+use futures::TryStreamExt;
+use lancedb::index::Index;
+use lancedb::index::vector::IvfPqIndexBuilder;
+use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::{DistanceType, Table};
+use tempfile::TempDir;
+use tokio::runtime::Runtime;
+
+use infino_bench_utils::corpus;
+use infino_bench_utils::executors::vector::VectorRead;
+use infino_bench_utils::harness::{
+    Capabilities, VectorEngine, VectorHit, VectorMetric, VectorSearch,
+};
+
+const ID_COL: &str = "id";
+const VEC_COL: &str = "vector";
+const VEC_TABLE: &str = "vectors";
+
+enum LanceStorage {
+    Local { _dir: TempDir },
+    S3,
+}
+
+struct LanceLocation {
+    uri: String,
+    storage_options: Vec<(String, String)>,
+    storage: LanceStorage,
+}
+
+impl LanceLocation {
+    fn local() -> Self {
+        let dir = tempfile::tempdir().expect("lance tempdir");
+        let uri = dir.path().to_str().expect("utf8 temp path").to_string();
+        Self {
+            uri,
+            storage_options: Vec::new(),
+            storage: LanceStorage::Local { _dir: dir },
+        }
+    }
+
+    fn s3(prefix: &str) -> Self {
+        let bucket = infino_bench_utils::tiers::real_s3_bucket_env()
+            .expect("INFINO_REAL_S3_BUCKET required for LanceDB S3 tier");
+        let root = infino_bench_utils::tiers::real_s3_prefix_root("retrievalbench-lance");
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before UNIX_EPOCH")
+            .as_nanos();
+        let uri = format!(
+            "s3://{}/{}/{prefix}-{}-{unique}",
+            bucket,
+            root.trim_matches('/'),
+            std::process::id(),
+        );
+        let mut storage_options = Vec::new();
+        if let Ok(region) = std::env::var("AWS_REGION").or_else(|_| std::env::var("AWS_DEFAULT_REGION")) {
+            storage_options.push(("aws_region".to_string(), region));
+        }
+        Self {
+            uri,
+            storage_options,
+            storage: LanceStorage::S3,
+        }
+    }
+}
+
+fn map_metric(metric: VectorMetric) -> DistanceType {
+    match metric {
+        VectorMetric::L2Sq => DistanceType::L2,
+        VectorMetric::Cosine => DistanceType::Cosine,
+        VectorMetric::NegDot => DistanceType::Dot,
+    }
+}
+
+fn new_runtime() -> Runtime {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime")
+}
+
+async fn connect(uri: &str, storage_options: &[(String, String)]) -> lancedb::Connection {
+    lancedb::connect(uri)
+        .storage_options(storage_options.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .execute()
+        .await
+        .expect("lancedb connect")
+}
+
+async fn open_vector_table(uri: &str, storage_options: &[(String, String)]) -> Table {
+    connect(uri, storage_options)
+        .await
+        .open_table(VEC_TABLE)
+        .execute()
+        .await
+        .expect("open lance vector table")
+}
+
+async fn build_table(
+    uri: &str,
+    storage_options: &[(String, String)],
+    vectors: &[f32],
+    dim: usize,
+    metric: VectorMetric,
+    num_partitions: u32,
+) -> Table {
+    let n_docs = vectors.len() / dim;
+    let item = Arc::new(Field::new("item", DataType::Float32, true));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(ID_COL, DataType::UInt64, false),
+        Field::new(
+            VEC_COL,
+            DataType::FixedSizeList(item.clone(), dim as i32),
+            false,
+        ),
+    ]));
+
+    let ids = UInt64Array::from((0..n_docs as u64).collect::<Vec<_>>());
+    let flat = Float32Array::from(vectors.to_vec());
+    let fsl = FixedSizeListArray::try_new(item, dim as i32, Arc::new(flat), None)
+        .expect("build FixedSizeListArray");
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(ids), Arc::new(fsl)])
+        .expect("build RecordBatch");
+    let reader: Box<dyn RecordBatchReader + Send> =
+        Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema.clone()));
+
+    let db = connect(uri, storage_options).await;
+    let table = db
+        .create_table(VEC_TABLE, reader)
+        .execute()
+        .await
+        .expect("create lance table");
+    table
+        .create_index(
+            &[VEC_COL],
+            Index::IvfPq(
+                IvfPqIndexBuilder::default()
+                    .num_partitions(num_partitions)
+                    .distance_type(map_metric(metric)),
+            ),
+        )
+        .execute()
+        .await
+        .expect("create IVF-PQ index");
+    table
+}
+
+fn partitions_for(n_cent: usize, n_docs: usize) -> u32 {
+    n_cent.max(1).min(n_docs.max(1)) as u32
+}
+
+pub struct LanceVectorEngine;
+pub struct LanceS3VectorEngine;
+
+pub struct LanceVectorIndex {
+    rt: Runtime,
+    location: LanceLocation,
+    #[allow(dead_code)]
+    column: String,
+    dim: usize,
+    metric: VectorMetric,
+    n_cent: usize,
+    table: Option<Table>,
+}
+
+impl LanceVectorIndex {
+    /// Table opened on the measured 1-writer artifact.
+    pub fn table(&self) -> &Table {
+        self.table.as_ref().expect("table requested before write")
+    }
+}
+
+/// Shared recall-calibration hook: lets the engine-generic
+/// `executors::vector::calibrate` grid drive Lance with the same
+/// `(probe, refine)` vocabulary it uses for Infino. Lance ids are the
+/// row's insertion position (`0..n_docs`), so they are already global.
+impl VectorRead for LanceVectorIndex {
+    fn topk_global(
+        &self,
+        _column: &str,
+        query: &[f32],
+        k: usize,
+        nprobe: usize,
+        rerank: usize,
+    ) -> Vec<(u32, f32)> {
+        read_index(
+            self,
+            query,
+            k,
+            VectorSearch {
+                nprobe,
+                rerank_mult: rerank,
+            },
+        )
+        .into_iter()
+        .map(|h| (h.doc_id as u32, h.distance))
+        .collect()
+    }
+}
+
+fn create_index(
+    column: &str,
+    dim: usize,
+    metric: VectorMetric,
+    n_cent: usize,
+    location: LanceLocation,
+) -> LanceVectorIndex {
+    LanceVectorIndex {
+        rt: new_runtime(),
+        location,
+        column: column.to_string(),
+        dim,
+        metric,
+        n_cent,
+        table: None,
+    }
+}
+
+fn write_index(index: &mut LanceVectorIndex, vectors: &[f32]) {
+    let n_docs = vectors.len() / index.dim;
+    let num_partitions = partitions_for(index.n_cent, n_docs);
+    let uri = index.location.uri.clone();
+    let storage_options = index.location.storage_options.clone();
+    let (dim, metric) = (index.dim, index.metric);
+    let table = index.rt.block_on(build_table(
+        &uri,
+        &storage_options,
+        vectors,
+        dim,
+        metric,
+        num_partitions,
+    ));
+    index.table = Some(table);
+}
+
+fn parallel_write_index(
+    _column: &str,
+    vectors: &[f32],
+    dim: usize,
+    metric: VectorMetric,
+    writers: usize,
+    s3: bool,
+) {
+    if writers <= 1 {
+        let rt = new_runtime();
+        let location = if s3 {
+            LanceLocation::s3("vector")
+        } else {
+            LanceLocation::local()
+        };
+        let n_docs = vectors.len() / dim;
+        let num_partitions = partitions_for(corpus::n_cent(n_docs), n_docs);
+        let table = rt.block_on(build_table(
+            &location.uri,
+            &location.storage_options,
+            vectors,
+            dim,
+            metric,
+            num_partitions,
+        ));
+        std::hint::black_box(&table);
+        return;
+    }
+    // Concurrent shard builds — the same independent-shard semantics as
+    // Infino's `par_chunks` parallel build. Build-only — tables discarded.
+    let n_docs = vectors.len() / dim;
+    let docs_per_shard = n_docs.div_ceil(writers);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..writers)
+            .filter_map(|shard| {
+                let start_doc = shard * docs_per_shard;
+                if start_doc >= n_docs {
+                    return None;
+                }
+                let len_docs = docs_per_shard.min(n_docs - start_doc);
+                let slice = &vectors[start_doc * dim..(start_doc + len_docs) * dim];
+                Some(scope.spawn(move || {
+                    let rt = new_runtime();
+                    let location = if s3 {
+                        LanceLocation::s3(&format!("vector-shard-{shard}"))
+                    } else {
+                        LanceLocation::local()
+                    };
+                    let num_partitions = partitions_for(corpus::n_cent(len_docs), len_docs);
+                    let table = rt.block_on(build_table(
+                        &location.uri,
+                        &location.storage_options,
+                        slice,
+                        dim,
+                        metric,
+                        num_partitions,
+                    ));
+                    std::hint::black_box(&table);
+                    drop(table);
+                }))
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("lance vector shard build thread panicked");
+        }
+    });
+}
+
+fn read_table(
+    rt: &Runtime,
+    table: &Table,
+    query: &[f32],
+    k: usize,
+    search: VectorSearch,
+) -> Vec<VectorHit> {
+    rt.block_on(async {
+        let mut q = table
+            .query()
+            .nearest_to(query.to_vec())
+            .expect("nearest_to")
+            .limit(k.max(1))
+            .nprobes(search.nprobe.max(1));
+        if search.rerank_mult > 1 {
+            q = q.refine_factor(search.rerank_mult as u32);
+        }
+        let stream = q.execute().await.expect("vector query execute");
+        let batches: Vec<RecordBatch> = stream.try_collect().await.expect("collect stream");
+
+        let mut out = Vec::with_capacity(k);
+        for b in &batches {
+            let ids = b
+                .column_by_name(ID_COL)
+                .expect("id column")
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .expect("u64 id column");
+            let dist = b
+                .column_by_name("_distance")
+                .expect("_distance column")
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .expect("f32 _distance column");
+            for i in 0..b.num_rows() {
+                out.push(VectorHit {
+                    doc_id: ids.value(i),
+                    distance: dist.value(i),
+                });
+            }
+        }
+        out
+    })
+}
+
+fn read_index(index: &LanceVectorIndex, query: &[f32], k: usize, search: VectorSearch) -> Vec<VectorHit> {
+    read_table(&index.rt, index.table(), query, k, search)
+}
+
+impl LanceVectorIndex {
+    /// Reopen the same S3 artifact and run one vector query. Used by the
+    /// comparison cold tier so cold does not include rebuild time.
+    pub fn cold_read(&self, query: &[f32], k: usize, search: VectorSearch) -> Vec<VectorHit> {
+        let uri = self.location.uri.clone();
+        let storage_options = self.location.storage_options.clone();
+        let table = self.rt.block_on(open_vector_table(&uri, &storage_options));
+        read_table(&self.rt, &table, query, k, search)
+    }
+}
+
+fn delete_index(index: LanceVectorIndex) {
+    if matches!(index.location.storage, LanceStorage::S3) {
+        let uri = index.location.uri.clone();
+        let storage_options = index.location.storage_options.clone();
+        index.rt.block_on(async move {
+            let db = connect(&uri, &storage_options).await;
+            let _ = db.drop_table(VEC_TABLE, &[]).await;
+        });
+    }
+}
+
+impl VectorEngine for LanceVectorEngine {
+    type Index = LanceVectorIndex;
+
+    fn name() -> &'static str {
+        "lancedb"
+    }
+
+    fn capabilities() -> Capabilities {
+        Capabilities {
+            fts: true,
+            vector: true,
+            sql: true,
+            hybrid: true,
+        }
+    }
+
+    fn create(column: &str, dim: usize, metric: VectorMetric, n_cent: usize) -> Self::Index {
+        create_index(column, dim, metric, n_cent, LanceLocation::local())
+    }
+
+    fn write(index: &mut Self::Index, vectors: &[f32]) {
+        write_index(index, vectors);
+    }
+
+    fn parallel_write(
+        column: &str,
+        vectors: &[f32],
+        dim: usize,
+        metric: VectorMetric,
+        writers: usize,
+    ) {
+        parallel_write_index(column, vectors, dim, metric, writers, false);
+    }
+
+    fn read(index: &Self::Index, query: &[f32], k: usize, search: VectorSearch) -> Vec<VectorHit> {
+        read_index(index, query, k, search)
+    }
+
+    fn close(index: &mut Self::Index) {
+        index.table = None;
+    }
+
+    fn delete(index: Self::Index) {
+        delete_index(index);
+    }
+}
+
+impl VectorEngine for LanceS3VectorEngine {
+    type Index = LanceVectorIndex;
+
+    fn name() -> &'static str {
+        "lancedb-s3"
+    }
+
+    fn capabilities() -> Capabilities {
+        LanceVectorEngine::capabilities()
+    }
+
+    fn create(column: &str, dim: usize, metric: VectorMetric, n_cent: usize) -> Self::Index {
+        create_index(column, dim, metric, n_cent, LanceLocation::s3("vector"))
+    }
+
+    fn write(index: &mut Self::Index, vectors: &[f32]) {
+        write_index(index, vectors);
+    }
+
+    fn parallel_write(
+        column: &str,
+        vectors: &[f32],
+        dim: usize,
+        metric: VectorMetric,
+        writers: usize,
+    ) {
+        parallel_write_index(column, vectors, dim, metric, writers, true);
+    }
+
+    fn read(index: &Self::Index, query: &[f32], k: usize, search: VectorSearch) -> Vec<VectorHit> {
+        read_index(index, query, k, search)
+    }
+
+    fn close(index: &mut Self::Index) {
+        index.table = None;
+    }
+
+    fn delete(index: Self::Index) {
+        delete_index(index);
+    }
+}
