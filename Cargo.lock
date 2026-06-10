@@ -5724,7 +5724,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "wide 1.4.0",
+ "wide 1.5.0",
  "xxhash-rust",
  "zstd",
 ]
@@ -8835,7 +8835,7 @@ dependencies = [
 [[package]]
 name = "rust-utils"
 version = "0.1.0"
-source = "git+ssh://git@github.com/infinohq/infino.git?branch=main#8d31c7af27ac837156653beb6f124a67499a20e0"
+source = "git+ssh://git@github.com/infinohq/infino.git?branch=main#123b1beae011eeb06c48c134b4e33e6dbc190d7f"
 dependencies = [
  "adbc_core",
  "adbc_driver_manager",
@@ -11186,9 +11186,9 @@ dependencies = [
 
 [[package]]
 name = "wide"
-version = "1.4.0"
+version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a7714cd0430a663154667c74da5d09325c2387695bee18b3f7f72825aa3693a"
+checksum = "dfdfe6a32973f2d1b268b8895845a8a96cac2f0191e72c27cc929036060dbf89"
 dependencies = [
  "bytemuck",
  "safe_arch 1.0.0",

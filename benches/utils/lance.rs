@@ -37,7 +37,9 @@ use futures::TryStreamExt;
 use lancedb::DistanceType;
 use lancedb::Table;
 use lancedb::index::Index;
-use lancedb::index::scalar::{FtsIndexBuilder, FtsQuery, FullTextSearchQuery, MatchQuery, Operator};
+use lancedb::index::scalar::{
+    BooleanQuery, FtsIndexBuilder, FtsQuery, FullTextSearchQuery, MatchQuery, Occur, Operator,
+};
 use lancedb::index::vector::IvfPqIndexBuilder;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use tokio::runtime::Runtime;
@@ -300,6 +302,75 @@ pub fn build_lance_fts_table(
     (table, t0.elapsed())
 }
 
+/// Chunked variant of [`build_lance_fts_table`] for corpora too large to
+/// hold in one `Vec`: create the table from the first chunk, `add` the
+/// rest, then build + prewarm the FTS index.
+pub fn lance_fts_table_chunked_begin(rt: &Runtime, path: &Path, ids_base: u32, docs: &[String]) -> Table {
+    rt.block_on(async move {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::UInt32, false),
+            Field::new("text", DataType::Utf8, false),
+        ]));
+        let batch = chunk_batch(&schema, ids_base, docs);
+        let reader: Box<dyn RecordBatchReader + Send> =
+            Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema.clone()));
+        let db = lancedb::connect(path.to_str().expect("path to_str"))
+            .execute()
+            .await
+            .expect("connect");
+        db.create_table("fts", reader)
+            .execute()
+            .await
+            .expect("create lance table")
+    })
+}
+
+/// Append one chunk to a table created by [`lance_fts_table_chunked_begin`].
+pub fn lance_fts_table_chunked_add(rt: &Runtime, table: &Table, ids_base: u32, docs: &[String]) {
+    rt.block_on(async move {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::UInt32, false),
+            Field::new("text", DataType::Utf8, false),
+        ]));
+        let batch = chunk_batch(&schema, ids_base, docs);
+        let reader: Box<dyn RecordBatchReader + Send> =
+            Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema.clone()));
+        table.add(reader).execute().await.expect("lance add chunk");
+    });
+}
+
+/// Build + prewarm the FTS index after all chunks are added. Same filter
+/// settings as [`build_lance_fts_table`].
+pub fn lance_fts_table_chunked_finish(rt: &Runtime, table: &Table) {
+    rt.block_on(async move {
+        let fts_params = FtsIndexBuilder::default()
+            .stem(false)
+            .remove_stop_words(false)
+            .ascii_folding(false);
+        table
+            .create_index(&["text"], Index::FTS(fts_params))
+            .execute()
+            .await
+            .expect("create fts index");
+        let idx_name = table
+            .list_indices()
+            .await
+            .expect("list indices")
+            .into_iter()
+            .next()
+            .map(|c| c.name)
+            .unwrap_or_else(|| "text_idx".into());
+        table.prewarm_index(&idx_name).await.expect("prewarm");
+    });
+}
+
+fn chunk_batch(schema: &Arc<Schema>, ids_base: u32, docs: &[String]) -> RecordBatch {
+    let ids = UInt32Array::from((ids_base..ids_base + docs.len() as u32).collect::<Vec<_>>());
+    let texts = StringArray::from(docs.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+    RecordBatch::try_new(schema.clone(), vec![Arc::new(ids), Arc::new(texts)])
+        .expect("build RecordBatch")
+}
+
 /// Execute a pre-built `FullTextSearchQuery` and return the raw result rows
 /// as `(id, score)` pairs. Used for correctness checks and calibration
 /// outside the benchmark hot path. For benchmarking use
@@ -381,4 +452,44 @@ pub fn make_lance_fts_and_query(terms: &[String]) -> FullTextSearchQuery {
     let joined = terms.join(" ");
     let match_q = MatchQuery::new(joined).with_operator(Operator::And);
     FullTextSearchQuery::new_query(FtsQuery::Match(match_q)).wand_factor(Some(1.0))
+}
+
+/// Build an OR-negation `FullTextSearchQuery`: docs matching any of
+/// `positives` (Should) with any doc containing `negated` removed
+/// (MustNot) — Lance's equivalent of infino's `"a b -c"` under Or.
+/// Construct once outside `b.iter()` and `.clone()` it per iteration.
+pub fn make_lance_fts_not_query(positives: &[&str], negated: &str) -> FullTextSearchQuery {
+    boolean_not_query(false, positives, negated)
+}
+
+/// AND-negation variant: docs must match every positive (Must) and not
+/// contain `negated` — infino's `"a b -c"` under And.
+pub fn make_lance_fts_and_not_query(positives: &[&str], negated: &str) -> FullTextSearchQuery {
+    boolean_not_query(true, positives, negated)
+}
+
+// `positives_must` instead of an `Occur` param: lance's `Occur` derives
+// neither Copy nor Clone, so it can't be reused across the map below.
+fn boolean_not_query(
+    positives_must: bool,
+    positives: &[&str],
+    negated: &str,
+) -> FullTextSearchQuery {
+    let mut clauses: Vec<(Occur, FtsQuery)> = positives
+        .iter()
+        .map(|p| {
+            let occur = if positives_must {
+                Occur::Must
+            } else {
+                Occur::Should
+            };
+            (occur, FtsQuery::Match(MatchQuery::new(p.to_string())))
+        })
+        .collect();
+    clauses.push((
+        Occur::MustNot,
+        FtsQuery::Match(MatchQuery::new(negated.to_string())),
+    ));
+    let boolean = BooleanQuery::new(clauses);
+    FullTextSearchQuery::new_query(FtsQuery::Boolean(boolean)).wand_factor(Some(1.0))
 }

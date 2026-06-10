@@ -67,6 +67,16 @@ path = "benches/fts/main_supertable.rs"
 harness = false
 
 [[bench]]
+name = "fts-negation"
+path = "benches/fts/main_negation.rs"
+harness = false
+
+[[bench]]
+name = "fts-negation-supertable"
+path = "benches/fts/main_negation_supertable.rs"
+harness = false
+
+[[bench]]
 name = "vector"
 path = "benches/vector/main.rs"
 harness = false
@@ -86,6 +96,9 @@ name = "data_structures"
 path = "benches/data-structures/main.rs"
 harness = false
 
+
 [profile.release]
 # Inherits infino's release profile via the path dep; bench builds
 # pick up infino's `lto = "thin"` automatically.
+
+

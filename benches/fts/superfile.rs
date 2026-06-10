@@ -294,6 +294,26 @@ fn bench_lance_fts_and_only(
     });
 }
 
+fn bench_lance_fts_not_only(
+    g: &mut BenchmarkGroup<WallTime>,
+    name: &str,
+    lh: &LanceFtsHandles,
+    fts_query: lancedb::index::scalar::FullTextSearchQuery,
+) {
+    // Same iter_batched + bench_lance_fts_query pattern as the OR/AND
+    // helpers; the caller picks the Should/Must + MustNot shape.
+    g.bench_function(format!("{name}_lance_top10"), |b| {
+        b.iter_batched(
+            || fts_query.clone(),
+            |q| {
+                let n = lance::bench_lance_fts_query(&lh.rt, &lh.table, q, TOP_N);
+                black_box(n)
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
+}
+
 fn bench_coredb_only(
     g: &mut BenchmarkGroup<WallTime>,
     name: &str,
@@ -613,16 +633,78 @@ fn bench(c: &mut Criterion) {
         );
         bench_lance_fts_and_only(&mut g, "five_term_and", lance_fts, &q_five_terms);
 
+        // ---- Negation (`-term`) queries ----------------------------
+        // Tantivy's QueryParser turns a leading `-` into Occur::MustNot,
+        // so the same `"<pos> -<neg>"` string the infino bench feeds
+        // bm25_search also drives Tantivy. CoreDB has no negation and is
+        // omitted from this family.
+        // Mid-frequency positives: a rank-1 positive like `term00001`
+        // has idf ≈ 0 at this corpus shape, so its whole top-k ties at
+        // score zero and ranking is meaningless. `term00050` keeps the
+        // scores differentiated.
+        let q_neg_common = parser
+            .parse_query("term00050 -term00005")
+            .expect("parse");
+        let q_neg_rare = parser
+            .parse_query("term00050 -term09000")
+            .expect("parse");
+        let q_neg_two_or = parser
+            .parse_query("term00050 term00100 -term00005")
+            .expect("parse");
+        let q_neg_two_and = parser
+            .parse_query("+term00050 +term00100 -term00005")
+            .expect("parse");
+
+        bench_tantivy_only(&mut g, "mid_pos_common_neg", t, q_neg_common.as_ref());
+        bench_lance_fts_not_only(
+            &mut g,
+            "mid_pos_common_neg",
+            lance_fts,
+            lance::make_lance_fts_not_query(&["term00050"], "term00005"),
+        );
+
+        bench_tantivy_only(&mut g, "mid_pos_rare_neg", t, q_neg_rare.as_ref());
+        bench_lance_fts_not_only(
+            &mut g,
+            "mid_pos_rare_neg",
+            lance_fts,
+            lance::make_lance_fts_not_query(&["term00050"], "term09000"),
+        );
+
+        bench_tantivy_only(&mut g, "two_mid_or_common_neg", t, q_neg_two_or.as_ref());
+        bench_lance_fts_not_only(
+            &mut g,
+            "two_mid_or_common_neg",
+            lance_fts,
+            lance::make_lance_fts_not_query(&["term00050", "term00100"], "term00005"),
+        );
+
+        bench_tantivy_only(&mut g, "two_mid_and_common_neg", t, q_neg_two_and.as_ref());
+        bench_lance_fts_not_only(
+            &mut g,
+            "two_mid_and_common_neg",
+            lance_fts,
+            lance::make_lance_fts_and_not_query(&["term00050", "term00100"], "term00005"),
+        );
+
         g.finish();
         let stats = rss_sample.stop_stats();
-        for q in QUERY_NAMES_OR.iter().chain(QUERY_NAMES_AND.iter()) {
+        for q in QUERY_NAMES_OR
+            .iter()
+            .chain(QUERY_NAMES_AND.iter())
+            .chain(QUERY_NAMES_NEGATION.iter())
+        {
             let _ = rss::write_rss_stats(
                 group_name::SUPERFILE_FTS_SEARCH,
                 &format!("{q}_tantivy_top10"),
                 stats,
             );
         }
-        for q in QUERY_NAMES_OR.iter().chain(QUERY_NAMES_AND.iter()) {
+        for q in QUERY_NAMES_OR
+            .iter()
+            .chain(QUERY_NAMES_AND.iter())
+            .chain(QUERY_NAMES_NEGATION.iter())
+        {
             let _ = rss::write_rss_stats(
                 group_name::SUPERFILE_FTS_SEARCH,
                 &format!("{q}_lance_top10"),
@@ -721,6 +803,25 @@ fn emit_json_results() {
         );
     }
 
+    // Negation family: tantivy + lance only (coredb has no negation;
+    // infino's negation numbers are manual p50s in its own report, not
+    // criterion output).
+    for q in QUERY_NAMES_NEGATION {
+        let search_group = format!("superfile_fts_search_{q}");
+        collector.add_from_criterion_with_group(
+            group_name::SUPERFILE_FTS_SEARCH,
+            &search_group,
+            &format!("{q}_tantivy_top10"),
+            Some("tantivy"),
+        );
+        collector.add_from_criterion_with_group(
+            group_name::SUPERFILE_FTS_SEARCH,
+            &search_group,
+            &format!("{q}_lance_top10"),
+            Some("lance"),
+        );
+    }
+
     // Also collect infino ingest results if available
     collector.add_from_infino(
         group_name::SUPERFILE_FTS_BUILD,
@@ -760,6 +861,17 @@ const QUERY_NAMES_AND: &[&str] = &[
     "three_wide_and",
     "three_similar_and",
     "five_term_and",
+];
+
+/// Negation (`-term`) queries: positives scored, the negated term's docs
+/// excluded. infino parses `-term` in `bm25_search`; Tantivy via
+/// `QueryParser` (`Occur::MustNot`); Lance via a `BooleanQuery` with a
+/// `MustNot` clause. CoreDB has no negation, so its column stays `—`.
+const QUERY_NAMES_NEGATION: &[&str] = &[
+    "mid_pos_common_neg",
+    "mid_pos_rare_neg",
+    "two_mid_or_common_neg",
+    "two_mid_and_common_neg",
 ];
 
 fn emit_ingest_markdown() {
@@ -923,6 +1035,15 @@ fn emit_search_markdown() {
         body.push_str("|-------------------|------------|------------|------------|-------------|------------|------------|------------|------------|-----------------------|\n");
         for q in QUERY_NAMES_AND {
             row_or(q, &mut body); // row_or reads Lance col too; same format for AND
+        }
+        body.push('\n');
+    }
+    {
+        body.push_str("**Negation (`-term`) queries:** (CoreDB has no negation)\n\n");
+        body.push_str("| Query             | infino     | infino RSS | Tantivy    | Tantivy RSS | CoreDB    | CoreDB RSS  | Lance FTS  | Lance RSS  | Winner                |\n");
+        body.push_str("|-------------------|------------|------------|------------|-------------|------------|------------|------------|------------|-----------------------|\n");
+        for q in QUERY_NAMES_NEGATION {
+            row_or(q, &mut body);
         }
         body.push('\n');
     }
