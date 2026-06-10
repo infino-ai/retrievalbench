@@ -48,7 +48,7 @@ pub mod fts {
         ];
 
         let input_bytes = corpus.total_bytes() as f64;
-        let mut report = Report::load("comparison-fts");
+        let mut report = Report::load_plain("comparison-fts");
 
         // Index by (engine, writers) for build and (engine, query_name) for queries
         let build_map: HashMap<(&str, usize), _> = results
@@ -373,7 +373,7 @@ pub mod vector {
         let lance_rows = calibrated_rows(&lance_idx, "lancedb");
 
         let input_bytes = (n_docs * corpus::DIM * std::mem::size_of::<f32>()) as f64;
-        let mut report = Report::load("comparison-vector");
+        let mut report = Report::load_plain("comparison-vector");
 
         let build_map: HashMap<(&str, usize), _> = results
             .iter()
@@ -598,7 +598,7 @@ pub mod sql {
             ("lancedb", run_sql::<LanceSqlEngine>(cfg, &rows, SQL_BATTERY)),
         ];
 
-        let mut report = Report::load("comparison-sql");
+        let mut report = Report::load_plain("comparison-sql");
 
         let build_map: HashMap<(&str, usize), _> = results
             .iter()

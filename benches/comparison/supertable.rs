@@ -241,7 +241,7 @@ pub fn run() {
         return;
     }
 
-    let mut report = Report::load("comparison-supertable");
+    let mut report = Report::load_plain("comparison-supertable");
     report.emit(&Section {
         anchor: "comparison/supertable/ingest".into(),
         title: format!(
@@ -305,7 +305,7 @@ pub mod fts {
             1,
         );
 
-        let mut report = Report::load("comparison-supertable-fts");
+        let mut report = Report::load_plain("comparison-supertable-fts");
         if warm {
             let infino_warm = measure_infino_warm(&infino_built);
             let lance_warm_rows: Vec<_> = lance_warm
@@ -469,7 +469,7 @@ pub mod vector {
         let (lance_warm, lance_index) =
             run_vector_with_index::<LanceS3VectorEngine>(cfg, vectors.as_slice(), &query_spec);
 
-        let mut report = Report::load("comparison-supertable-vector");
+        let mut report = Report::load_plain("comparison-supertable-vector");
         if warm {
             let infino_warm = measure_infino_warm(&infino_built, &query);
             let lance_warm_rows: Vec<_> = lance_warm
@@ -618,7 +618,7 @@ pub mod sql {
         let (lance_warm, lance_index) =
             run_sql_with_index::<LanceS3SqlEngine>(cfg, &rows, infino_bench_utils::executors::sql::SQL_BATTERY);
 
-        let mut report = Report::load("comparison-supertable-sql");
+        let mut report = Report::load_plain("comparison-supertable-sql");
         if warm {
             let infino_warm = measure_infino_warm(&infino_built);
             let lance_warm_rows: Vec<_> = lance_warm
