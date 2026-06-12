@@ -20,7 +20,7 @@ tantivy = "0.26"
 # Async — driven through a
 # small tokio runtime inside the adapter. Brings its own arrow; the
 # harness only bridges plain corpus types across the boundary.
-lancedb = { version = "0.30.0", features = ["aws"] }
+lancedb = { version = "0.30.0", features = ["aws", "azure"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 # Arrow at the exact version lancedb 0.30 resolves to (== infino's 58.3.0),
 # used to build the RecordBatches handed to LanceDB. futures drives the
