@@ -8,7 +8,6 @@
 //! searched with `nprobes` / `refine_factor`.
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow_array::{
     Array, FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator,
@@ -20,7 +19,6 @@ use lancedb::index::Index;
 use lancedb::index::vector::IvfPqIndexBuilder;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{DistanceType, Table};
-use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 use infino_bench_utils::corpus;
@@ -29,57 +27,11 @@ use infino_bench_utils::harness::{
     Capabilities, VectorEngine, VectorHit, VectorMetric, VectorSearch,
 };
 
+use super::location::{new_runtime, LanceLocation, LanceStorage};
+
 const ID_COL: &str = "id";
 const VEC_COL: &str = "vector";
 const VEC_TABLE: &str = "vectors";
-
-enum LanceStorage {
-    Local { _dir: TempDir },
-    S3,
-}
-
-struct LanceLocation {
-    uri: String,
-    storage_options: Vec<(String, String)>,
-    storage: LanceStorage,
-}
-
-impl LanceLocation {
-    fn local() -> Self {
-        let dir = tempfile::tempdir().expect("lance tempdir");
-        let uri = dir.path().to_str().expect("utf8 temp path").to_string();
-        Self {
-            uri,
-            storage_options: Vec::new(),
-            storage: LanceStorage::Local { _dir: dir },
-        }
-    }
-
-    fn s3(prefix: &str) -> Self {
-        let bucket = infino_bench_utils::tiers::real_s3_bucket_env()
-            .expect("INFINO_REAL_S3_BUCKET required for LanceDB S3 tier");
-        let root = infino_bench_utils::tiers::real_s3_prefix_root("retrievalbench-lance");
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock before UNIX_EPOCH")
-            .as_nanos();
-        let uri = format!(
-            "s3://{}/{}/{prefix}-{}-{unique}",
-            bucket,
-            root.trim_matches('/'),
-            std::process::id(),
-        );
-        let mut storage_options = Vec::new();
-        if let Ok(region) = std::env::var("AWS_REGION").or_else(|_| std::env::var("AWS_DEFAULT_REGION")) {
-            storage_options.push(("aws_region".to_string(), region));
-        }
-        Self {
-            uri,
-            storage_options,
-            storage: LanceStorage::S3,
-        }
-    }
-}
 
 fn map_metric(metric: VectorMetric) -> DistanceType {
     match metric {
@@ -87,13 +39,6 @@ fn map_metric(metric: VectorMetric) -> DistanceType {
         VectorMetric::Cosine => DistanceType::Cosine,
         VectorMetric::NegDot => DistanceType::Dot,
     }
-}
-
-fn new_runtime() -> Runtime {
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime")
 }
 
 async fn connect(uri: &str, storage_options: &[(String, String)]) -> lancedb::Connection {
@@ -167,7 +112,7 @@ fn partitions_for(n_cent: usize, n_docs: usize) -> u32 {
 }
 
 pub struct LanceVectorEngine;
-pub struct LanceS3VectorEngine;
+pub struct LanceRemoteVectorEngine;
 
 pub struct LanceVectorIndex {
     rt: Runtime,
@@ -256,12 +201,12 @@ fn parallel_write_index(
     dim: usize,
     metric: VectorMetric,
     writers: usize,
-    s3: bool,
+    remote: bool,
 ) {
     if writers <= 1 {
         let rt = new_runtime();
-        let location = if s3 {
-            LanceLocation::s3("vector")
+        let location = if remote {
+            LanceLocation::remote("vector")
         } else {
             LanceLocation::local()
         };
@@ -293,8 +238,8 @@ fn parallel_write_index(
                 let slice = &vectors[start_doc * dim..(start_doc + len_docs) * dim];
                 Some(scope.spawn(move || {
                     let rt = new_runtime();
-                    let location = if s3 {
-                        LanceLocation::s3(&format!("vector-shard-{shard}"))
+                    let location = if remote {
+                        LanceLocation::remote(&format!("vector-shard-{shard}"))
                     } else {
                         LanceLocation::local()
                     };
@@ -368,7 +313,7 @@ fn read_index(index: &LanceVectorIndex, query: &[f32], k: usize, search: VectorS
 }
 
 impl LanceVectorIndex {
-    /// Reopen the same S3 artifact and run one vector query. Used by the
+    /// Reopen the same remote artifact and run one vector query. Used by the
     /// comparison cold tier so cold does not include rebuild time.
     pub fn cold_read(&self, query: &[f32], k: usize, search: VectorSearch) -> Vec<VectorHit> {
         let uri = self.location.uri.clone();
@@ -379,7 +324,7 @@ impl LanceVectorIndex {
 }
 
 fn delete_index(index: LanceVectorIndex) {
-    if matches!(index.location.storage, LanceStorage::S3) {
+    if matches!(index.location.storage, LanceStorage::Remote) {
         let uri = index.location.uri.clone();
         let storage_options = index.location.storage_options.clone();
         index.rt.block_on(async move {
@@ -436,11 +381,11 @@ impl VectorEngine for LanceVectorEngine {
     }
 }
 
-impl VectorEngine for LanceS3VectorEngine {
+impl VectorEngine for LanceRemoteVectorEngine {
     type Index = LanceVectorIndex;
 
     fn name() -> &'static str {
-        "lancedb-s3"
+        super::location::backend_label()
     }
 
     fn capabilities() -> Capabilities {
@@ -448,7 +393,7 @@ impl VectorEngine for LanceS3VectorEngine {
     }
 
     fn create(column: &str, dim: usize, metric: VectorMetric, n_cent: usize) -> Self::Index {
-        create_index(column, dim, metric, n_cent, LanceLocation::s3("vector"))
+        create_index(column, dim, metric, n_cent, LanceLocation::remote("vector"))
     }
 
     fn write(index: &mut Self::Index, vectors: &[f32]) {

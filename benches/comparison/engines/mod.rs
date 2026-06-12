@@ -14,6 +14,6 @@ pub mod lance;
 pub mod tantivy;
 
 pub use lance::fts::{LanceFtsEngine, LanceRemoteFtsEngine};
-pub use lance::sql::{LanceS3SqlEngine, LanceSqlEngine};
-pub use lance::vector::{LanceS3VectorEngine, LanceVectorEngine};
+pub use lance::sql::{LanceRemoteSqlEngine, LanceSqlEngine};
+pub use lance::vector::{LanceRemoteVectorEngine, LanceVectorEngine};
 pub use tantivy::fts::TantivyFtsEngine;

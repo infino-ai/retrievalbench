@@ -8,7 +8,6 @@
 //! through a DataFusion context backed by the Lance dataset.
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow_array::{Int64Array, RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
@@ -17,68 +16,14 @@ use datafusion::prelude::SessionContext;
 use futures::TryStreamExt;
 use lancedb::query::ExecutableQuery;
 use lancedb::Table;
-use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 use infino_bench_utils::harness::{Capabilities, SqlEngine, SqlOutput, SqlRow};
 
+use super::location::{new_runtime, LanceLocation, LanceStorage};
+
 const SQL_TABLE: &str = "sql";
 const SQL_VIEW: &str = "supertable";
-
-enum LanceStorage {
-    Local { _dir: TempDir },
-    S3,
-}
-
-struct LanceLocation {
-    uri: String,
-    storage_options: Vec<(String, String)>,
-    storage: LanceStorage,
-}
-
-impl LanceLocation {
-    fn local() -> Self {
-        let dir = tempfile::tempdir().expect("lance tempdir");
-        let uri = dir.path().to_str().expect("utf8 temp path").to_string();
-        Self {
-            uri,
-            storage_options: Vec::new(),
-            storage: LanceStorage::Local { _dir: dir },
-        }
-    }
-
-    fn s3(prefix: &str) -> Self {
-        let bucket = infino_bench_utils::tiers::real_s3_bucket_env()
-            .expect("INFINO_REAL_S3_BUCKET required for LanceDB S3 tier");
-        let root = infino_bench_utils::tiers::real_s3_prefix_root("retrievalbench-lance");
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock before UNIX_EPOCH")
-            .as_nanos();
-        let uri = format!(
-            "s3://{}/{}/{prefix}-{}-{unique}",
-            bucket,
-            root.trim_matches('/'),
-            std::process::id(),
-        );
-        let mut storage_options = Vec::new();
-        if let Ok(region) = std::env::var("AWS_REGION").or_else(|_| std::env::var("AWS_DEFAULT_REGION")) {
-            storage_options.push(("aws_region".to_string(), region));
-        }
-        Self {
-            uri,
-            storage_options,
-            storage: LanceStorage::S3,
-        }
-    }
-}
-
-fn new_runtime() -> Runtime {
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime")
-}
 
 async fn connect(uri: &str, storage_options: &[(String, String)]) -> lancedb::Connection {
     lancedb::connect(uri)
@@ -148,7 +93,7 @@ async fn register_sql_ctx(table: &Table) -> SessionContext {
 }
 
 pub struct LanceSqlEngine;
-pub struct LanceS3SqlEngine;
+pub struct LanceRemoteSqlEngine;
 
 pub struct LanceSqlIndex {
     rt: Runtime,
@@ -190,11 +135,11 @@ fn write_index(index: &mut LanceSqlIndex, rows: &[SqlRow<'_>]) {
     index.ctx = Some(ctx);
 }
 
-fn parallel_write_index(rows: &[SqlRow<'_>], writers: usize, s3: bool) {
+fn parallel_write_index(rows: &[SqlRow<'_>], writers: usize, remote: bool) {
     if writers <= 1 {
         let rt = new_runtime();
-        let location = if s3 {
-            LanceLocation::s3("sql")
+        let location = if remote {
+            LanceLocation::remote("sql")
         } else {
             LanceLocation::local()
         };
@@ -208,8 +153,8 @@ fn parallel_write_index(rows: &[SqlRow<'_>], writers: usize, s3: bool) {
         .enumerate()
         .map(|(i, shard)| {
             let rt = new_runtime();
-            let location = if s3 {
-                LanceLocation::s3(&format!("sql-shard-{i}"))
+            let location = if remote {
+                LanceLocation::remote(&format!("sql-shard-{i}"))
             } else {
                 LanceLocation::local()
             };
@@ -230,7 +175,7 @@ fn read_index(index: &LanceSqlIndex, sql: &str) -> SqlOutput {
 }
 
 impl LanceSqlIndex {
-    /// Reopen the same S3 artifact and run one SQL query. Used by the
+    /// Reopen the same remote artifact and run one SQL query. Used by the
     /// comparison cold tier so cold does not include rebuild time.
     pub fn cold_read(&self, sql: &str) -> SqlOutput {
         let uri = self.location.uri.clone();
@@ -248,7 +193,7 @@ impl LanceSqlIndex {
 }
 
 fn delete_index(index: LanceSqlIndex) {
-    if matches!(index.location.storage, LanceStorage::S3) {
+    if matches!(index.location.storage, LanceStorage::Remote) {
         let uri = index.location.uri.clone();
         let storage_options = index.location.storage_options.clone();
         index.rt.block_on(async move {
@@ -300,11 +245,11 @@ impl SqlEngine for LanceSqlEngine {
     }
 }
 
-impl SqlEngine for LanceS3SqlEngine {
+impl SqlEngine for LanceRemoteSqlEngine {
     type Index = LanceSqlIndex;
 
     fn name() -> &'static str {
-        "lancedb-s3"
+        super::location::backend_label()
     }
 
     fn capabilities() -> Capabilities {
@@ -312,7 +257,7 @@ impl SqlEngine for LanceS3SqlEngine {
     }
 
     fn create() -> Self::Index {
-        create_index(LanceLocation::s3("sql"))
+        create_index(LanceLocation::remote("sql"))
     }
 
     fn write(index: &mut Self::Index, rows: &[SqlRow<'_>]) {
