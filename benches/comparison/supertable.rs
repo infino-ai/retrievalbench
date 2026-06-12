@@ -304,7 +304,8 @@ pub mod fts {
         }
 
         let n_docs = supertable::n_docs();
-        let infino_built = supertable::build_on_storage(supertable::Modality::Fts);
+        let infino_corpus = supertable::prepare_corpus(supertable::Modality::Fts);
+        let infino_built = supertable::build_on_storage(supertable::Modality::Fts, &infino_corpus);
         let corpus = MmapTextCorpus::generate(n_docs, 1);
         let docs = corpus.rows();
         let (lance_warm, lance_index) = run_fts_with_index::<LanceS3FtsEngine>(
@@ -459,7 +460,9 @@ pub mod vector {
         }
 
         let n_docs = supertable::n_docs();
-        let infino_built = supertable::build_on_storage(supertable::Modality::Vector);
+        let infino_corpus = supertable::prepare_corpus(supertable::Modality::Vector);
+        let infino_built =
+            supertable::build_on_storage(supertable::Modality::Vector, &infino_corpus);
         // Same seed as the ingested corpus (`CORPUS_VEC_SEED = 1`), so the
         // regenerated vectors are bit-identical to what was committed and
         // brute-force ground truth is valid for both engines.
@@ -726,7 +729,8 @@ pub mod sql {
         }
 
         let n_docs = supertable::n_docs();
-        let infino_built = supertable::build_on_storage(supertable::Modality::Sql);
+        let infino_corpus = supertable::prepare_corpus(supertable::Modality::Sql);
+        let infino_built = supertable::build_on_storage(supertable::Modality::Sql, &infino_corpus);
         let corpus = MmapTextCorpus::generate(n_docs, 1);
         let corpus_rows = corpus.rows();
         let rows = sql_rows(&corpus_rows);

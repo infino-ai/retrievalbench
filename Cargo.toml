@@ -14,8 +14,8 @@ publish = false
 
 [dependencies]
 # infino `main` (sql-opt merged) — the framework + Infino reference engines.
-infino-bench-utils = { path = "../infino-public-interface/benches/utils" }
-infino = { path = "../infino-public-interface", features = ["test-helpers"] }
+infino-bench-utils = { git = "ssh://git@github.com/infino-ai/infino.git" }
+infino = { git = "ssh://git@github.com/infino-ai/infino.git", features = ["test-helpers"] }
 tantivy = "0.26"
 # Async — driven through a
 # small tokio runtime inside the adapter. Brings its own arrow; the
