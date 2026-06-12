@@ -5,7 +5,7 @@
 //!
 //! Tantivy is the in-memory full-text peer: it has no object-store
 //! backend, so it appears only in the in-memory FTS comparison (never in
-//! the S3 table). The adapter builds a RAM index over the same
+//! the object-store table). The adapter builds a RAM index over the same
 //! `(doc_id, text)` corpus every other engine indexes and runs BM25
 //! top-k through a [`BooleanQuery`] of [`TermQuery`]s — `Should` for OR,
 //! `Must` for AND — so scoring and boolean semantics line up with the
