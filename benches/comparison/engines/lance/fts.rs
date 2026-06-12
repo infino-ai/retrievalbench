@@ -8,7 +8,6 @@
 //! are disabled to match the simple tokenizer the other engines use.
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow_array::{Float32Array, RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
@@ -17,68 +16,14 @@ use lancedb::index::Index;
 use lancedb::index::scalar::{FtsIndexBuilder, FtsQuery, FullTextSearchQuery, MatchQuery, Operator};
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::Table;
-use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 use infino_bench_utils::harness::{BoolMode, Capabilities, FtsEngine, Hit};
 
+use super::location::{new_runtime, LanceLocation, LanceStorage};
+
 const ID_COL: &str = "id";
 const FTS_TABLE: &str = "fts";
-
-enum LanceStorage {
-    Local { _dir: TempDir },
-    S3,
-}
-
-struct LanceLocation {
-    uri: String,
-    storage_options: Vec<(String, String)>,
-    storage: LanceStorage,
-}
-
-impl LanceLocation {
-    fn local() -> Self {
-        let dir = tempfile::tempdir().expect("lance tempdir");
-        let uri = dir.path().to_str().expect("utf8 temp path").to_string();
-        Self {
-            uri,
-            storage_options: Vec::new(),
-            storage: LanceStorage::Local { _dir: dir },
-        }
-    }
-
-    fn s3(prefix: &str) -> Self {
-        let bucket = infino_bench_utils::tiers::real_s3_bucket_env()
-            .expect("INFINO_REAL_S3_BUCKET required for LanceDB S3 tier");
-        let root = infino_bench_utils::tiers::real_s3_prefix_root("retrievalbench-lance");
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock before UNIX_EPOCH")
-            .as_nanos();
-        let uri = format!(
-            "s3://{}/{}/{prefix}-{}-{unique}",
-            bucket,
-            root.trim_matches('/'),
-            std::process::id(),
-        );
-        let mut storage_options = Vec::new();
-        if let Ok(region) = std::env::var("AWS_REGION").or_else(|_| std::env::var("AWS_DEFAULT_REGION")) {
-            storage_options.push(("aws_region".to_string(), region));
-        }
-        Self {
-            uri,
-            storage_options,
-            storage: LanceStorage::S3,
-        }
-    }
-}
-
-fn new_runtime() -> Runtime {
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime")
-}
 
 async fn connect(uri: &str, storage_options: &[(String, String)]) -> lancedb::Connection {
     lancedb::connect(uri)
@@ -133,7 +78,7 @@ async fn build_fts_table(
 }
 
 pub struct LanceFtsEngine;
-pub struct LanceS3FtsEngine;
+pub struct LanceRemoteFtsEngine;
 
 pub struct LanceFtsIndex {
     rt: Runtime,
@@ -168,11 +113,11 @@ fn write_index(index: &mut LanceFtsIndex, docs: &[(u64, &str)]) {
     index.table = Some(table);
 }
 
-fn parallel_write_index(column: &str, docs: &[(u64, &str)], writers: usize, s3: bool) {
+fn parallel_write_index(column: &str, docs: &[(u64, &str)], writers: usize, remote: bool) {
     if writers <= 1 {
         let rt = new_runtime();
-        let location = if s3 {
-            LanceLocation::s3("fts")
+        let location = if remote {
+            LanceLocation::remote("fts")
         } else {
             LanceLocation::local()
         };
@@ -195,8 +140,8 @@ fn parallel_write_index(column: &str, docs: &[(u64, &str)], writers: usize, s3: 
             .map(|(i, shard)| {
                 scope.spawn(move || {
                     let rt = new_runtime();
-                    let location = if s3 {
-                        LanceLocation::s3(&format!("fts-shard-{i}"))
+                    let location = if remote {
+                        LanceLocation::remote(&format!("fts-shard-{i}"))
                     } else {
                         LanceLocation::local()
                     };
@@ -274,7 +219,7 @@ fn read_index(index: &LanceFtsIndex, terms: &[&str], k: usize, mode: BoolMode) -
 }
 
 impl LanceFtsIndex {
-    /// Reopen the same S3 artifact and run one FTS query. Used by the
+    /// Reopen the same remote artifact and run one FTS query. Used by the
     /// comparison cold tier so cold does not include rebuild time.
     pub fn cold_read(&self, terms: &[&str], k: usize, mode: BoolMode) -> Vec<Hit> {
         let uri = self.location.uri.clone();
@@ -285,7 +230,7 @@ impl LanceFtsIndex {
 }
 
 fn delete_index(index: LanceFtsIndex) {
-    if matches!(index.location.storage, LanceStorage::S3) {
+    if matches!(index.location.storage, LanceStorage::Remote) {
         let uri = index.location.uri.clone();
         let storage_options = index.location.storage_options.clone();
         index.rt.block_on(async move {
@@ -336,11 +281,11 @@ impl FtsEngine for LanceFtsEngine {
     }
 }
 
-impl FtsEngine for LanceS3FtsEngine {
+impl FtsEngine for LanceRemoteFtsEngine {
     type Index = LanceFtsIndex;
 
     fn name() -> &'static str {
-        "lancedb-s3"
+        super::location::backend_label()
     }
 
     fn capabilities() -> Capabilities {
@@ -348,7 +293,7 @@ impl FtsEngine for LanceS3FtsEngine {
     }
 
     fn create(column: &str) -> Self::Index {
-        create_index(column, LanceLocation::s3("fts"))
+        create_index(column, LanceLocation::remote("fts"))
     }
 
     fn write(index: &mut Self::Index, docs: &[(u64, &str)]) {
