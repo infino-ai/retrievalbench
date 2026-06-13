@@ -13,7 +13,7 @@
 
 use tantivy::collector::TopDocs;
 use tantivy::query::{BooleanQuery, Occur, Query, TermQuery};
-use tantivy::schema::{Field, IndexRecordOption, Schema, FAST, INDEXED, STORED, TEXT};
+use tantivy::schema::{FAST, Field, INDEXED, IndexRecordOption, STORED, Schema, TEXT};
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
 
 use infino_bench_utils::harness::{BoolMode, Capabilities, FtsEngine, Hit};
@@ -167,10 +167,7 @@ impl FtsEngine for TantivyFtsEngine {
         top.into_iter()
             .map(|(score, addr)| {
                 let seg = searcher.segment_reader(addr.segment_ord);
-                let ff = seg
-                    .fast_fields()
-                    .u64(ID_FIELD)
-                    .expect("doc_id fast field");
+                let ff = seg.fast_fields().u64(ID_FIELD).expect("doc_id fast field");
                 let doc_id = ff.first(addr.doc_id).expect("doc_id value");
                 Hit { doc_id, score }
             })
@@ -185,4 +182,3 @@ impl FtsEngine for TantivyFtsEngine {
         // Dropping the in-RAM index releases the artifact.
     }
 }
-

@@ -16,7 +16,7 @@ use infino_bench_utils::harness::{
     VectorSearch, run_fts, run_fts_with_index, run_sql, run_sql_with_index, run_vector,
     run_vector_with_index,
 };
-use infino_bench_utils::ingest::supertable::{self, N_COMMIT_CHUNKS, TEXT_COLUMN, VEC_COLUMN};
+use infino_bench_utils::ingest::supertable::{self, TEXT_COLUMN, VEC_COLUMN};
 use infino_bench_utils::markdown::{fmt_count, fmt_throughput, fmt_time};
 use infino_bench_utils::report::{Better, Block, Cell, Report, Section, metric, text};
 use infino_bench_utils::rss;
@@ -74,7 +74,11 @@ fn emit_latency_comparison(
             text(*name),
             metric(infino_ns, fmt_time(infino_ns), Better::Lower),
             metric(lance_ns, fmt_time(lance_ns), Better::Lower),
-            metric(lance_ns - infino_ns, pct(lance_ns, infino_ns), Better::Lower),
+            metric(
+                lance_ns - infino_ns,
+                pct(lance_ns, infino_ns),
+                Better::Lower,
+            ),
         ]);
     }
     report.emit(&Section {
@@ -105,7 +109,11 @@ fn lance_fts_ingest_row(n_docs: usize) -> Vec<Cell> {
     let build = result.builds.first().expect("lancedb-s3 build row");
     let secs = build.phase.wall.as_secs_f64();
     let wall_ns = secs * 1e9;
-    let throughput = if secs > 0.0 { n_docs as f64 / secs } else { 0.0 };
+    let throughput = if secs > 0.0 {
+        n_docs as f64 / secs
+    } else {
+        0.0
+    };
     vec![
         text("LanceDB FTS-only"),
         metric(wall_ns, fmt_time(wall_ns), Better::Lower),
@@ -147,7 +155,11 @@ fn lance_vector_ingest_row(n_docs: usize) -> Vec<Cell> {
     let build = result.builds.first().expect("lancedb-s3 vector build row");
     let secs = build.wall.as_secs_f64();
     let wall_ns = secs * 1e9;
-    let throughput = if secs > 0.0 { n_docs as f64 / secs } else { 0.0 };
+    let throughput = if secs > 0.0 {
+        n_docs as f64 / secs
+    } else {
+        0.0
+    };
     vec![
         text("LanceDB vector-only"),
         metric(wall_ns, fmt_time(wall_ns), Better::Lower),
@@ -187,7 +199,11 @@ fn lance_sql_ingest_row(n_docs: usize) -> Vec<Cell> {
     let build = result.builds.first().expect("lancedb-s3 sql build row");
     let secs = build.wall.as_secs_f64();
     let wall_ns = secs * 1e9;
-    let throughput = if secs > 0.0 { n_docs as f64 / secs } else { 0.0 };
+    let throughput = if secs > 0.0 {
+        n_docs as f64 / secs
+    } else {
+        0.0
+    };
     vec![
         text("LanceDB SQL"),
         metric(wall_ns, fmt_time(wall_ns), Better::Lower),
@@ -235,7 +251,7 @@ pub fn run() {
     eprintln!(
         "[comparison-supertable] ingesting {} docs ({} commits) per Infino supertable shape...",
         fmt_count(n_docs),
-        N_COMMIT_CHUNKS
+        supertable::n_commits()
     );
 
     let shape_results = run_ingest_shapes_isolated();
@@ -259,7 +275,7 @@ pub fn run() {
             "Supertable comparison — ingest, multi-segment / object-store ({} docs × dim={}, {} commits)",
             fmt_count(n_docs),
             infino_bench_utils::corpus::DIM,
-            N_COMMIT_CHUNKS
+            supertable::n_commits()
         ),
         note: "Infino baseline rows are produced by the same isolated shape measurement as infino's own supertable bench: `SupertableWriter::append` + `commit` to object storage, one subprocess per shape. Peer rows use existing comparison drivers with public object-store configuration; LanceDB FTS/vector/SQL rows are driven by `run_fts`/`run_vector`/`run_sql` with S3-configured adapters.".into(),
         blocks: vec![Block {
@@ -320,15 +336,15 @@ pub mod fts {
         let mut report = Report::load_plain("comparison-supertable-fts");
         if warm {
             let infino_warm = measure_infino_warm(&infino_built);
-            let lance_warm_rows: Vec<_> = lance_warm
-                .queries
-                .iter()
-                .map(|q| (q.name, q.p50))
-                .collect();
+            let lance_warm_rows: Vec<_> =
+                lance_warm.queries.iter().map(|q| (q.name, q.p50)).collect();
             emit_latency_comparison(
                 &mut report,
                 "comparison/supertable/fts/warm",
-                format!("Supertable FTS comparison — warm search ({} docs)", fmt_count(n_docs)),
+                format!(
+                    "Supertable FTS comparison — warm search ({} docs)",
+                    fmt_count(n_docs)
+                ),
                 "warm = object-store table opened with a warm consumer/cache. Engines without this tier are omitted.",
                 "warm",
                 &infino_warm,
@@ -341,7 +357,10 @@ pub mod fts {
             emit_latency_comparison(
                 &mut report,
                 "comparison/supertable/fts/cold",
-                format!("Supertable FTS comparison — cold search ({} docs)", fmt_count(n_docs)),
+                format!(
+                    "Supertable FTS comparison — cold search ({} docs)",
+                    fmt_count(n_docs)
+                ),
                 "Cold = fresh object-store read path per iteration; rebuild time is excluded.",
                 "cold",
                 &infino_cold,
@@ -362,7 +381,9 @@ pub mod fts {
         }
     }
 
-    fn open_infino_consumer(built: &supertable::IngestResult) -> (tempfile::TempDir, infino::supertable::Supertable) {
+    fn open_infino_consumer(
+        built: &supertable::IngestResult,
+    ) -> (tempfile::TempDir, infino::supertable::Supertable) {
         let (cache_dir, cache) = tiers::fresh_supertable_search_cache(
             Arc::clone(&built.storage),
             Some(built.total_index_bytes),
@@ -424,7 +445,9 @@ pub mod fts {
             .collect()
     }
 
-    fn measure_lance_cold(index: &retrievalbench::lance::fts::LanceFtsIndex) -> Vec<(&'static str, Duration)> {
+    fn measure_lance_cold(
+        index: &retrievalbench::lance::fts::LanceFtsIndex,
+    ) -> Vec<(&'static str, Duration)> {
         infino_bench_utils::executors::fts::FTS_BATTERY
             .iter()
             .map(|q| {
@@ -476,8 +499,11 @@ pub mod vector {
             parallel: 1,
         };
         // Build only; warm rows come from the recall-calibrated protocol.
-        let (_lance_build, lance_index) =
-            run_vector_with_index::<LanceS3VectorEngine>(cfg, vectors.as_slice(), EMPTY_VECTOR_QUERIES);
+        let (_lance_build, lance_index) = run_vector_with_index::<LanceS3VectorEngine>(
+            cfg,
+            vectors.as_slice(),
+            EMPTY_VECTOR_QUERIES,
+        );
 
         let mut report = Report::load_plain("comparison-supertable-vector");
         {
@@ -490,13 +516,21 @@ pub mod vector {
             // recall axis too.
             let vslice = vectors.as_slice();
             let q_corr = corpus::generate_realistic_queries(
-                vslice, n_docs, exec_vec::N_CORRECTNESS_QUERIES,
-                exec_vec::QUERY_CORRECTNESS_SEED, true, exec_vec::QUERY_SIGMA,
+                vslice,
+                n_docs,
+                exec_vec::N_CORRECTNESS_QUERIES,
+                exec_vec::QUERY_CORRECTNESS_SEED,
+                true,
+                exec_vec::QUERY_SIGMA,
             );
             let gt_corr = corpus::ground_truth(vslice, n_docs, &q_corr, TOP_K);
             let q_cal = corpus::generate_realistic_queries(
-                vslice, n_docs, exec_vec::N_CALIBRATION_QUERIES,
-                exec_vec::QUERY_CALIBRATION_SEED, true, exec_vec::QUERY_SIGMA,
+                vslice,
+                n_docs,
+                exec_vec::N_CALIBRATION_QUERIES,
+                exec_vec::QUERY_CALIBRATION_SEED,
+                true,
+                exec_vec::QUERY_SIGMA,
             );
             let gt_cal = corpus::ground_truth(vslice, n_docs, &q_cal, TOP_K);
 
@@ -514,19 +548,30 @@ pub mod vector {
             // Correctness gate doubles as a cache warmer for both engines
             // (one full pass over the correctness battery each).
             let infino_gate = exec_vec::mean_recall(
-                &table, VEC_COLUMN, &q_corr, &gt_corr, TOP_K,
-                exec_vec::CORRECTNESS_NPROBE, exec_vec::CORRECTNESS_RERANK_MULT,
+                &table,
+                VEC_COLUMN,
+                &q_corr,
+                &gt_corr,
+                TOP_K,
+                exec_vec::CORRECTNESS_NPROBE,
+                exec_vec::CORRECTNESS_RERANK_MULT,
             );
             let lance_gate = exec_vec::mean_recall(
-                &lance_index, VEC_COLUMN, &q_corr, &gt_corr, TOP_K,
-                exec_vec::CORRECTNESS_NPROBE, exec_vec::CORRECTNESS_RERANK_MULT,
+                &lance_index,
+                VEC_COLUMN,
+                &q_corr,
+                &gt_corr,
+                TOP_K,
+                exec_vec::CORRECTNESS_NPROBE,
+                exec_vec::CORRECTNESS_RERANK_MULT,
             );
             eprintln!(
                 "[comparison-supertable-vector] correctness recall@{TOP_K}: infino={infino_gate:.3} lancedb-s3={lance_gate:.3}",
             );
 
             let infino_rows = calibrated_rows(&table, "infino", VEC_COLUMN, &q_cal, &gt_cal);
-            let lance_rows = calibrated_rows(&lance_index, "lancedb-s3", VEC_COLUMN, &q_cal, &gt_cal);
+            let lance_rows =
+                calibrated_rows(&lance_index, "lancedb-s3", VEC_COLUMN, &q_cal, &gt_cal);
 
             const NS_PER_SEC: f64 = 1e9;
             let mut rows = Vec::new();
@@ -535,8 +580,13 @@ pub mod vector {
                     Some((probe, refine)) => format!("p={probe}, r={refine}"),
                     None => "—".into(),
                 };
-                let fmt_recall =
-                    |r: f32| if r.is_nan() { "—".into() } else { format!("{r:.3}") };
+                let fmt_recall = |r: f32| {
+                    if r.is_nan() {
+                        "—".into()
+                    } else {
+                        format!("{r:.3}")
+                    }
+                };
                 let mut row = vec![
                     text(inf.label.clone()),
                     text(fmt_point(inf.point)),
@@ -644,7 +694,9 @@ pub mod vector {
         }
     }
 
-    fn open_infino_consumer(built: &supertable::IngestResult) -> (tempfile::TempDir, infino::supertable::Supertable) {
+    fn open_infino_consumer(
+        built: &supertable::IngestResult,
+    ) -> (tempfile::TempDir, infino::supertable::Supertable) {
         let (cache_dir, cache) = tiers::fresh_supertable_search_cache(
             Arc::clone(&built.storage),
             Some(built.total_index_bytes),
@@ -738,21 +790,24 @@ pub mod sql {
             iters: WARM_ITERS,
             parallel: 1,
         };
-        let (lance_warm, lance_index) =
-            run_sql_with_index::<LanceS3SqlEngine>(cfg, &rows, infino_bench_utils::executors::sql::SQL_BATTERY);
+        let (lance_warm, lance_index) = run_sql_with_index::<LanceS3SqlEngine>(
+            cfg,
+            &rows,
+            infino_bench_utils::executors::sql::SQL_BATTERY,
+        );
 
         let mut report = Report::load_plain("comparison-supertable-sql");
         if warm {
             let infino_warm = measure_infino_warm(&infino_built);
-            let lance_warm_rows: Vec<_> = lance_warm
-                .queries
-                .iter()
-                .map(|q| (q.name, q.p50))
-                .collect();
+            let lance_warm_rows: Vec<_> =
+                lance_warm.queries.iter().map(|q| (q.name, q.p50)).collect();
             emit_latency_comparison(
                 &mut report,
                 "comparison/supertable/sql/warm",
-                format!("Supertable SQL comparison — warm queries ({} rows)", fmt_count(n_docs)),
+                format!(
+                    "Supertable SQL comparison — warm queries ({} rows)",
+                    fmt_count(n_docs)
+                ),
                 "warm = object-store table opened with a warm consumer/cache. Engines without this tier are omitted.",
                 "warm",
                 &infino_warm,
@@ -765,7 +820,10 @@ pub mod sql {
             emit_latency_comparison(
                 &mut report,
                 "comparison/supertable/sql/cold",
-                format!("Supertable SQL comparison — cold queries ({} rows)", fmt_count(n_docs)),
+                format!(
+                    "Supertable SQL comparison — cold queries ({} rows)",
+                    fmt_count(n_docs)
+                ),
                 "Cold = fresh object-store read path per iteration; rebuild time is excluded.",
                 "cold",
                 &infino_cold,
@@ -779,7 +837,9 @@ pub mod sql {
         }
     }
 
-    fn open_infino_consumer(built: &supertable::IngestResult) -> (tempfile::TempDir, infino::supertable::Supertable) {
+    fn open_infino_consumer(
+        built: &supertable::IngestResult,
+    ) -> (tempfile::TempDir, infino::supertable::Supertable) {
         let (cache_dir, cache) = tiers::fresh_supertable_search_cache(
             Arc::clone(&built.storage),
             Some(built.total_index_bytes),
@@ -830,7 +890,9 @@ pub mod sql {
             .collect()
     }
 
-    fn measure_lance_cold(index: &retrievalbench::lance::sql::LanceSqlIndex) -> Vec<(&'static str, Duration)> {
+    fn measure_lance_cold(
+        index: &retrievalbench::lance::sql::LanceSqlIndex,
+    ) -> Vec<(&'static str, Duration)> {
         infino_bench_utils::executors::sql::SQL_BATTERY
             .iter()
             .map(|q| {

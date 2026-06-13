@@ -10,13 +10,13 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use arrow_array::{Int64Array, RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray, UInt64Array};
+use arrow_array::{Int64Array, RecordBatch, StringArray, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
 use futures::TryStreamExt;
-use lancedb::query::ExecutableQuery;
 use lancedb::Table;
+use lancedb::query::ExecutableQuery;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
@@ -24,6 +24,7 @@ use infino_bench_utils::harness::{Capabilities, SqlEngine, SqlOutput, SqlRow};
 
 const SQL_TABLE: &str = "sql";
 const SQL_VIEW: &str = "supertable";
+const LANCE_TEXT_BATCH_ROWS: usize = 100_000;
 
 enum LanceStorage {
     Local { _dir: TempDir },
@@ -62,7 +63,9 @@ impl LanceLocation {
             std::process::id(),
         );
         let mut storage_options = Vec::new();
-        if let Ok(region) = std::env::var("AWS_REGION").or_else(|_| std::env::var("AWS_DEFAULT_REGION")) {
+        if let Ok(region) =
+            std::env::var("AWS_REGION").or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+        {
             storage_options.push(("aws_region".to_string(), region));
         }
         Self {
@@ -82,7 +85,11 @@ fn new_runtime() -> Runtime {
 
 async fn connect(uri: &str, storage_options: &[(String, String)]) -> lancedb::Connection {
     lancedb::connect(uri)
-        .storage_options(storage_options.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .storage_options(
+            storage_options
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str())),
+        )
         .execute()
         .await
         .expect("lancedb connect")
@@ -108,29 +115,34 @@ async fn build_sql_table(
         Field::new("category", DataType::Utf8, false),
         Field::new("rating", DataType::Int64, false),
     ]));
-    let ids = UInt64Array::from(rows.iter().map(|r| r.doc_id).collect::<Vec<_>>());
-    let titles = StringArray::from(rows.iter().map(|r| r.title).collect::<Vec<&str>>());
-    let categories = StringArray::from(rows.iter().map(|r| r.category).collect::<Vec<&str>>());
-    let ratings = Int64Array::from(rows.iter().map(|r| r.score).collect::<Vec<_>>())
-;
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(ids),
-            Arc::new(titles),
-            Arc::new(categories),
-            Arc::new(ratings),
-        ],
-    )
-    .expect("build RecordBatch");
-    let reader: Box<dyn RecordBatchReader + Send> =
-        Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema.clone()));
-
     let db = connect(uri, storage_options).await;
-    db.create_table(SQL_TABLE, reader)
+    let table = db
+        .create_empty_table(SQL_TABLE, schema.clone())
         .execute()
         .await
-        .expect("create lance sql table")
+        .expect("create lance sql table");
+    for chunk in rows.chunks(LANCE_TEXT_BATCH_ROWS) {
+        let ids = UInt64Array::from(chunk.iter().map(|r| r.doc_id).collect::<Vec<_>>());
+        let titles = StringArray::from(chunk.iter().map(|r| r.title).collect::<Vec<&str>>());
+        let categories = StringArray::from(chunk.iter().map(|r| r.category).collect::<Vec<&str>>());
+        let ratings = Int64Array::from(chunk.iter().map(|r| r.score).collect::<Vec<_>>());
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(ids),
+                Arc::new(titles),
+                Arc::new(categories),
+                Arc::new(ratings),
+            ],
+        )
+        .expect("build RecordBatch");
+        table
+            .add(vec![batch])
+            .execute()
+            .await
+            .expect("add lance sql batch");
+    }
+    table
 }
 
 async fn register_sql_ctx(table: &Table) -> SessionContext {
@@ -198,7 +210,11 @@ fn parallel_write_index(rows: &[SqlRow<'_>], writers: usize, s3: bool) {
         } else {
             LanceLocation::local()
         };
-        let table = rt.block_on(build_sql_table(&location.uri, &location.storage_options, rows));
+        let table = rt.block_on(build_sql_table(
+            &location.uri,
+            &location.storage_options,
+            rows,
+        ));
         std::hint::black_box(&table);
         return;
     }
@@ -213,7 +229,11 @@ fn parallel_write_index(rows: &[SqlRow<'_>], writers: usize, s3: bool) {
             } else {
                 LanceLocation::local()
             };
-            rt.block_on(build_sql_table(&location.uri, &location.storage_options, shard))
+            rt.block_on(build_sql_table(
+                &location.uri,
+                &location.storage_options,
+                shard,
+            ))
         })
         .collect();
     std::hint::black_box(built);
