@@ -453,10 +453,12 @@ pub mod fts {
             .map(|q| {
                 let mut samples = Vec::with_capacity(COLD_ITERS);
                 for _ in 0..COLD_ITERS {
+                    let table = index.cold_open();
                     let t = Instant::now();
-                    let hits = index.cold_read(q.terms, TOP_K, q.mode);
+                    let hits = index.cold_search(&table, q.terms, TOP_K, q.mode);
                     std::hint::black_box(hits);
                     samples.push(t.elapsed());
+                    drop(table);
                 }
                 (q.name, p50(&mut samples))
             })
@@ -756,10 +758,12 @@ pub mod vector {
         };
         let mut samples = Vec::with_capacity(COLD_ITERS);
         for _ in 0..COLD_ITERS {
+            let table = index.cold_open();
             let t = Instant::now();
-            let hits = index.cold_read(query, TOP_K, search);
+            let hits = index.cold_search(&table, query, TOP_K, search);
             std::hint::black_box(hits);
             samples.push(t.elapsed());
+            drop(table);
         }
         p50(&mut samples)
     }
@@ -898,10 +902,12 @@ pub mod sql {
             .map(|q| {
                 let mut samples = Vec::with_capacity(COLD_ITERS);
                 for _ in 0..COLD_ITERS {
+                    let ctx = index.cold_open();
                     let t = Instant::now();
-                    let out = index.cold_read(q.sql);
+                    let out = index.cold_query(&ctx, q.sql);
                     std::hint::black_box(out);
                     samples.push(t.elapsed());
+                    drop(ctx);
                 }
                 (q.name, p50(&mut samples))
             })

@@ -387,6 +387,19 @@ impl LanceVectorIndex {
         let table = self.rt.block_on(open_vector_table(&uri, &storage_options));
         read_table(&self.rt, &table, query, k, search)
     }
+
+    /// Open the cold S3 artifact without querying. The cold tier times only
+    /// the search, so the open is excluded — matching the Infino cold path.
+    pub fn cold_open(&self) -> Table {
+        let uri = self.location.uri.clone();
+        let storage_options = self.location.storage_options.clone();
+        self.rt.block_on(open_vector_table(&uri, &storage_options))
+    }
+
+    /// Run one vector query against an already-opened cold table (search only).
+    pub fn cold_search(&self, table: &Table, query: &[f32], k: usize, search: VectorSearch) -> Vec<VectorHit> {
+        read_table(&self.rt, table, query, k, search)
+    }
 }
 
 fn delete_index(index: LanceVectorIndex) {

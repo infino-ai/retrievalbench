@@ -295,6 +295,21 @@ impl LanceFtsIndex {
         let table = self.rt.block_on(open_fts_table(&uri, &storage_options));
         read_table(&self.rt, &table, &self.column, terms, k, mode)
     }
+
+    /// Open the cold S3 artifact (connect + open_table) without querying.
+    /// The cold tier times only the search, so the open is excluded —
+    /// matching the Infino cold path, which opens its consumer outside the
+    /// timed region.
+    pub fn cold_open(&self) -> Table {
+        let uri = self.location.uri.clone();
+        let storage_options = self.location.storage_options.clone();
+        self.rt.block_on(open_fts_table(&uri, &storage_options))
+    }
+
+    /// Run one FTS query against an already-opened cold table (search only).
+    pub fn cold_search(&self, table: &Table, terms: &[&str], k: usize, mode: BoolMode) -> Vec<Hit> {
+        read_table(&self.rt, table, &self.column, terms, k, mode)
+    }
 }
 
 fn delete_index(index: LanceFtsIndex) {

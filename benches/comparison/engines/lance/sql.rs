@@ -265,6 +265,31 @@ impl LanceSqlIndex {
             }
         })
     }
+
+    /// Open the cold S3 artifact (connect + open_table + register the scanned
+    /// dataset into a DataFusion context) without running the query. The cold
+    /// tier times only the query, so this hydration is excluded — matching the
+    /// Infino cold path, which opens its consumer outside the timed region.
+    /// Note: `register_sql_ctx` scans the table into an in-memory `MemTable`,
+    /// so the subsequent `cold_query` runs in memory.
+    pub fn cold_open(&self) -> SessionContext {
+        let uri = self.location.uri.clone();
+        let storage_options = self.location.storage_options.clone();
+        self.rt.block_on(async {
+            let table = open_sql_table(&uri, &storage_options).await;
+            register_sql_ctx(&table).await
+        })
+    }
+
+    /// Run one SQL query against an already-opened cold context (query only).
+    pub fn cold_query(&self, ctx: &SessionContext, sql: &str) -> SqlOutput {
+        let rows = self.rt.block_on(async {
+            let df = ctx.sql(sql).await.expect("plan cold sql");
+            let batches = df.collect().await.expect("collect cold sql result");
+            batches.iter().map(|b| b.num_rows()).sum::<usize>()
+        });
+        SqlOutput { rows }
+    }
 }
 
 fn delete_index(index: LanceSqlIndex) {
