@@ -11,8 +11,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow_array::{
-    Array, FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator,
-    RecordBatchReader, UInt64Array,
+    Array, FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator, RecordBatchReader,
+    UInt64Array,
 };
 use arrow_schema::{DataType, Field, Schema};
 use futures::TryStreamExt;
@@ -70,7 +70,9 @@ impl LanceLocation {
             std::process::id(),
         );
         let mut storage_options = Vec::new();
-        if let Ok(region) = std::env::var("AWS_REGION").or_else(|_| std::env::var("AWS_DEFAULT_REGION")) {
+        if let Ok(region) =
+            std::env::var("AWS_REGION").or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+        {
             storage_options.push(("aws_region".to_string(), region));
         }
         Self {
@@ -98,7 +100,11 @@ fn new_runtime() -> Runtime {
 
 async fn connect(uri: &str, storage_options: &[(String, String)]) -> lancedb::Connection {
     lancedb::connect(uri)
-        .storage_options(storage_options.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .storage_options(
+            storage_options
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str())),
+        )
         .execute()
         .await
         .expect("lancedb connect")
@@ -363,7 +369,12 @@ fn read_table(
     })
 }
 
-fn read_index(index: &LanceVectorIndex, query: &[f32], k: usize, search: VectorSearch) -> Vec<VectorHit> {
+fn read_index(
+    index: &LanceVectorIndex,
+    query: &[f32],
+    k: usize,
+    search: VectorSearch,
+) -> Vec<VectorHit> {
     read_table(&index.rt, index.table(), query, k, search)
 }
 
@@ -375,6 +386,19 @@ impl LanceVectorIndex {
         let storage_options = self.location.storage_options.clone();
         let table = self.rt.block_on(open_vector_table(&uri, &storage_options));
         read_table(&self.rt, &table, query, k, search)
+    }
+
+    /// Open the cold S3 artifact without querying. The cold tier times only
+    /// the search, so the open is excluded — matching the Infino cold path.
+    pub fn cold_open(&self) -> Table {
+        let uri = self.location.uri.clone();
+        let storage_options = self.location.storage_options.clone();
+        self.rt.block_on(open_vector_table(&uri, &storage_options))
+    }
+
+    /// Run one vector query against an already-opened cold table (search only).
+    pub fn cold_search(&self, table: &Table, query: &[f32], k: usize, search: VectorSearch) -> Vec<VectorHit> {
+        read_table(&self.rt, table, query, k, search)
     }
 }
 

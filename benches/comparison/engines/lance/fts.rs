@@ -10,13 +10,15 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use arrow_array::{Float32Array, RecordBatch, RecordBatchIterator, RecordBatchReader, StringArray, UInt64Array};
+use arrow_array::{Float32Array, RecordBatch, StringArray, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
 use futures::TryStreamExt;
-use lancedb::index::Index;
-use lancedb::index::scalar::{FtsIndexBuilder, FtsQuery, FullTextSearchQuery, MatchQuery, Operator};
-use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::Table;
+use lancedb::index::Index;
+use lancedb::index::scalar::{
+    FtsIndexBuilder, FtsQuery, FullTextSearchQuery, MatchQuery, Operator,
+};
+use lancedb::query::{ExecutableQuery, QueryBase};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
@@ -24,6 +26,7 @@ use infino_bench_utils::harness::{BoolMode, Capabilities, FtsEngine, Hit};
 
 const ID_COL: &str = "id";
 const FTS_TABLE: &str = "fts";
+const LANCE_TEXT_BATCH_ROWS: usize = 100_000;
 
 enum LanceStorage {
     Local { _dir: TempDir },
@@ -62,7 +65,9 @@ impl LanceLocation {
             std::process::id(),
         );
         let mut storage_options = Vec::new();
-        if let Ok(region) = std::env::var("AWS_REGION").or_else(|_| std::env::var("AWS_DEFAULT_REGION")) {
+        if let Ok(region) =
+            std::env::var("AWS_REGION").or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+        {
             storage_options.push(("aws_region".to_string(), region));
         }
         Self {
@@ -82,7 +87,11 @@ fn new_runtime() -> Runtime {
 
 async fn connect(uri: &str, storage_options: &[(String, String)]) -> lancedb::Connection {
     lancedb::connect(uri)
-        .storage_options(storage_options.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .storage_options(
+            storage_options
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str())),
+        )
         .execute()
         .await
         .expect("lancedb connect")
@@ -107,19 +116,23 @@ async fn build_fts_table(
         Field::new(ID_COL, DataType::UInt64, false),
         Field::new(column, DataType::Utf8, false),
     ]));
-    let ids = UInt64Array::from(docs.iter().map(|(id, _)| *id).collect::<Vec<_>>());
-    let texts = StringArray::from(docs.iter().map(|(_, t)| *t).collect::<Vec<&str>>());
-    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(ids), Arc::new(texts)])
-        .expect("build RecordBatch");
-    let reader: Box<dyn RecordBatchReader + Send> =
-        Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema.clone()));
-
     let db = connect(uri, storage_options).await;
     let table = db
-        .create_table(FTS_TABLE, reader)
+        .create_empty_table(FTS_TABLE, schema.clone())
         .execute()
         .await
         .expect("create lance fts table");
+    for chunk in docs.chunks(LANCE_TEXT_BATCH_ROWS) {
+        let ids = UInt64Array::from(chunk.iter().map(|(id, _)| *id).collect::<Vec<_>>());
+        let texts = StringArray::from(chunk.iter().map(|(_, t)| *t).collect::<Vec<&str>>());
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(ids), Arc::new(texts)])
+            .expect("build RecordBatch");
+        table
+            .add(vec![batch])
+            .execute()
+            .await
+            .expect("add lance fts batch");
+    }
     let params = FtsIndexBuilder::default()
         .stem(false)
         .remove_stop_words(false)
@@ -282,6 +295,21 @@ impl LanceFtsIndex {
         let table = self.rt.block_on(open_fts_table(&uri, &storage_options));
         read_table(&self.rt, &table, &self.column, terms, k, mode)
     }
+
+    /// Open the cold S3 artifact (connect + open_table) without querying.
+    /// The cold tier times only the search, so the open is excluded —
+    /// matching the Infino cold path, which opens its consumer outside the
+    /// timed region.
+    pub fn cold_open(&self) -> Table {
+        let uri = self.location.uri.clone();
+        let storage_options = self.location.storage_options.clone();
+        self.rt.block_on(open_fts_table(&uri, &storage_options))
+    }
+
+    /// Run one FTS query against an already-opened cold table (search only).
+    pub fn cold_search(&self, table: &Table, terms: &[&str], k: usize, mode: BoolMode) -> Vec<Hit> {
+        read_table(&self.rt, table, &self.column, terms, k, mode)
+    }
 }
 
 fn delete_index(index: LanceFtsIndex) {
@@ -371,5 +399,3 @@ impl FtsEngine for LanceS3FtsEngine {
         delete_index(index);
     }
 }
-
-

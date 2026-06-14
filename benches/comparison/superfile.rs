@@ -14,11 +14,11 @@ pub mod fts {
 
     use infino_bench_utils::corpus::{MmapTextCorpus, parallel_writers, superfile_docs};
     use infino_bench_utils::executors::fts::FTS_BATTERY;
-    use infino_bench_utils::superfile::fts::{FTS_COLUMN, K, WARM_ITERS};
     use infino_bench_utils::harness::{EngineFtsResult, InfinoFtsEngine, run_fts};
     use infino_bench_utils::markdown::{fmt_bandwidth, fmt_count, fmt_throughput, fmt_time};
     use infino_bench_utils::report::{Better, Block, Report, Section, metric, text};
     use infino_bench_utils::rss;
+    use infino_bench_utils::superfile::fts::{FTS_COLUMN, K, WARM_ITERS};
 
     use retrievalbench::{LanceFtsEngine, TantivyFtsEngine};
 
@@ -42,9 +42,25 @@ pub mod fts {
         let parallel = parallel_writers();
 
         let results: Vec<(&str, EngineFtsResult)> = vec![
-            ("infino", run_fts::<InfinoFtsEngine>(FTS_COLUMN, &docs, FTS_BATTERY, K, WARM_ITERS, parallel)),
-            ("lancedb", run_fts::<LanceFtsEngine>(FTS_COLUMN, &docs, FTS_BATTERY, K, WARM_ITERS, parallel)),
-            ("tantivy", run_fts::<TantivyFtsEngine>(FTS_COLUMN, &docs, FTS_BATTERY, K, WARM_ITERS, parallel)),
+            (
+                "infino",
+                run_fts::<InfinoFtsEngine>(FTS_COLUMN, &docs, FTS_BATTERY, K, WARM_ITERS, parallel),
+            ),
+            (
+                "lancedb",
+                run_fts::<LanceFtsEngine>(FTS_COLUMN, &docs, FTS_BATTERY, K, WARM_ITERS, parallel),
+            ),
+            (
+                "tantivy",
+                run_fts::<TantivyFtsEngine>(
+                    FTS_COLUMN,
+                    &docs,
+                    FTS_BATTERY,
+                    K,
+                    WARM_ITERS,
+                    parallel,
+                ),
+            ),
         ];
 
         let input_bytes = corpus.total_bytes() as f64;
@@ -80,13 +96,37 @@ pub mod fts {
             let base_thr = n_docs as f64 / base_secs;
             let base_bw = input_bytes / base_secs;
 
-            let label = text(if *w == 1 { "1 writer".into() } else { format!("{w} writers") });
+            let label = text(if *w == 1 {
+                "1 writer".into()
+            } else {
+                format!("{w} writers")
+            });
             let mut time_row = vec![label];
-            let mut thr_row = vec![text(if *w == 1 { "1 writer".into() } else { format!("{w} writers") })];
-            let mut bw_row = vec![text(if *w == 1 { "1 writer".into() } else { format!("{w} writers") })];
-            let mut peak_row = vec![text(if *w == 1 { "1 writer".into() } else { format!("{w} writers") })];
-            let mut med_row = vec![text(if *w == 1 { "1 writer".into() } else { format!("{w} writers") })];
-            let mut p90_row = vec![text(if *w == 1 { "1 writer".into() } else { format!("{w} writers") })];
+            let mut thr_row = vec![text(if *w == 1 {
+                "1 writer".into()
+            } else {
+                format!("{w} writers")
+            })];
+            let mut bw_row = vec![text(if *w == 1 {
+                "1 writer".into()
+            } else {
+                format!("{w} writers")
+            })];
+            let mut peak_row = vec![text(if *w == 1 {
+                "1 writer".into()
+            } else {
+                format!("{w} writers")
+            })];
+            let mut med_row = vec![text(if *w == 1 {
+                "1 writer".into()
+            } else {
+                format!("{w} writers")
+            })];
+            let mut p90_row = vec![text(if *w == 1 {
+                "1 writer".into()
+            } else {
+                format!("{w} writers")
+            })];
 
             for eng in &engines {
                 let b = build_map.get(&(eng, *w)).expect("build stat");
@@ -127,17 +167,26 @@ pub mod fts {
                 bw_row.push(metric(bw - base_bw, pct(bw, base_bw), Better::Higher));
                 peak_row.push(metric(
                     b.phase.rss.peak_rss_bytes as f64 - base.phase.rss.peak_rss_bytes as f64,
-                    pct(b.phase.rss.peak_rss_bytes as f64, base.phase.rss.peak_rss_bytes as f64),
+                    pct(
+                        b.phase.rss.peak_rss_bytes as f64,
+                        base.phase.rss.peak_rss_bytes as f64,
+                    ),
                     Better::Lower,
                 ));
                 med_row.push(metric(
                     b.phase.rss.median_rss_bytes as f64 - base.phase.rss.median_rss_bytes as f64,
-                    pct(b.phase.rss.median_rss_bytes as f64, base.phase.rss.median_rss_bytes as f64),
+                    pct(
+                        b.phase.rss.median_rss_bytes as f64,
+                        base.phase.rss.median_rss_bytes as f64,
+                    ),
                     Better::Lower,
                 ));
                 p90_row.push(metric(
                     b.phase.rss.p90_rss_bytes as f64 - base.phase.rss.p90_rss_bytes as f64,
-                    pct(b.phase.rss.p90_rss_bytes as f64, base.phase.rss.p90_rss_bytes as f64),
+                    pct(
+                        b.phase.rss.p90_rss_bytes as f64,
+                        base.phase.rss.p90_rss_bytes as f64,
+                    ),
                     Better::Lower,
                 ));
             }
@@ -280,10 +329,14 @@ pub mod vector {
     ) -> Vec<CalRow> {
         let mut rows = Vec::new();
         for &target in exec_vec::RECALL_TARGETS {
-            eprintln!("[comparison-vector] {engine}: calibrating recall@{target:.2}: grid over probes/refines ({} queries)...", qc.len());
+            eprintln!(
+                "[comparison-vector] {engine}: calibrating recall@{target:.2}: grid over probes/refines ({} queries)...",
+                qc.len()
+            );
             match exec_vec::calibrate(reader, column, qc, tc, target, TOP_K, "comparison-vector") {
                 Some(c) => {
-                    let t = exec_vec::measure_warm(reader, column, &qc[0], TOP_K, c.probe, c.refine);
+                    let t =
+                        exec_vec::measure_warm(reader, column, &qc[0], TOP_K, c.probe, c.refine);
                     rows.push(CalRow {
                         label: format!("{target:.2}"),
                         point: Some((c.probe, c.refine)),
@@ -300,10 +353,21 @@ pub mod vector {
             }
         }
         let recall = exec_vec::mean_recall(
-            reader, column, qc, tc, TOP_K, DEFAULT_NPROBE, DEFAULT_RERANK_MULT,
+            reader,
+            column,
+            qc,
+            tc,
+            TOP_K,
+            DEFAULT_NPROBE,
+            DEFAULT_RERANK_MULT,
         );
         let t = exec_vec::measure_warm(
-            reader, column, &qc[0], TOP_K, DEFAULT_NPROBE, DEFAULT_RERANK_MULT,
+            reader,
+            column,
+            &qc[0],
+            TOP_K,
+            DEFAULT_NPROBE,
+            DEFAULT_RERANK_MULT,
         );
         rows.push(CalRow {
             label: "default".into(),
@@ -360,12 +424,22 @@ pub mod vector {
         let qcorr = queries_correctness();
         let tcorr = ground_truth_correctness();
         let infino_gate = exec_vec::mean_recall(
-            infino_idx.reader(), VEC_COLUMN, qcorr, tcorr, TOP_K,
-            exec_vec::CORRECTNESS_NPROBE, exec_vec::CORRECTNESS_RERANK_MULT,
+            infino_idx.reader(),
+            VEC_COLUMN,
+            qcorr,
+            tcorr,
+            TOP_K,
+            exec_vec::CORRECTNESS_NPROBE,
+            exec_vec::CORRECTNESS_RERANK_MULT,
         );
         let lance_gate = exec_vec::mean_recall(
-            &lance_idx, VEC_COLUMN, qcorr, tcorr, TOP_K,
-            exec_vec::CORRECTNESS_NPROBE, exec_vec::CORRECTNESS_RERANK_MULT,
+            &lance_idx,
+            VEC_COLUMN,
+            qcorr,
+            tcorr,
+            TOP_K,
+            exec_vec::CORRECTNESS_NPROBE,
+            exec_vec::CORRECTNESS_RERANK_MULT,
         );
         eprintln!(
             "[comparison-vector] correctness recall@{TOP_K}: infino={infino_gate:.3} lancedb={lance_gate:.3} (floor {:.2})",
@@ -408,13 +482,37 @@ pub mod vector {
             let base_thr = n_docs as f64 / base_secs;
             let base_bw = input_bytes / base_secs;
 
-            let label = text(if *w == 1 { "1 writer".into() } else { format!("{w} writers") });
+            let label = text(if *w == 1 {
+                "1 writer".into()
+            } else {
+                format!("{w} writers")
+            });
             let mut time_row = vec![label];
-            let mut thr_row = vec![text(if *w == 1 { "1 writer".into() } else { format!("{w} writers") })];
-            let mut bw_row = vec![text(if *w == 1 { "1 writer".into() } else { format!("{w} writers") })];
-            let mut peak_row = vec![text(if *w == 1 { "1 writer".into() } else { format!("{w} writers") })];
-            let mut med_row = vec![text(if *w == 1 { "1 writer".into() } else { format!("{w} writers") })];
-            let mut p90_row = vec![text(if *w == 1 { "1 writer".into() } else { format!("{w} writers") })];
+            let mut thr_row = vec![text(if *w == 1 {
+                "1 writer".into()
+            } else {
+                format!("{w} writers")
+            })];
+            let mut bw_row = vec![text(if *w == 1 {
+                "1 writer".into()
+            } else {
+                format!("{w} writers")
+            })];
+            let mut peak_row = vec![text(if *w == 1 {
+                "1 writer".into()
+            } else {
+                format!("{w} writers")
+            })];
+            let mut med_row = vec![text(if *w == 1 {
+                "1 writer".into()
+            } else {
+                format!("{w} writers")
+            })];
+            let mut p90_row = vec![text(if *w == 1 {
+                "1 writer".into()
+            } else {
+                format!("{w} writers")
+            })];
 
             for eng in &engines {
                 let b = build_map.get(&(eng, *w)).expect("build stat");
@@ -460,7 +558,10 @@ pub mod vector {
                 ));
                 med_row.push(metric(
                     b.rss.median_rss_bytes as f64 - base.rss.median_rss_bytes as f64,
-                    pct(b.rss.median_rss_bytes as f64, base.rss.median_rss_bytes as f64),
+                    pct(
+                        b.rss.median_rss_bytes as f64,
+                        base.rss.median_rss_bytes as f64,
+                    ),
                     Better::Lower,
                 ));
                 p90_row.push(metric(
@@ -494,7 +595,13 @@ pub mod vector {
                 Some((probe, refine)) => format!("p={probe}, r={refine}"),
                 None => "—".into(),
             };
-            let fmt_recall = |r: f32| if r.is_nan() { "—".into() } else { format!("{r:.3}") };
+            let fmt_recall = |r: f32| {
+                if r.is_nan() {
+                    "—".into()
+                } else {
+                    format!("{r:.3}")
+                }
+            };
             let mut row = vec![
                 text(inf.label.clone()),
                 text(fmt_point(inf.point)),
@@ -530,7 +637,11 @@ pub mod vector {
 
         report.emit(&Section {
             anchor: "comparison/vector".into(),
-            title: format!("Vector comparison ({} docs × dim={})", fmt_count(n_docs), corpus::DIM),
+            title: format!(
+                "Vector comparison ({} docs × dim={})",
+                fmt_count(n_docs),
+                corpus::DIM
+            ),
             note: format!(
                 "All engines driven through the same build driver, corpus, ground truth, and \
                  recall-calibration grid (infino's own vector protocol). Search rows compare \
@@ -539,13 +650,41 @@ pub mod vector {
                  lancedb {lance_gate:.3}. Δ is vs infino p50."
             ),
             blocks: vec![
-                Block { subtitle: "Build — Time".into(), headers: build_headers.clone(), rows: build_time_rows },
-                Block { subtitle: "Build — Throughput".into(), headers: build_headers.clone(), rows: build_thr_rows },
-                Block { subtitle: "Build — Bandwidth".into(), headers: build_headers.clone(), rows: build_bw_rows },
-                Block { subtitle: "Build — Peak RSS".into(), headers: build_headers.clone(), rows: build_peak_rows },
-                Block { subtitle: "Build — Median RSS".into(), headers: build_headers.clone(), rows: build_med_rows },
-                Block { subtitle: "Build — P90 RSS".into(), headers: build_headers.clone(), rows: build_p90_rows },
-                Block { subtitle: "Search — recall-calibrated (warm p50)".into(), headers: recall_headers, rows: recall_rows },
+                Block {
+                    subtitle: "Build — Time".into(),
+                    headers: build_headers.clone(),
+                    rows: build_time_rows,
+                },
+                Block {
+                    subtitle: "Build — Throughput".into(),
+                    headers: build_headers.clone(),
+                    rows: build_thr_rows,
+                },
+                Block {
+                    subtitle: "Build — Bandwidth".into(),
+                    headers: build_headers.clone(),
+                    rows: build_bw_rows,
+                },
+                Block {
+                    subtitle: "Build — Peak RSS".into(),
+                    headers: build_headers.clone(),
+                    rows: build_peak_rows,
+                },
+                Block {
+                    subtitle: "Build — Median RSS".into(),
+                    headers: build_headers.clone(),
+                    rows: build_med_rows,
+                },
+                Block {
+                    subtitle: "Build — P90 RSS".into(),
+                    headers: build_headers.clone(),
+                    rows: build_p90_rows,
+                },
+                Block {
+                    subtitle: "Search — recall-calibrated (warm p50)".into(),
+                    headers: recall_headers,
+                    rows: recall_rows,
+                },
             ],
         });
 
@@ -568,11 +707,11 @@ pub mod sql {
     use std::collections::HashMap;
 
     use infino_bench_utils::corpus::{MmapTextCorpus, parallel_writers, superfile_docs};
+    use infino_bench_utils::executors::sql::{ITERS, SQL_BATTERY};
     use infino_bench_utils::harness::{EngineSqlResult, InfinoSqlEngine, SqlRunConfig, run_sql};
     use infino_bench_utils::markdown::{fmt_count, fmt_time};
     use infino_bench_utils::report::{Better, Block, Report, Section, metric, text};
     use infino_bench_utils::rss;
-    use infino_bench_utils::executors::sql::{ITERS, SQL_BATTERY};
     use infino_bench_utils::superfile::sql::sql_rows;
 
     use retrievalbench::LanceSqlEngine;
@@ -603,8 +742,14 @@ pub mod sql {
         };
 
         let results: Vec<(&str, EngineSqlResult)> = vec![
-            ("infino", run_sql::<InfinoSqlEngine>(cfg, &rows, SQL_BATTERY)),
-            ("lancedb", run_sql::<LanceSqlEngine>(cfg, &rows, SQL_BATTERY)),
+            (
+                "infino",
+                run_sql::<InfinoSqlEngine>(cfg, &rows, SQL_BATTERY),
+            ),
+            (
+                "lancedb",
+                run_sql::<LanceSqlEngine>(cfg, &rows, SQL_BATTERY),
+            ),
         ];
 
         let mut report = Report::load_plain("comparison-sql");
@@ -633,11 +778,27 @@ pub mod sql {
             let base_secs = base.wall.as_secs_f64();
             let base_ns = base_secs * 1e9;
 
-            let label = text(if *w == 1 { "1 writer".into() } else { format!("{w} writers") });
+            let label = text(if *w == 1 {
+                "1 writer".into()
+            } else {
+                format!("{w} writers")
+            });
             let mut time_row = vec![label];
-            let mut peak_row = vec![text(if *w == 1 { "1 writer".into() } else { format!("{w} writers") })];
-            let mut med_row = vec![text(if *w == 1 { "1 writer".into() } else { format!("{w} writers") })];
-            let mut p90_row = vec![text(if *w == 1 { "1 writer".into() } else { format!("{w} writers") })];
+            let mut peak_row = vec![text(if *w == 1 {
+                "1 writer".into()
+            } else {
+                format!("{w} writers")
+            })];
+            let mut med_row = vec![text(if *w == 1 {
+                "1 writer".into()
+            } else {
+                format!("{w} writers")
+            })];
+            let mut p90_row = vec![text(if *w == 1 {
+                "1 writer".into()
+            } else {
+                format!("{w} writers")
+            })];
 
             for eng in &engines {
                 let b = build_map.get(&(eng, *w)).expect("build stat");
@@ -675,7 +836,10 @@ pub mod sql {
                 ));
                 med_row.push(metric(
                     b.rss.median_rss_bytes as f64 - base.rss.median_rss_bytes as f64,
-                    pct(b.rss.median_rss_bytes as f64, base.rss.median_rss_bytes as f64),
+                    pct(
+                        b.rss.median_rss_bytes as f64,
+                        base.rss.median_rss_bytes as f64,
+                    ),
                     Better::Lower,
                 ));
                 p90_row.push(metric(
