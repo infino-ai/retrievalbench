@@ -3,8 +3,9 @@ name: ClickBench (Azure)
 # Manually-triggered ClickBench run on a per-run ephemeral Azure VM.
 #
 # The benchmark harness lives in the ClickBench repo (its `infino/` system
-# dir); it depends on the *published* `infino` crate, so this job measures the
-# released engine, not this repo's working tree. It ingests an N-partition
+# dir). Its `infino` dep is repointed to the `infino_ref` branch (default
+# `main`) before building, so this job measures that branch's engine, not the
+# published crate. It ingests an N-partition
 # subset of the hits dataset into infino, runs the 43-query cold/hot sweep, and
 # publishes the results to the Actions run summary. The VM is always torn down.
 #
@@ -65,6 +66,16 @@ on:
         required: false
         default: "3"
         type: string
+      infino_repo:
+        description: "infino git repo to build the harness against."
+        required: false
+        default: "infino-ai/infino"
+        type: string
+      infino_ref:
+        description: "infino git branch to build (measures that branch, not the published crate)."
+        required: false
+        default: "main"
+        type: string
 
 permissions:
   id-token: write   # Azure OIDC federated login
@@ -106,6 +117,16 @@ jobs:
           repository: ${{ inputs.clickbench_repo }}
           ref: ${{ inputs.clickbench_ref }}
           path: cb
+      # Repoint the harness's infino dep from the published crate to the
+      # requested branch, so the run measures that branch's engine.
+      - name: Point harness at infino branch (runner, prebuilt)
+        if: ${{ inputs.prebuilt }}
+        run: |
+          set -euo pipefail
+          M=cb/infino/bench/Cargo.toml
+          sed -i "s|^infino = .*|infino = { git = \"https://github.com/${{ inputs.infino_repo }}\", branch = \"${{ inputs.infino_ref }}\" }|" "$M"
+          rm -f cb/infino/bench/Cargo.lock
+          echo "harness infino dep → $(grep '^infino = ' "$M")"
       - name: Rust cache (prebuilt)
         if: ${{ inputs.prebuilt }}
         uses: Swatinem/rust-cache@v2
@@ -207,6 +228,8 @@ jobs:
              ROWS='${{ inputs.rows }}' \
              TARGET_SF_MB='${{ inputs.target_sf_mb }}' \
              OPT_LEVEL='${{ inputs.opt_level }}' \
+             INFINO_REPO='${{ inputs.infino_repo }}' \
+             INFINO_REF='${{ inputs.infino_ref }}' \
              bash -s" <<'REMOTE' 2>&1 | tee /tmp/clickbench.log
           set -euo pipefail
           cd "$HOME/ClickBench/infino"
@@ -222,6 +245,10 @@ jobs:
             fi
             source "$HOME/.cargo/env"
             export CARGO_PROFILE_RELEASE_OPT_LEVEL="$OPT_LEVEL"
+            # Measure the requested infino branch, not the published crate.
+            sed -i "s|^infino = .*|infino = { git = \"https://github.com/${INFINO_REPO}\", branch = \"${INFINO_REF}\" }|" bench/Cargo.toml
+            rm -f bench/Cargo.lock
+            echo "harness infino dep → $(grep '^infino = ' bench/Cargo.toml)"
           fi
 
           echo "===== BUILD/INSTALL ====="
