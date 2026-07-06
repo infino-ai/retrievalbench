@@ -1,0 +1,394 @@
+name: ClickBench (Cloud)
+
+# Manually-triggered ClickBench on a per-run ephemeral VM (Azure/AWS/GCP via
+# `cloud`). Only provision/auth/teardown are cloud-specific; the bench runs
+# over SSH, identical everywhere. The harness's `infino` dep is repointed to
+# `infino_ref` (default `main`), so the run measures that branch, not the
+# published crate. Built on the runner (`prebuilt`) and scp'd in, else on the
+# VM. The VM is always torn down.
+
+on:
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: "Cloud to provision on."
+        required: false
+        default: azure
+        type: choice
+        options: [azure, aws, gcp]
+      rows:
+        description: "Rows to ingest; empty = all (~100M)."
+        required: false
+        default: ""
+        type: string
+      partitions:
+        description: "Partitions to download (~1M rows each; 100 = full)."
+        required: false
+        default: "100"
+        type: string
+      target_sf_mb:
+        description: "Compacted superfile target (MiB)."
+        required: false
+        default: "256"
+        type: string
+      vm_size:
+        description: "Instance type (cloud-specific; empty = per-cloud default)."
+        required: false
+        default: ""
+        type: string
+      location:
+        description: "Region (Azure/AWS) or zone (GCP); empty = per-cloud default."
+        required: false
+        default: ""
+        type: string
+      clickbench_repo:
+        description: "Harness repo."
+        required: false
+        default: "infino-ai/ClickBench"
+        type: string
+      clickbench_ref:
+        description: "Harness ref."
+        required: false
+        default: "add-infino"
+        type: string
+      infino_repo:
+        description: "infino git repo to build the harness against."
+        required: false
+        default: "infino-ai/infino"
+        type: string
+      infino_ref:
+        description: "infino git branch to build (measures that branch, not the published crate)."
+        required: false
+        default: "main"
+        type: string
+      opt_level:
+        description: "Cargo release opt-level (0-3, s, z)."
+        required: false
+        default: "3"
+        type: string
+      prebuilt:
+        description: "Build on runner (rust-cache) + scp to VM; off = build on VM."
+        required: false
+        default: true
+        type: boolean
+      timeout_minutes:
+        description: "Hard auto-stop (min); VM torn down when hit."
+        required: false
+        default: "120"
+        type: string
+
+permissions:
+  id-token: write   # OIDC federated login (all three clouds)
+  contents: read
+
+# Serialize dispatches; never cancel a run mid-flight (that would leak a VM).
+concurrency:
+  group: clickbench-cloud
+  cancel-in-progress: false
+
+env:
+  # Azure RG (pre-existing, SP-scoped) + unique per-run VM name for exact-name
+  # teardown. AWS/GCP name their own resources clickbench-<run_id> at provision.
+  RG: rg-infino-bench
+  VM: clickbench-vm-${{ github.run_id }}
+  SSH_OPTS: "-o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+
+jobs:
+  clickbench:
+    runs-on: ubuntu-latest
+    environment: ci
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
+    steps:
+      # --- cloud auth (OIDC; one runs) ---
+      - name: Azure login
+        if: ${{ inputs.cloud == 'azure' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: AWS login
+        if: ${{ inputs.cloud == 'aws' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.location != '' && inputs.location || 'us-east-1' }}
+      - name: GCP login
+        if: ${{ inputs.cloud == 'gcp' }}
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - name: Setup gcloud
+        if: ${{ inputs.cloud == 'gcp' }}
+        uses: google-github-actions/setup-gcloud@v2
+
+      # Ephemeral SSH keypair, reused across clouds (Azure --ssh-key-values,
+      # AWS import-key-pair, GCP metadata). Private key stays on the runner.
+      - name: Generate SSH key
+        run: |
+          set -euo pipefail
+          ssh-keygen -t ed25519 -f "$HOME/.ssh/bench_key" -N "" -q
+          echo "SSH_KEY=$HOME/.ssh/bench_key" >> "$GITHUB_ENV"
+
+      # Prebuilt: build on the runner (cached) before provisioning, so a build
+      # failure never leaves a VM billing. Runner glibc/arch must match the VM.
+      - name: Checkout harness (runner, prebuilt)
+        if: ${{ inputs.prebuilt }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.clickbench_repo }}
+          ref: ${{ inputs.clickbench_ref }}
+          path: cb
+      - name: Point harness at infino branch (runner, prebuilt)
+        if: ${{ inputs.prebuilt }}
+        run: |
+          set -euo pipefail
+          M=cb/infino/bench/Cargo.toml
+          sed -i "s|^infino = .*|infino = { git = \"https://github.com/${{ inputs.infino_repo }}\", branch = \"${{ inputs.infino_ref }}\" }|" "$M"
+          rm -f cb/infino/bench/Cargo.lock
+          echo "harness infino dep → $(grep '^infino = ' "$M")"
+      - name: Rust cache (prebuilt)
+        if: ${{ inputs.prebuilt }}
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cb/infino/bench
+      - name: Build binary (runner, prebuilt)
+        if: ${{ inputs.prebuilt }}
+        env:
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: ${{ inputs.opt_level }}
+        run: cargo build --release --manifest-path cb/infino/bench/Cargo.toml
+
+      # --- provision (one runs; each writes VM_IP + SSH_USER to env) ---
+      - name: Provision (azure)
+        if: ${{ inputs.cloud == 'azure' }}
+        run: |
+          set -euo pipefail
+          SIZE="${{ inputs.vm_size }}"; SIZE="${SIZE:-Standard_D16s_v7}"
+          LOC="${{ inputs.location }}"; LOC="${LOC:-eastus}"
+          DELETE_AFTER="$(date -u -d '+3 hours' +%Y-%m-%dT%H:%M:%SZ)"
+          TAGS=(purpose=clickbench-bench "run-id=${{ github.run_id }}" auto-delete=true "delete-after=${DELETE_AFTER}")
+          az vm create -g "$RG" -n "$VM" \
+            --image Ubuntu2404 --size "$SIZE" --location "$LOC" \
+            --admin-username azureuser --ssh-key-values "${SSH_KEY}.pub" \
+            --public-ip-sku Standard --os-disk-size-gb 128 \
+            --nsg-rule NONE --nsg "${VM}-nsg" --public-ip-address "${VM}-pip" \
+            --vnet-name "${VM}-vnet" --subnet "${VM}-subnet" --os-disk-name "${VM}-osdisk" \
+            --tags "${TAGS[@]}" -o none
+          RUNNER_IP="$(curl -s https://api.ipify.org)"
+          az network nsg rule create -g "$RG" --nsg-name "${VM}-nsg" -n allow-ssh-runner \
+            --priority 300 --access Allow --protocol Tcp --direction Inbound \
+            --destination-port-ranges 22 --source-address-prefixes "${RUNNER_IP}/32" -o none
+          VM_IP="$(az vm show -d -g "$RG" -n "$VM" --query publicIps -o tsv)"
+          echo "VM_IP=$VM_IP"       >> "$GITHUB_ENV"
+          echo "SSH_USER=azureuser" >> "$GITHUB_ENV"
+          echo "Provisioned azure $VM ($SIZE) at $VM_IP in $LOC"
+
+      - name: Provision (aws)
+        if: ${{ inputs.cloud == 'aws' }}
+        run: |
+          set -euo pipefail
+          SIZE="${{ inputs.vm_size }}"; SIZE="${SIZE:-m6i.4xlarge}"
+          REGION="${{ inputs.location }}"; REGION="${REGION:-us-east-1}"
+          NAME="clickbench-${{ github.run_id }}"
+          RUNNER_IP="$(curl -s https://api.ipify.org)"
+          AMI="$(aws ssm get-parameter --region "$REGION" \
+            --name /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id \
+            --query Parameter.Value --output text)"
+          aws ec2 import-key-pair --region "$REGION" --key-name "$NAME" \
+            --public-key-material "fileb://${SSH_KEY}.pub" >/dev/null
+          VPC="$(aws ec2 describe-vpcs --region "$REGION" --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text)"
+          SG="$(aws ec2 create-security-group --region "$REGION" --group-name "$NAME" \
+            --description clickbench --vpc-id "$VPC" --query GroupId --output text)"
+          aws ec2 authorize-security-group-ingress --region "$REGION" --group-id "$SG" \
+            --protocol tcp --port 22 --cidr "${RUNNER_IP}/32" >/dev/null
+          IID="$(aws ec2 run-instances --region "$REGION" --image-id "$AMI" --instance-type "$SIZE" \
+            --key-name "$NAME" --security-group-ids "$SG" \
+            --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":128,"VolumeType":"gp3"}}]' \
+            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$NAME},{Key=purpose,Value=clickbench-bench},{Key=run-id,Value=${{ github.run_id }}}]" \
+            --query 'Instances[0].InstanceId' --output text)"
+          aws ec2 wait instance-running --region "$REGION" --instance-ids "$IID"
+          VM_IP="$(aws ec2 describe-instances --region "$REGION" --instance-ids "$IID" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)"
+          echo "VM_IP=$VM_IP"         >> "$GITHUB_ENV"
+          echo "SSH_USER=ubuntu"      >> "$GITHUB_ENV"
+          echo "AWS_IID=$IID"         >> "$GITHUB_ENV"
+          echo "AWS_SG=$SG"           >> "$GITHUB_ENV"
+          echo "AWS_KEY=$NAME"        >> "$GITHUB_ENV"
+          echo "AWS_REGION_R=$REGION" >> "$GITHUB_ENV"
+          echo "Provisioned aws $IID ($SIZE) at $VM_IP in $REGION"
+
+      - name: Provision (gcp)
+        if: ${{ inputs.cloud == 'gcp' }}
+        run: |
+          set -euo pipefail
+          SIZE="${{ inputs.vm_size }}"; SIZE="${SIZE:-n2-standard-16}"
+          ZONE="${{ inputs.location }}"; ZONE="${ZONE:-us-central1-a}"
+          NAME="clickbench-${{ github.run_id }}"
+          RUNNER_IP="$(curl -s https://api.ipify.org)"
+          gcloud compute firewall-rules create "$NAME" --quiet \
+            --allow tcp:22 --source-ranges "${RUNNER_IP}/32" --target-tags "$NAME"
+          gcloud compute instances create "$NAME" --quiet --zone "$ZONE" --machine-type "$SIZE" \
+            --image-family ubuntu-2404-lts-amd64 --image-project ubuntu-os-cloud \
+            --boot-disk-size 128GB --tags "$NAME" \
+            --metadata "ssh-keys=benchuser:$(cat "${SSH_KEY}.pub")"
+          VM_IP="$(gcloud compute instances describe "$NAME" --zone "$ZONE" \
+            --format='get(networkInterfaces[0].accessConfigs[0].natIP)')"
+          echo "VM_IP=$VM_IP"       >> "$GITHUB_ENV"
+          echo "SSH_USER=benchuser" >> "$GITHUB_ENV"
+          echo "GCP_NAME=$NAME"     >> "$GITHUB_ENV"
+          echo "GCP_ZONE_R=$ZONE"   >> "$GITHUB_ENV"
+          echo "Provisioned gcp $NAME ($SIZE) at $VM_IP in $ZONE"
+
+      # --- shared bench (cloud-independent; over SSH) ---
+      - name: Wait for SSH
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if ssh $SSH_OPTS -i "$SSH_KEY" -o ConnectTimeout=5 "${SSH_USER}@${VM_IP}" true 2>/dev/null; then
+              echo "SSH up after ${i} tries"; exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::SSH never came up"; exit 1
+
+      - name: Clone harness (on VM)
+        run: |
+          set -euo pipefail
+          ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${VM_IP}" \
+            "CB_REPO='${{ inputs.clickbench_repo }}' CB_REF='${{ inputs.clickbench_ref }}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git wget curl ca-certificates
+          rm -rf "$HOME/ClickBench"
+          git clone --depth 1 --branch "$CB_REF" \
+            "https://github.com/${CB_REPO}.git" "$HOME/ClickBench"
+          REMOTE
+
+      - name: Copy prebuilt binary to VM
+        if: ${{ inputs.prebuilt }}
+        run: |
+          set -euo pipefail
+          DEST="ClickBench/infino/bench/target/release"
+          ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${VM_IP}" "mkdir -p '$DEST'"
+          scp $SSH_OPTS -i "$SSH_KEY" cb/infino/bench/target/release/clickbench-infino \
+            "${SSH_USER}@${VM_IP}:${DEST}/clickbench-infino"
+
+      - name: Ingest + sweep (on VM)
+        run: |
+          set -euo pipefail
+          ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${VM_IP}" \
+            "PREBUILT='${{ inputs.prebuilt }}' \
+             PARTS='${{ inputs.partitions }}' \
+             ROWS='${{ inputs.rows }}' \
+             TARGET_SF_MB='${{ inputs.target_sf_mb }}' \
+             OPT_LEVEL='${{ inputs.opt_level }}' \
+             INFINO_REPO='${{ inputs.infino_repo }}' \
+             INFINO_REF='${{ inputs.infino_ref }}' \
+             bash -s" <<'REMOTE' 2>&1 | tee /tmp/clickbench.log
+          set -euo pipefail
+          cd "$HOME/ClickBench/infino"
+
+          # VM builds only when no prebuilt binary was copied in.
+          if [ "$PREBUILT" != "true" ]; then
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+              build-essential pkg-config libssl-dev
+            if ! command -v cargo >/dev/null 2>&1; then
+              curl --proto '=https' --tlsv1.2 -sSf \
+                --retry 5 --retry-connrefused --retry-delay 2 https://sh.rustup.rs \
+                | sh -s -- -y --profile minimal
+            fi
+            source "$HOME/.cargo/env"
+            export CARGO_PROFILE_RELEASE_OPT_LEVEL="$OPT_LEVEL"
+            # Measure the requested infino branch, not the published crate.
+            sed -i "s|^infino = .*|infino = { git = \"https://github.com/${INFINO_REPO}\", branch = \"${INFINO_REF}\" }|" bench/Cargo.toml
+            rm -f bench/Cargo.lock
+            echo "harness infino dep → $(grep '^infino = ' bench/Cargo.toml)"
+          fi
+
+          echo "===== BUILD/INSTALL ====="
+          ./install                      # prebuilt: no-op; else cargo build --release
+          ./check                        # fail fast; also verifies a prebuilt binary execs on this VM
+          RESOLVED="$(grep -A1 '^name = "infino"' bench/Cargo.lock | grep '^version' | head -1 | cut -d'"' -f2)"
+          echo "infino crate: ${RESOLVED}"
+
+          echo "===== DOWNLOAD (${PARTS} partitions) ====="
+          END=$((PARTS - 1))
+          seq 0 "$END" | xargs -P"$(( PARTS < 16 ? PARTS : 16 ))" -I{} \
+            wget -q --continue \
+            "https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_{}.parquet"
+
+          echo "===== LOAD (rows=${ROWS} target_sf=${TARGET_SF_MB}MB) ====="
+          t0=$(date +%s.%N)
+          INFINO_SRC="hits_*.parquet" INFINO_MAX_ROWS="$ROWS" INFINO_TARGET_SF_MB="$TARGET_SF_MB" ./load
+          t1=$(date +%s.%N)
+          awk -v a="$t0" -v b="$t1" 'BEGIN{printf "LOAD_TIME=%.1fs\n", b-a}'
+          echo "DATA_SIZE_BYTES=$(./data-size)"
+
+          echo "===== SWEEP ====="
+          ./bench.sh
+          REMOTE
+
+      - name: Publish summary
+        if: ${{ !cancelled() }}
+        run: |
+          set +e -u -o pipefail
+          LOG=/tmp/clickbench.log
+          {
+            echo "## ClickBench — infino (${{ inputs.cloud }})"
+            echo ""
+            load_time="$(grep -oE 'LOAD_TIME=[0-9.]+s' "$LOG" | head -1 | cut -d= -f2)"
+            data_sz="$(grep -oE 'DATA_SIZE_BYTES=[0-9]+' "$LOG" | head -1 | cut -d= -f2)"
+            geomean="$(grep -oE 'hot geomean: .*' "$LOG" | head -1)"
+            echo "- cloud \`${{ inputs.cloud }}\` · infino ref \`${{ inputs.infino_ref }}\` · rows \`${{ inputs.rows != '' && inputs.rows || 'all (~100M)' }}\` · target_sf \`${{ inputs.target_sf_mb }}MB\`"
+            echo "- load \`${load_time:-?}\` · data size \`$(( ${data_sz:-0} / 1000000 )) MB\` · **${geomean:-hot geomean: n/a}**"
+            echo ""
+            if grep -q 'hot geomean' "$LOG"; then
+              echo "### Cold/hot per query (seconds)"
+              echo "| Q | cold | t2 | t3 | hot |"
+              echo "|--:|--:|--:|--:|--:|"
+              awk '/^[0-9]+[[:space:]]/{printf "| %s | %s | %s | %s | %s |\n",$1,$2,$3,$4,$5}' "$LOG"
+            else
+              echo "**❌ No sweep results — see the uploaded log.**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if ! grep -q 'hot geomean' "$LOG"; then
+            echo "::error::ClickBench sweep produced no results."
+            exit 1
+          fi
+
+      - name: Upload full log
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: clickbench-log
+          path: /tmp/clickbench.log
+          if-no-files-found: warn
+
+      # --- teardown (always; one runs) ---
+      - name: Teardown (azure)
+        if: ${{ always() && inputs.cloud == 'azure' }}
+        env:
+          NIC: ${{ env.VM }}VMNic
+        run: |
+          # Delete this run's resources by exact name; keep the shared RG.
+          az vm delete                -g "$RG" -n "$VM"          --yes || true
+          az network nic delete       -g "$RG" -n "$NIC"               || true
+          az disk delete              -g "$RG" -n "${VM}-osdisk" --yes || true
+          az network public-ip delete -g "$RG" -n "${VM}-pip"          || true
+          az network nsg delete       -g "$RG" -n "${VM}-nsg"          || true
+          az network vnet delete      -g "$RG" -n "${VM}-vnet"         || true
+
+      - name: Teardown (aws)
+        if: ${{ always() && inputs.cloud == 'aws' }}
+        run: |
+          [ -n "${AWS_IID:-}" ] && aws ec2 terminate-instances --region "$AWS_REGION_R" --instance-ids "$AWS_IID" >/dev/null || true
+          [ -n "${AWS_IID:-}" ] && aws ec2 wait instance-terminated --region "$AWS_REGION_R" --instance-ids "$AWS_IID" || true
+          [ -n "${AWS_SG:-}" ]  && aws ec2 delete-security-group --region "$AWS_REGION_R" --group-id "$AWS_SG" || true
+          [ -n "${AWS_KEY:-}" ] && aws ec2 delete-key-pair --region "$AWS_REGION_R" --key-name "$AWS_KEY" || true
+
+      - name: Teardown (gcp)
+        if: ${{ always() && inputs.cloud == 'gcp' }}
+        run: |
+          [ -n "${GCP_NAME:-}" ] && gcloud compute instances delete "$GCP_NAME" --zone "$GCP_ZONE_R" --quiet || true
+          [ -n "${GCP_NAME:-}" ] && gcloud compute firewall-rules delete "$GCP_NAME" --quiet || true
