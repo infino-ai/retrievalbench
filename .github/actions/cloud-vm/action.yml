@@ -1,0 +1,154 @@
+name: Cloud VM
+description: Provision or tear down an ephemeral ClickBench VM on Azure, AWS, or GCP.
+
+# Provision writes VM_IP + SSH_USER (for the bench) and per-cloud teardown state
+# to $GITHUB_ENV; teardown reads that state back. Only the branch matching
+# `cloud` runs. Auth is the caller's job (the cloud CLIs must already be logged
+# in). Teardown never fails the job — a leaked resource is logged, not fatal.
+
+inputs:
+  op:
+    description: "provision | teardown"
+    required: true
+  cloud:
+    description: "azure | aws | gcp"
+    required: true
+  vm_size:
+    description: "Instance type; empty = per-cloud default."
+    required: false
+    default: ""
+  location:
+    description: "Region (Azure/AWS) or zone (GCP); empty = per-cloud default."
+    required: false
+    default: ""
+  ssh_pub:
+    description: "Path to the SSH public key (provision only)."
+    required: false
+    default: ""
+  azure_rg:
+    description: "Azure resource group (pre-existing, SP-scoped)."
+    required: false
+    default: rg-infino-bench
+
+runs:
+  using: composite
+  steps:
+    - name: Provision (${{ inputs.cloud }})
+      if: ${{ inputs.op == 'provision' }}
+      shell: bash
+      env:
+        VM_SIZE: ${{ inputs.vm_size }}
+        LOCATION: ${{ inputs.location }}
+        SSH_PUB: ${{ inputs.ssh_pub }}
+        AZURE_RG: ${{ inputs.azure_rg }}
+      run: |
+        set -euo pipefail
+        case "${{ inputs.cloud }}" in
+        azure)
+          SIZE="${VM_SIZE:-Standard_D16s_v7}"
+          LOC="${LOCATION:-eastus}"
+          VM="clickbench-vm-${{ github.run_id }}"
+          DELETE_AFTER="$(date -u -d '+3 hours' +%Y-%m-%dT%H:%M:%SZ)"
+          TAGS=(purpose=clickbench-bench "run-id=${{ github.run_id }}" auto-delete=true "delete-after=${DELETE_AFTER}")
+          az vm create -g "$AZURE_RG" -n "$VM" \
+            --image Ubuntu2404 --size "$SIZE" --location "$LOC" \
+            --admin-username azureuser --ssh-key-values "$SSH_PUB" \
+            --public-ip-sku Standard --os-disk-size-gb 128 \
+            --nsg-rule NONE --nsg "${VM}-nsg" --public-ip-address "${VM}-pip" \
+            --vnet-name "${VM}-vnet" --subnet "${VM}-subnet" --os-disk-name "${VM}-osdisk" \
+            --tags "${TAGS[@]}" -o none
+          RUNNER_IP="$(curl -s https://api.ipify.org)"
+          az network nsg rule create -g "$AZURE_RG" --nsg-name "${VM}-nsg" -n allow-ssh-runner \
+            --priority 300 --access Allow --protocol Tcp --direction Inbound \
+            --destination-port-ranges 22 --source-address-prefixes "${RUNNER_IP}/32" -o none
+          VM_IP="$(az vm show -d -g "$AZURE_RG" -n "$VM" --query publicIps -o tsv)"
+          {
+            echo "VM_IP=$VM_IP"
+            echo "SSH_USER=azureuser"
+            echo "AZ_RG=$AZURE_RG"
+            echo "AZ_VM=$VM"
+          } >> "$GITHUB_ENV"
+          echo "Provisioned azure $VM ($SIZE) at $VM_IP in $LOC"
+          ;;
+        aws)
+          SIZE="${VM_SIZE:-m6i.4xlarge}"
+          REGION="${LOCATION:-us-east-1}"
+          NAME="clickbench-${{ github.run_id }}"
+          RUNNER_IP="$(curl -s https://api.ipify.org)"
+          AMI="$(aws ssm get-parameter --region "$REGION" \
+            --name /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id \
+            --query Parameter.Value --output text)"
+          aws ec2 import-key-pair --region "$REGION" --key-name "$NAME" \
+            --public-key-material "fileb://${SSH_PUB}" >/dev/null
+          VPC="$(aws ec2 describe-vpcs --region "$REGION" --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text)"
+          SG="$(aws ec2 create-security-group --region "$REGION" --group-name "$NAME" \
+            --description clickbench --vpc-id "$VPC" --query GroupId --output text)"
+          aws ec2 authorize-security-group-ingress --region "$REGION" --group-id "$SG" \
+            --protocol tcp --port 22 --cidr "${RUNNER_IP}/32" >/dev/null
+          IID="$(aws ec2 run-instances --region "$REGION" --image-id "$AMI" --instance-type "$SIZE" \
+            --key-name "$NAME" --security-group-ids "$SG" \
+            --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":128,"VolumeType":"gp3"}}]' \
+            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$NAME},{Key=purpose,Value=clickbench-bench},{Key=run-id,Value=${{ github.run_id }}}]" \
+            --query 'Instances[0].InstanceId' --output text)"
+          aws ec2 wait instance-running --region "$REGION" --instance-ids "$IID"
+          VM_IP="$(aws ec2 describe-instances --region "$REGION" --instance-ids "$IID" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)"
+          {
+            echo "VM_IP=$VM_IP"
+            echo "SSH_USER=ubuntu"
+            echo "AWS_IID=$IID"
+            echo "AWS_SG=$SG"
+            echo "AWS_KEY=$NAME"
+            echo "AWS_REGION_R=$REGION"
+          } >> "$GITHUB_ENV"
+          echo "Provisioned aws $IID ($SIZE) at $VM_IP in $REGION"
+          ;;
+        gcp)
+          SIZE="${VM_SIZE:-n2-standard-16}"
+          ZONE="${LOCATION:-us-central1-a}"
+          NAME="clickbench-${{ github.run_id }}"
+          RUNNER_IP="$(curl -s https://api.ipify.org)"
+          gcloud compute firewall-rules create "$NAME" --quiet \
+            --allow tcp:22 --source-ranges "${RUNNER_IP}/32" --target-tags "$NAME"
+          gcloud compute instances create "$NAME" --quiet --zone "$ZONE" --machine-type "$SIZE" \
+            --image-family ubuntu-2404-lts-amd64 --image-project ubuntu-os-cloud \
+            --boot-disk-size 128GB --tags "$NAME" \
+            --metadata "ssh-keys=benchuser:$(cat "$SSH_PUB")"
+          VM_IP="$(gcloud compute instances describe "$NAME" --zone "$ZONE" \
+            --format='get(networkInterfaces[0].accessConfigs[0].natIP)')"
+          {
+            echo "VM_IP=$VM_IP"
+            echo "SSH_USER=benchuser"
+            echo "GCP_NAME=$NAME"
+            echo "GCP_ZONE_R=$ZONE"
+          } >> "$GITHUB_ENV"
+          echo "Provisioned gcp $NAME ($SIZE) at $VM_IP in $ZONE"
+          ;;
+        esac
+
+    - name: Teardown (${{ inputs.cloud }})
+      if: ${{ inputs.op == 'teardown' }}
+      shell: bash
+      run: |
+        # Delete this run's resources by exact name; never fail the job.
+        case "${{ inputs.cloud }}" in
+        azure)
+          [ -n "${AZ_VM:-}" ] || exit 0
+          az vm delete                -g "$AZ_RG" -n "$AZ_VM"          --yes || true
+          az network nic delete       -g "$AZ_RG" -n "${AZ_VM}VMNic"         || true
+          az disk delete              -g "$AZ_RG" -n "${AZ_VM}-osdisk" --yes || true
+          az network public-ip delete -g "$AZ_RG" -n "${AZ_VM}-pip"          || true
+          az network nsg delete       -g "$AZ_RG" -n "${AZ_VM}-nsg"          || true
+          az network vnet delete      -g "$AZ_RG" -n "${AZ_VM}-vnet"         || true
+          ;;
+        aws)
+          [ -n "${AWS_IID:-}" ] && aws ec2 terminate-instances --region "$AWS_REGION_R" --instance-ids "$AWS_IID" >/dev/null || true
+          [ -n "${AWS_IID:-}" ] && aws ec2 wait instance-terminated --region "$AWS_REGION_R" --instance-ids "$AWS_IID" || true
+          [ -n "${AWS_SG:-}" ]  && aws ec2 delete-security-group --region "$AWS_REGION_R" --group-id "$AWS_SG" || true
+          [ -n "${AWS_KEY:-}" ] && aws ec2 delete-key-pair --region "$AWS_REGION_R" --key-name "$AWS_KEY" || true
+          ;;
+        gcp)
+          [ -n "${GCP_NAME:-}" ] && gcloud compute instances delete "$GCP_NAME" --zone "$GCP_ZONE_R" --quiet || true
+          [ -n "${GCP_NAME:-}" ] && gcloud compute firewall-rules delete "$GCP_NAME" --quiet || true
+          ;;
+        esac
