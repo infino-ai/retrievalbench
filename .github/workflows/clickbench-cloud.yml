@@ -61,6 +61,11 @@ on:
         required: false
         default: "main"
         type: string
+      cache_budget_gib:
+        description: "infino disk-cache budget (GiB); empty = default (10 GiB). Set above the superfile total so opens cache whole superfiles instead of range-only reads."
+        required: false
+        default: ""
+        type: string
       opt_level:
         description: "Cargo release opt-level (0-3, s, z)."
         required: false
@@ -285,6 +290,7 @@ jobs:
              OPT_LEVEL='${{ inputs.opt_level }}' \
              INFINO_REPO='${{ inputs.infino_repo }}' \
              INFINO_REF='${{ inputs.infino_ref }}' \
+             CACHE_BUDGET_GIB='${{ inputs.cache_budget_gib }}' \
              bash -s" <<'REMOTE' 2>&1 | tee /tmp/clickbench.log
           set -euo pipefail
           cd "$HOME/ClickBench/infino"
@@ -317,6 +323,13 @@ jobs:
           seq 0 "$END" | xargs -P"$(( PARTS < 16 ? PARTS : 16 ))" -I{} \
             wget -q --continue \
             "https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_{}.parquet"
+
+          # Disk-cache budget (bytes) for ./load and ./bench.sh; empty = infino's
+          # 10 GiB default. Set above the superfile total to avoid range-only reads.
+          if [ -n "${CACHE_BUDGET_GIB:-}" ]; then
+            export INFINO_CACHE_BUDGET=$(( CACHE_BUDGET_GIB * 1024 * 1024 * 1024 ))
+            echo "INFINO_CACHE_BUDGET=${INFINO_CACHE_BUDGET} (${CACHE_BUDGET_GIB} GiB)"
+          fi
 
           echo "===== LOAD (rows=${ROWS} target_sf=${TARGET_SF_MB}MB) ====="
           t0=$(date +%s.%N)
