@@ -1,5 +1,5 @@
 name: Cloud VM
-description: Provision or tear down an ephemeral ClickBench VM on Azure, AWS, or GCP.
+description: Provision or tear down an ephemeral bench VM on Azure, AWS, or GCP.
 
 # Provision writes VM_IP + SSH_USER (for the bench) and per-cloud teardown state
 # to $GITHUB_ENV; teardown reads that state back. Only the branch matching
@@ -25,6 +25,10 @@ inputs:
     description: "Path to the SSH public key (provision only)."
     required: false
     default: ""
+  name_prefix:
+    description: "Prefix for VM/tag/resource names (distinguishes benches)."
+    required: false
+    default: clickbench
   azure_rg:
     description: "Azure resource group (pre-existing, SP-scoped)."
     required: false
@@ -40,6 +44,7 @@ runs:
         VM_SIZE: ${{ inputs.vm_size }}
         LOCATION: ${{ inputs.location }}
         SSH_PUB: ${{ inputs.ssh_pub }}
+        NAME_PREFIX: ${{ inputs.name_prefix }}
         AZURE_RG: ${{ inputs.azure_rg }}
       run: |
         set -euo pipefail
@@ -47,9 +52,9 @@ runs:
         azure)
           SIZE="${VM_SIZE:-Standard_D16s_v7}"
           LOC="${LOCATION:-eastus}"
-          VM="clickbench-vm-${{ github.run_id }}"
+          VM="${NAME_PREFIX}-vm-${{ github.run_id }}"
           DELETE_AFTER="$(date -u -d '+3 hours' +%Y-%m-%dT%H:%M:%SZ)"
-          TAGS=(purpose=clickbench-bench "run-id=${{ github.run_id }}" auto-delete=true "delete-after=${DELETE_AFTER}")
+          TAGS=(purpose="${NAME_PREFIX}-bench" "run-id=${{ github.run_id }}" auto-delete=true "delete-after=${DELETE_AFTER}")
           az vm create -g "$AZURE_RG" -n "$VM" \
             --image Ubuntu2404 --size "$SIZE" --location "$LOC" \
             --admin-username azureuser --ssh-key-values "$SSH_PUB" \
@@ -73,7 +78,7 @@ runs:
         aws)
           SIZE="${VM_SIZE:-m6i.4xlarge}"
           REGION="${LOCATION:-us-east-1}"
-          NAME="clickbench-${{ github.run_id }}"
+          NAME="${NAME_PREFIX}-${{ github.run_id }}"
           RUNNER_IP="$(curl -s https://api.ipify.org)"
           AMI="$(aws ssm get-parameter --region "$REGION" \
             --name /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id \
@@ -88,7 +93,7 @@ runs:
           IID="$(aws ec2 run-instances --region "$REGION" --image-id "$AMI" --instance-type "$SIZE" \
             --key-name "$NAME" --security-group-ids "$SG" \
             --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":128,"VolumeType":"gp3"}}]' \
-            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$NAME},{Key=purpose,Value=clickbench-bench},{Key=run-id,Value=${{ github.run_id }}}]" \
+            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$NAME},{Key=purpose,Value=${NAME_PREFIX}-bench},{Key=run-id,Value=${{ github.run_id }}}]" \
             --query 'Instances[0].InstanceId' --output text)"
           aws ec2 wait instance-running --region "$REGION" --instance-ids "$IID"
           VM_IP="$(aws ec2 describe-instances --region "$REGION" --instance-ids "$IID" \
@@ -106,7 +111,7 @@ runs:
         gcp)
           SIZE="${VM_SIZE:-n2-standard-16}"
           ZONE="${LOCATION:-us-central1-a}"
-          NAME="clickbench-${{ github.run_id }}"
+          NAME="${NAME_PREFIX}-${{ github.run_id }}"
           RUNNER_IP="$(curl -s https://api.ipify.org)"
           gcloud compute firewall-rules create "$NAME" --quiet \
             --allow tcp:22 --source-ranges "${RUNNER_IP}/32" --target-tags "$NAME"
