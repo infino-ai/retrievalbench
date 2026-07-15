@@ -12,6 +12,7 @@ import os
 import sys
 
 FTS_CASE_ID = 503  # CaseType.FTSBm25Performance
+_STATUS = {":)": "✓", "x": "✗ FAILED", "?": "? out-of-range"}  # ResultLabel
 
 
 def collect(results_dir: str) -> dict[str, list[dict]]:
@@ -29,6 +30,7 @@ def collect(results_dir: str) -> dict[str, list[dict]]:
             rows[bucket].append(
                 {
                     "case": case_id,
+                    "status": _STATUS.get(r.get("label"), r.get("label", "?")),
                     "recall": m.get("recall", 0.0),
                     "qps": m.get("qps", 0.0),
                     "p99": m.get("serial_latency_p99", 0.0),
@@ -43,11 +45,11 @@ def table(title: str, items: list[dict]) -> list[str]:
     lines = [f"### {title}"]
     if not items:
         return lines + ["**❌ No results — see the uploaded log.**", ""]
-    lines.append("| case_id | recall | QPS | p99 (s) | load (s) | rows |")
-    lines.append("|--:|--:|--:|--:|--:|--:|")
+    lines.append("| case_id | status | recall | QPS | p99 (s) | load (s) | rows |")
+    lines.append("|--:|:--|--:|--:|--:|--:|--:|")
     for it in items:
         lines.append(
-            f"| {it['case']} | {it['recall']:.4f} | {it['qps']:.1f} "
+            f"| {it['case']} | {it['status']} | {it['recall']:.4f} | {it['qps']:.1f} "
             f"| {it['p99']:.4f} | {it['load']:.1f} | {it['count']} |"
         )
     return lines + [""]
