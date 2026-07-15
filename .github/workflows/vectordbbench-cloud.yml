@@ -1,0 +1,295 @@
+name: VectorDBBench (Cloud)
+
+# Manually-triggered VectorDBBench (Infino client) on a per-run ephemeral VM
+# (Azure/AWS/GCP via `cloud`). Only provision/auth/teardown are cloud-specific;
+# the bench runs over SSH, identical everywhere. The `infino` binding is rebuilt
+# from `infino_ref` via maturin, so the run measures that branch, not the
+# published wheel. `mode` selects vector / fts / both. The VM is always torn down.
+
+on:
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: "Cloud to provision on."
+        required: false
+        default: azure
+        type: choice
+        options: [azure, aws, gcp]
+      mode:
+        description: "Which benchmark(s) to run."
+        required: false
+        default: vector
+        type: choice
+        options: [vector, fts, both]
+      vector_case:
+        description: "Vector CaseType (init_bench Infino --case-type)."
+        required: false
+        default: Performance768D10M
+        type: string
+      fts_case:
+        description: "FTS CaseType (init_bench InfinoFTS --case-type)."
+        required: false
+        default: FTSBm25Performance
+        type: string
+      fts_dataset:
+        description: "FTS dataset + size (--dataset-with-size-type)."
+        required: false
+        default: MSMarcoSmall
+        type: string
+      payload_profile:
+        description: "FTS payload profile (--payload-profile)."
+        required: false
+        default: ids_only
+        type: string
+      k:
+        description: "Top-k for vector search."
+        required: false
+        default: "100"
+        type: string
+      num_concurrency:
+        description: "Concurrency levels for the QPS sweep (comma-separated)."
+        required: false
+        default: "1,10,50"
+        type: string
+      n_cent:
+        description: "Infino IVF centroid count (vector build)."
+        required: false
+        default: "256"
+        type: string
+      nprobe:
+        description: "Infino IVF cells probed (vector query)."
+        required: false
+        default: "32"
+        type: string
+      vm_size:
+        description: "Instance type (cloud-specific; empty = per-cloud default)."
+        required: false
+        default: ""
+        type: string
+      location:
+        description: "Region (Azure/AWS) or zone (GCP); empty = per-cloud default."
+        required: false
+        default: ""
+        type: string
+      vdbbench_repo:
+        description: "VectorDBBench harness repo."
+        required: false
+        default: "infino-ai/VectorDBBench"
+        type: string
+      vdbbench_ref:
+        description: "VectorDBBench harness ref."
+        required: false
+        default: "feat/infino-client"
+        type: string
+      infino_repo:
+        description: "infino git repo to build the binding against."
+        required: false
+        default: "infino-ai/infino"
+        type: string
+      infino_ref:
+        description: "infino git branch to build (measures that branch, not the published wheel)."
+        required: false
+        default: "main"
+        type: string
+      timeout_minutes:
+        description: "Hard auto-stop (min); VM torn down when hit."
+        required: false
+        default: "180"
+        type: string
+
+permissions:
+  id-token: write   # OIDC federated login (all three clouds)
+  contents: read
+
+# Serialize dispatches; never cancel a run mid-flight (that would leak a VM).
+concurrency:
+  group: vectordbbench-cloud
+  cancel-in-progress: false
+
+env:
+  SSH_OPTS: "-o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+
+jobs:
+  vectordbbench:
+    runs-on: ubuntu-latest
+    environment: ci
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
+    steps:
+      - name: Checkout (this repo, for composite actions)
+        uses: actions/checkout@v4
+
+      # --- cloud auth (OIDC; only the selected cloud runs) ---
+      - name: Azure login
+        if: ${{ inputs.cloud == 'azure' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: AWS login
+        if: ${{ inputs.cloud == 'aws' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.location != '' && inputs.location || 'us-east-1' }}
+      - name: GCP login
+        if: ${{ inputs.cloud == 'gcp' }}
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - name: Setup gcloud
+        if: ${{ inputs.cloud == 'gcp' }}
+        uses: google-github-actions/setup-gcloud@v2
+
+      # Ephemeral SSH keypair; the private key stays on the runner.
+      - name: Generate SSH key
+        run: |
+          set -euo pipefail
+          ssh-keygen -t ed25519 -f "$HOME/.ssh/bench_key" -N "" -q
+          echo "SSH_KEY=$HOME/.ssh/bench_key" >> "$GITHUB_ENV"
+
+      # --- provision (composite; only the selected cloud runs) ---
+      - name: Provision
+        uses: ./.github/actions/cloud-vm
+        with:
+          op: provision
+          cloud: ${{ inputs.cloud }}
+          vm_size: ${{ inputs.vm_size }}
+          location: ${{ inputs.location }}
+          ssh_pub: ${{ env.SSH_KEY }}.pub
+          name_prefix: vdbbench
+
+      - name: Wait for SSH
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if ssh $SSH_OPTS -i "$SSH_KEY" -o ConnectTimeout=5 "${SSH_USER}@${VM_IP}" true 2>/dev/null; then
+              echo "SSH up after ${i} tries"; exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::SSH never came up"; exit 1
+
+      # Build the harness + branch-built infino binding on the VM, then run the
+      # selected bench(es). Building on the VM keeps the wheel's Python ABI in
+      # sync with the VM interpreter.
+      - name: Run VectorDBBench (on VM)
+        run: |
+          set -euo pipefail
+          ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${VM_IP}" \
+            "VDB_REPO='${{ inputs.vdbbench_repo }}' \
+             VDB_REF='${{ inputs.vdbbench_ref }}' \
+             INFINO_REPO='${{ inputs.infino_repo }}' \
+             INFINO_REF='${{ inputs.infino_ref }}' \
+             MODE='${{ inputs.mode }}' \
+             VECTOR_CASE='${{ inputs.vector_case }}' \
+             FTS_CASE='${{ inputs.fts_case }}' \
+             FTS_DATASET='${{ inputs.fts_dataset }}' \
+             PAYLOAD_PROFILE='${{ inputs.payload_profile }}' \
+             K='${{ inputs.k }}' \
+             NUM_CONC='${{ inputs.num_concurrency }}' \
+             N_CENT='${{ inputs.n_cent }}' \
+             NPROBE='${{ inputs.nprobe }}' \
+             bash -s" <<'REMOTE' 2>&1 | tee /tmp/vdbbench.log
+          set -euo pipefail
+
+          echo "===== APT ====="
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            git wget curl ca-certificates build-essential pkg-config libssl-dev \
+            python3 python3-venv python3-dev
+
+          echo "===== RUST ====="
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf --retry 5 --retry-connrefused \
+              --retry-delay 2 https://sh.rustup.rs | sh -s -- -y --profile minimal
+          fi
+          source "$HOME/.cargo/env"
+
+          echo "===== CLONE HARNESS ====="
+          rm -rf "$HOME/VectorDBBench"
+          git clone --depth 1 --branch "$VDB_REF" \
+            "https://github.com/${VDB_REPO}.git" "$HOME/VectorDBBench"
+
+          echo "===== VENV + HARNESS INSTALL ====="
+          cd "$HOME/VectorDBBench"
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip maturin
+          pip install -e '.[infino]'
+
+          echo "===== BUILD INFINO BINDING FROM BRANCH ====="
+          rm -rf "$HOME/infino"
+          git clone --depth 1 --branch "$INFINO_REF" \
+            "https://github.com/${INFINO_REPO}.git" "$HOME/infino"
+          rm -rf /tmp/wheels && mkdir -p /tmp/wheels
+          ( cd "$HOME/infino/infino-python" && maturin build --release -o /tmp/wheels )
+          pip install --force-reinstall /tmp/wheels/*.whl
+          python3 -c "import infino; print('infino binding:', getattr(infino, '__version__', 'unknown'))"
+
+          echo "===== RUN ====="
+          export RESULTS_LOCAL_DIR=/tmp/vdb_results
+          mkdir -p "$RESULTS_LOCAL_DIR"
+
+          if [ "$MODE" = "vector" ] || [ "$MODE" = "both" ]; then
+            echo "----- VECTOR: $VECTOR_CASE -----"
+            init_bench Infino \
+              --case-type "$VECTOR_CASE" \
+              --k "$K" \
+              --num-concurrency "$NUM_CONC" \
+              --n-cent "$N_CENT" \
+              --nprobe "$NPROBE" \
+              --drop-old
+          fi
+
+          if [ "$MODE" = "fts" ] || [ "$MODE" = "both" ]; then
+            echo "----- FTS: $FTS_CASE / $FTS_DATASET -----"
+            init_bench InfinoFTS \
+              --case-type "$FTS_CASE" \
+              --dataset-with-size-type "$FTS_DATASET" \
+              --payload-profile "$PAYLOAD_PROFILE" \
+              --drop-old
+          fi
+
+          echo "===== RESULTS ====="
+          find "$RESULTS_LOCAL_DIR" -name 'result_*.json' -print
+          REMOTE
+
+      - name: Copy results back
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/vdb_results
+          scp $SSH_OPTS -i "$SSH_KEY" -r \
+            "${SSH_USER}@${VM_IP}:/tmp/vdb_results/." /tmp/vdb_results/ || true
+
+      - name: Publish summary
+        if: ${{ !cancelled() }}
+        env:
+          CLOUD: ${{ inputs.cloud }}
+          INFINO_REF: ${{ inputs.infino_ref }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set +e -u -o pipefail
+          python3 .github/scripts/vdbbench_summary.py \
+            /tmp/vdb_results "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: vectordbbench-results
+          path: |
+            /tmp/vdbbench.log
+            /tmp/vdb_results/**/result_*.json
+          if-no-files-found: warn
+
+      # --- teardown (always; composite; only the selected cloud runs) ---
+      - name: Teardown
+        if: ${{ always() }}
+        uses: ./.github/actions/cloud-vm
+        with:
+          op: teardown
+          cloud: ${{ inputs.cloud }}
+          name_prefix: vdbbench
