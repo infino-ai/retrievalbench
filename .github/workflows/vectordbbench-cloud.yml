@@ -2,9 +2,10 @@ name: VectorDBBench (Cloud)
 
 # Manually-triggered VectorDBBench (Infino client) on a per-run ephemeral VM
 # (Azure/AWS/GCP via `cloud`). Only provision/auth/teardown are cloud-specific;
-# the bench runs over SSH, identical everywhere. The `infino` binding is rebuilt
-# from `infino_ref` via maturin, so the run measures that branch, not the
-# published wheel. `mode` selects vector / fts / both. The VM is always torn down.
+# the bench runs over SSH, identical everywhere. The `infino` binding is built
+# from `infino_ref` as an abi3 wheel on the runner (rust-cache) and copied to
+# the VM, so the run measures that branch, not the published wheel. `mode`
+# selects vector / fts / both. The VM is always torn down.
 
 on:
   workflow_dispatch:
@@ -149,6 +150,26 @@ jobs:
           ssh-keygen -t ed25519 -f "$HOME/.ssh/bench_key" -N "" -q
           echo "SSH_KEY=$HOME/.ssh/bench_key" >> "$GITHUB_ENV"
 
+      # Build the infino binding on the runner (cached) before provisioning, so
+      # a build failure never leaves a VM billing. The abi3 wheel is portable
+      # across CPython minors; runner and VM share glibc/arch (both Ubuntu 24.04).
+      - name: Checkout infino (runner)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.infino_repo }}
+          ref: ${{ inputs.infino_ref }}
+          path: infino
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: infino/infino-python
+      - name: Build infino wheel (runner)
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip maturin
+          maturin build --release --manifest-path infino/infino-python/Cargo.toml --out wheels
+          ls -la wheels
+
       # --- provision (composite; only the selected cloud runs) ---
       - name: Provision
         uses: ./.github/actions/cloud-vm
@@ -171,17 +192,20 @@ jobs:
           done
           echo "::error::SSH never came up"; exit 1
 
-      # Build the harness + branch-built infino binding on the VM, then run the
-      # selected bench(es). Building on the VM keeps the wheel's Python ABI in
-      # sync with the VM interpreter.
+      - name: Copy infino wheel to VM
+        run: |
+          set -euo pipefail
+          ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${VM_IP}" "mkdir -p /tmp/infino_wheel"
+          scp $SSH_OPTS -i "$SSH_KEY" wheels/*.whl "${SSH_USER}@${VM_IP}:/tmp/infino_wheel/"
+
+      # Install the harness + the branch-built wheel, then run the selected
+      # bench(es). No compiler on the VM: the wheel is prebuilt on the runner.
       - name: Run VectorDBBench (on VM)
         run: |
           set -euo pipefail
           ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${VM_IP}" \
             "VDB_REPO='${{ inputs.vdbbench_repo }}' \
              VDB_REF='${{ inputs.vdbbench_ref }}' \
-             INFINO_REPO='${{ inputs.infino_repo }}' \
-             INFINO_REF='${{ inputs.infino_ref }}' \
              MODE='${{ inputs.mode }}' \
              VECTOR_CASE='${{ inputs.vector_case }}' \
              FTS_CASE='${{ inputs.fts_case }}' \
@@ -197,15 +221,7 @@ jobs:
           echo "===== APT ====="
           sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            git wget curl ca-certificates build-essential pkg-config libssl-dev \
-            python3 python3-venv python3-dev
-
-          echo "===== RUST ====="
-          if ! command -v cargo >/dev/null 2>&1; then
-            curl --proto '=https' --tlsv1.2 -sSf --retry 5 --retry-connrefused \
-              --retry-delay 2 https://sh.rustup.rs | sh -s -- -y --profile minimal
-          fi
-          source "$HOME/.cargo/env"
+            git wget curl ca-certificates python3 python3-venv python3-dev
 
           echo "===== CLONE HARNESS ====="
           rm -rf "$HOME/VectorDBBench"
@@ -216,16 +232,11 @@ jobs:
           cd "$HOME/VectorDBBench"
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install --upgrade pip maturin
+          pip install --upgrade pip
           pip install -e '.[infino]'
 
-          echo "===== BUILD INFINO BINDING FROM BRANCH ====="
-          rm -rf "$HOME/infino"
-          git clone --depth 1 --branch "$INFINO_REF" \
-            "https://github.com/${INFINO_REPO}.git" "$HOME/infino"
-          rm -rf /tmp/wheels && mkdir -p /tmp/wheels
-          ( cd "$HOME/infino/infino-python" && maturin build --release -o /tmp/wheels )
-          pip install --force-reinstall /tmp/wheels/*.whl
+          echo "===== INSTALL BRANCH-BUILT INFINO WHEEL ====="
+          pip install --force-reinstall /tmp/infino_wheel/*.whl
           python3 -c "import infino; print('infino binding:', getattr(infino, '__version__', 'unknown'))"
 
           echo "===== RUN ====="
