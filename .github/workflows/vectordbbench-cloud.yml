@@ -1,11 +1,10 @@
 name: VectorDBBench (Cloud)
 
-# Manually-triggered VectorDBBench (Infino client) on a per-run ephemeral VM
-# (Azure/AWS/GCP via `cloud`). Only provision/auth/teardown are cloud-specific;
-# the bench runs over SSH, identical everywhere. The `infino` binding is built
-# from `infino_ref` as an abi3 wheel on the runner (rust-cache) and copied to
-# the VM, so the run measures that branch, not the published wheel. `mode`
-# selects vector / fts / both. The VM is always torn down.
+# Manually-triggered VectorDBBench (Infino client) on per-run ephemeral VMs
+# (Azure/AWS/GCP via `cloud`). The `infino` binding is built once from
+# `infino_ref` as an abi3 wheel on the runner (rust-cache), so runs measure that
+# branch, not the published wheel. `mode` (vector / fts / both) fans out into a
+# matrix: each bench gets its own VM and runs in parallel. Every VM is torn down.
 
 on:
   workflow_dispatch:
@@ -17,26 +16,33 @@ on:
         type: choice
         options: [azure, aws, gcp]
       mode:
-        description: "Which benchmark(s) to run."
+        description: "Which benchmark(s) to run (both = parallel VMs)."
         required: false
         default: vector
         type: choice
         options: [vector, fts, both]
       vector_case:
-        description: "Vector CaseType (vectordbbench Infino --case-type)."
+        description: "Vector CaseType (vectordbbench infino --case-type)."
         required: false
         default: Performance768D10M
         type: string
       fts_case:
-        description: "FTS CaseType (vectordbbench InfinoFTS --case-type)."
+        description: "FTS CaseType (vectordbbench infinofts --case-type)."
         required: false
         default: FTSBm25Performance
         type: string
       fts_dataset:
         description: "FTS dataset + size (--dataset-with-size-type)."
         required: false
-        default: MSMarcoSmall
-        type: string
+        default: "MS MARCO Small (100K documents)"
+        type: choice
+        options:
+          - "MS MARCO Small (100K documents)"
+          - "MS MARCO Medium (1M documents)"
+          - "MS MARCO Large (8.8M documents)"
+          - "HotpotQA Small (100K documents)"
+          - "HotpotQA Medium (1M documents)"
+          - "HotpotQA Large (5.2M documents)"
       payload_profile:
         description: "FTS payload profile (--payload-profile)."
         required: false
@@ -93,7 +99,7 @@ on:
         default: "main"
         type: string
       timeout_minutes:
-        description: "Hard auto-stop (min); VM torn down when hit."
+        description: "Hard auto-stop per bench (min); VM torn down when hit."
         required: false
         default: "180"
         type: string
@@ -111,10 +117,60 @@ env:
   SSH_OPTS: "-o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
 
 jobs:
-  vectordbbench:
+  # Expand `mode` into the matrix of benches to run (each becomes its own VM).
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        run: |
+          set -euo pipefail
+          case "${{ inputs.mode }}" in
+            vector) inc='[{"bench":"vector"}]';;
+            fts)    inc='[{"bench":"fts"}]';;
+            both)   inc='[{"bench":"vector"},{"bench":"fts"}]';;
+            *) echo "::error::unknown mode ${{ inputs.mode }}"; exit 1;;
+          esac
+          echo "matrix={\"include\":$inc}" >> "$GITHUB_OUTPUT"
+
+  # Build the infino binding once (cached) and share it with every bench leg.
+  # The abi3 wheel is portable across CPython minors; runner and VM share
+  # glibc/arch (both Ubuntu 24.04).
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout infino
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.infino_repo }}
+          ref: ${{ inputs.infino_ref }}
+          path: infino
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: infino/infino-python
+      - name: Build infino wheel
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip maturin
+          maturin build --release --manifest-path infino/infino-python/Cargo.toml --out wheels
+          ls -la wheels
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: infino-wheel
+          path: wheels/*.whl
+          if-no-files-found: error
+
+  bench:
+    needs: [plan, build]
     runs-on: ubuntu-latest
     environment: ci
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
+    strategy:
+      fail-fast: false   # one bench failing must not kill the other's VM/run
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - name: Checkout (this repo, for composite actions)
         uses: actions/checkout@v4
@@ -150,25 +206,11 @@ jobs:
           ssh-keygen -t ed25519 -f "$HOME/.ssh/bench_key" -N "" -q
           echo "SSH_KEY=$HOME/.ssh/bench_key" >> "$GITHUB_ENV"
 
-      # Build the infino binding on the runner (cached) before provisioning, so
-      # a build failure never leaves a VM billing. The abi3 wheel is portable
-      # across CPython minors; runner and VM share glibc/arch (both Ubuntu 24.04).
-      - name: Checkout infino (runner)
-        uses: actions/checkout@v4
+      - name: Download infino wheel
+        uses: actions/download-artifact@v4
         with:
-          repository: ${{ inputs.infino_repo }}
-          ref: ${{ inputs.infino_ref }}
-          path: infino
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: infino/infino-python
-      - name: Build infino wheel (runner)
-        run: |
-          set -euo pipefail
-          python3 -m pip install --upgrade pip maturin
-          maturin build --release --manifest-path infino/infino-python/Cargo.toml --out wheels
-          ls -la wheels
+          name: infino-wheel
+          path: wheels
 
       # --- provision (composite; only the selected cloud runs) ---
       - name: Provision
@@ -179,7 +221,7 @@ jobs:
           vm_size: ${{ inputs.vm_size }}
           location: ${{ inputs.location }}
           ssh_pub: ${{ env.SSH_KEY }}.pub
-          name_prefix: vdbbench
+          name_prefix: vdbbench-${{ matrix.bench }}
 
       - name: Wait for SSH
         run: |
@@ -198,15 +240,15 @@ jobs:
           ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${VM_IP}" "mkdir -p /tmp/infino_wheel"
           scp $SSH_OPTS -i "$SSH_KEY" wheels/*.whl "${SSH_USER}@${VM_IP}:/tmp/infino_wheel/"
 
-      # Install the harness + the branch-built wheel, then run the selected
-      # bench(es). No compiler on the VM: the wheel is prebuilt on the runner.
+      # Install the harness + the branch-built wheel, then run this leg's bench.
+      # No compiler on the VM: the wheel is prebuilt.
       - name: Run VectorDBBench (on VM)
         run: |
           set -euo pipefail
           ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${VM_IP}" \
             "VDB_REPO='${{ inputs.vdbbench_repo }}' \
              VDB_REF='${{ inputs.vdbbench_ref }}' \
-             MODE='${{ inputs.mode }}' \
+             BENCH='${{ matrix.bench }}' \
              VECTOR_CASE='${{ inputs.vector_case }}' \
              FTS_CASE='${{ inputs.fts_case }}' \
              FTS_DATASET='${{ inputs.fts_dataset }}' \
@@ -239,24 +281,22 @@ jobs:
           pip install --force-reinstall /tmp/infino_wheel/*.whl
           python3 -c "import infino; print('infino binding:', getattr(infino, '__version__', 'unknown'))"
 
-          echo "===== RUN ====="
+          echo "===== RUN ($BENCH) ====="
           export RESULTS_LOCAL_DIR=/tmp/vdb_results
           mkdir -p "$RESULTS_LOCAL_DIR"
 
-          if [ "$MODE" = "vector" ] || [ "$MODE" = "both" ]; then
+          if [ "$BENCH" = "vector" ]; then
             echo "----- VECTOR: $VECTOR_CASE -----"
-            vectordbbench Infino \
+            vectordbbench infino \
               --case-type "$VECTOR_CASE" \
               --k "$K" \
               --num-concurrency "$NUM_CONC" \
               --n-cent "$N_CENT" \
               --nprobe "$NPROBE" \
               --drop-old
-          fi
-
-          if [ "$MODE" = "fts" ] || [ "$MODE" = "both" ]; then
+          else
             echo "----- FTS: $FTS_CASE / $FTS_DATASET -----"
-            vectordbbench InfinoFTS \
+            vectordbbench infinofts \
               --case-type "$FTS_CASE" \
               --dataset-with-size-type "$FTS_DATASET" \
               --payload-profile "$PAYLOAD_PROFILE" \
@@ -280,7 +320,7 @@ jobs:
         env:
           CLOUD: ${{ inputs.cloud }}
           INFINO_REF: ${{ inputs.infino_ref }}
-          MODE: ${{ inputs.mode }}
+          MODE: ${{ matrix.bench }}
         run: |
           set +e -u -o pipefail
           python3 .github/scripts/vdbbench_summary.py \
@@ -291,7 +331,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: vectordbbench-results
+          name: vectordbbench-results-${{ matrix.bench }}
           path: |
             /tmp/vdbbench.log
             /tmp/vdb_results/**/result_*.json
@@ -326,4 +366,4 @@ jobs:
         with:
           op: teardown
           cloud: ${{ inputs.cloud }}
-          name_prefix: vdbbench
+          name_prefix: vdbbench-${{ matrix.bench }}
