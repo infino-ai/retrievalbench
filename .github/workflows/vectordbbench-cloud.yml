@@ -286,8 +286,9 @@ jobs:
           python3 .github/scripts/vdbbench_summary.py \
             /tmp/vdb_results "$GITHUB_STEP_SUMMARY"
 
+      # always() so a timeout/cancel still yields the log for diagnostics.
       - name: Upload artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: vectordbbench-results
