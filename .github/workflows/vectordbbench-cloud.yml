@@ -245,7 +245,7 @@ jobs:
 
           if [ "$MODE" = "vector" ] || [ "$MODE" = "both" ]; then
             echo "----- VECTOR: $VECTOR_CASE -----"
-            init_bench Infino \
+            vectordbbench Infino \
               --case-type "$VECTOR_CASE" \
               --k "$K" \
               --num-concurrency "$NUM_CONC" \
@@ -256,7 +256,7 @@ jobs:
 
           if [ "$MODE" = "fts" ] || [ "$MODE" = "both" ]; then
             echo "----- FTS: $FTS_CASE / $FTS_DATASET -----"
-            init_bench InfinoFTS \
+            vectordbbench InfinoFTS \
               --case-type "$FTS_CASE" \
               --dataset-with-size-type "$FTS_DATASET" \
               --payload-profile "$PAYLOAD_PROFILE" \
