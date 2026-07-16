@@ -297,6 +297,28 @@ jobs:
             /tmp/vdb_results/**/result_*.json
           if-no-files-found: warn
 
+      # Re-auth before teardown: a long run can outlive the initial cloud token,
+      # which would make teardown fail auth and silently leak the VM.
+      - name: Re-auth Azure (teardown)
+        if: ${{ always() && inputs.cloud == 'azure' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Re-auth AWS (teardown)
+        if: ${{ always() && inputs.cloud == 'aws' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.location != '' && inputs.location || 'us-east-1' }}
+      - name: Re-auth GCP (teardown)
+        if: ${{ always() && inputs.cloud == 'gcp' }}
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
       # --- teardown (always; composite; only the selected cloud runs) ---
       - name: Teardown
         if: ${{ always() }}
