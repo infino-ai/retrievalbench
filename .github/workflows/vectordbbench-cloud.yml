@@ -23,12 +23,12 @@ on:
         type: choice
         options: [vector, fts, both]
       vector_case:
-        description: "Vector CaseType (init_bench Infino --case-type)."
+        description: "Vector CaseType (vectordbbench Infino --case-type)."
         required: false
         default: Performance768D10M
         type: string
       fts_case:
-        description: "FTS CaseType (init_bench InfinoFTS --case-type)."
+        description: "FTS CaseType (vectordbbench InfinoFTS --case-type)."
         required: false
         default: FTSBm25Performance
         type: string
