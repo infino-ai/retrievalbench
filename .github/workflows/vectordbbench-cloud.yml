@@ -1,10 +1,11 @@
 name: VectorDBBench (Cloud)
 
 # Manually-triggered VectorDBBench (Infino client) on per-run ephemeral VMs
-# (Azure/AWS/GCP via `cloud`). The `infino` binding is built once from
-# `infino_ref` as an abi3 wheel on the runner (rust-cache), so runs measure that
-# branch, not the published wheel. `mode` (vector / fts / both) fans out into a
-# matrix: each bench gets its own VM and runs in parallel. Every VM is torn down.
+# (Azure/AWS/GCP via `cloud`). `binding_source` selects the infino binding:
+# `branch` builds an abi3 wheel once from `infino_ref` on the runner (rust-cache)
+# and copies it to each VM; `published` uses the PyPI wheel. `mode`
+# (vector / fts / both) fans out into a matrix: each bench gets its own VM and
+# runs in parallel. Every VM is torn down.
 
 on:
   workflow_dispatch:
@@ -88,13 +89,19 @@ on:
         required: false
         default: "feat/infino-client"
         type: string
+      binding_source:
+        description: "infino binding: build from a branch, or use the published PyPI wheel."
+        required: false
+        default: branch
+        type: choice
+        options: [branch, published]
       infino_repo:
-        description: "infino git repo to build the binding against."
+        description: "infino git repo to build the binding from (binding_source=branch)."
         required: false
         default: "infino-ai/infino"
         type: string
       infino_ref:
-        description: "infino git branch to build (measures that branch, not the published wheel)."
+        description: "infino git branch to build (binding_source=branch); measures that branch, not the published wheel."
         required: false
         default: "main"
         type: string
@@ -136,8 +143,9 @@ jobs:
 
   # Build the infino binding once (cached) and share it with every bench leg.
   # The abi3 wheel is portable across CPython minors; runner and VM share
-  # glibc/arch (both Ubuntu 24.04).
+  # glibc/arch (both Ubuntu 24.04). Skipped when using the published wheel.
   build:
+    if: ${{ inputs.binding_source == 'branch' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout infino
@@ -165,6 +173,9 @@ jobs:
 
   bench:
     needs: [plan, build]
+    # Run when the build succeeded (branch) or was skipped (published); a skipped
+    # dependency would otherwise skip this job too.
+    if: ${{ always() && needs.plan.result == 'success' && needs.build.result != 'failure' && needs.build.result != 'cancelled' }}
     runs-on: ubuntu-latest
     environment: ci
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
@@ -207,6 +218,7 @@ jobs:
           echo "SSH_KEY=$HOME/.ssh/bench_key" >> "$GITHUB_ENV"
 
       - name: Download infino wheel
+        if: ${{ inputs.binding_source == 'branch' }}
         uses: actions/download-artifact@v4
         with:
           name: infino-wheel
@@ -235,19 +247,21 @@ jobs:
           echo "::error::SSH never came up"; exit 1
 
       - name: Copy infino wheel to VM
+        if: ${{ inputs.binding_source == 'branch' }}
         run: |
           set -euo pipefail
           ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${VM_IP}" "mkdir -p /tmp/infino_wheel"
           scp $SSH_OPTS -i "$SSH_KEY" wheels/*.whl "${SSH_USER}@${VM_IP}:/tmp/infino_wheel/"
 
-      # Install the harness + the branch-built wheel, then run this leg's bench.
-      # No compiler on the VM: the wheel is prebuilt.
+      # Install the harness, then either the branch-built wheel (scp'd above) or
+      # the published PyPI binding, then run this leg's bench. No compiler on the VM.
       - name: Run VectorDBBench (on VM)
         run: |
           set -euo pipefail
           ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${VM_IP}" \
             "VDB_REPO='${{ inputs.vdbbench_repo }}' \
              VDB_REF='${{ inputs.vdbbench_ref }}' \
+             BINDING='${{ inputs.binding_source }}' \
              BENCH='${{ matrix.bench }}' \
              VECTOR_CASE='${{ inputs.vector_case }}' \
              FTS_CASE='${{ inputs.fts_case }}' \
@@ -277,8 +291,12 @@ jobs:
           pip install --upgrade pip
           pip install -e '.[infino]'
 
-          echo "===== INSTALL BRANCH-BUILT INFINO WHEEL ====="
-          pip install --force-reinstall /tmp/infino_wheel/*.whl
+          if [ "$BINDING" = "branch" ]; then
+            echo "===== INSTALL BRANCH-BUILT INFINO WHEEL ====="
+            pip install --force-reinstall /tmp/infino_wheel/*.whl
+          else
+            echo "===== USING PUBLISHED INFINO WHEEL ====="
+          fi
           python3 -c "import infino; print('infino binding:', getattr(infino, '__version__', 'unknown'))"
 
           echo "===== RUN ($BENCH) ====="
