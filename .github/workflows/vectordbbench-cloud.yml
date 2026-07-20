@@ -105,6 +105,16 @@ on:
         required: false
         default: "main"
         type: string
+      opt_level:
+        description: "Cargo release opt-level for the wheel build (0-3, s, z); binding_source=branch."
+        required: false
+        default: "3"
+        type: string
+      infino_env:
+        description: "Engine tuning: space-separated INFINO_...=value pairs exported before the bench (e.g. 'INFINO_SUPERTABLE__READER_THREADS=8 INFINO_COMPACTION__MIN_FILL_PERCENT=60')."
+        required: false
+        default: ""
+        type: string
       timeout_minutes:
         description: "Hard auto-stop per bench (min); VM torn down when hit."
         required: false
@@ -159,6 +169,8 @@ jobs:
         with:
           workspaces: infino/infino-python
       - name: Build infino wheel
+        env:
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: ${{ inputs.opt_level }}
         run: |
           set -euo pipefail
           python3 -m pip install --upgrade pip maturin
@@ -262,6 +274,7 @@ jobs:
             "VDB_REPO='${{ inputs.vdbbench_repo }}' \
              VDB_REF='${{ inputs.vdbbench_ref }}' \
              BINDING='${{ inputs.binding_source }}' \
+             INFINO_ENV='${{ inputs.infino_env }}' \
              BENCH='${{ matrix.bench }}' \
              VECTOR_CASE='${{ inputs.vector_case }}' \
              FTS_CASE='${{ inputs.fts_case }}' \
@@ -300,6 +313,11 @@ jobs:
           python3 -c "import infino; print('infino binding:', getattr(infino, '__version__', 'unknown'))"
 
           echo "===== RUN ($BENCH) ====="
+          # Engine tuning knobs (INFINO_...=value pairs) applied to the bench.
+          if [ -n "$INFINO_ENV" ]; then
+            export $INFINO_ENV
+            echo "infino env:"; env | grep '^INFINO_' | sort
+          fi
           export RESULTS_LOCAL_DIR=/tmp/vdb_results
           mkdir -p "$RESULTS_LOCAL_DIR"
 
