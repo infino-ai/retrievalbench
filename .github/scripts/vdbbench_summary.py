@@ -79,6 +79,10 @@ def main() -> int:
     if not rows["vector"] and not rows["fts"]:
         print("::error::VectorDBBench produced no result JSON.")
         return 1
+    failed = [r for r in rows["vector"] + rows["fts"] if r["status"] != "✓"]
+    if failed:
+        print(f"::error::{len(failed)} case(s) failed — see the uploaded log.")
+        return 1
     return 0
 
 
