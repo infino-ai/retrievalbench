@@ -2,7 +2,7 @@
 
 infino's ClickBench numbers against the published reference engines, on the ClickBench reference machine **c6a.4xlarge** at the full 100M-row scale.
 
-Across the full self-hosted ClickBench field on c6a.4xlarge, infino ranks **#23 of 94** engines by hot-run total, and beats every general-purpose engine reading Parquet except DuckDB, Polars, and CedarDB. See the [full comparison](FULL_COMPARISON.md) for all 94.
+Across the full self-hosted ClickBench field on c6a.4xlarge, infino ranks **#22 of 94** engines by hot-run total, and beats every general-purpose engine reading Parquet except DuckDB and CedarDB. See the [full comparison](FULL_COMPARISON.md) for all 94.
 
 This README keeps the headline comparison against the two engines that matter most for us, DataFusion and ClickHouse. infino's result file is stored here; the reference numbers link to their source on upstream ClickBench.
 
@@ -10,7 +10,7 @@ This README keeps the headline comparison against the two engines that matter mo
 
 | System | Cold sum | Cold geomean | Hot sum | Hot geomean |
 |---|--:|--:|--:|--:|
-| [**infino**](results/infino/c6a.4xlarge.json) | 926.29s * | 20.79s * | **38.46s** | 0.3425s |
+| [**infino**](results/infino/c6a.4xlarge.json) | 609.98s * | 8.33s * | **37.37s** | 0.3100s |
 | [DataFusion (Parquet, single)](results/datafusion/c6a.4xlarge.json) | 185.82s | 1.22s | 45.92s | 0.3556s |
 | [ClickHouse (Parquet, single)](results/clickhouse-parquet/c6a.4xlarge.json) | 198.14s | 1.33s | 48.05s | 0.4264s |
 | [ClickHouse (native, MergeTree)](results/clickhouse/c6a.4xlarge.json) | 154.79s | 1.58s | 32.26s | 0.1306s |
@@ -26,7 +26,7 @@ Each query is run three times. **Cold** is the first run (`t1`); **hot** is the 
 infino's cold figures are preliminary and should be disregarded at this stage:
 
 1. **Not measured the same way.** infino's cold was taken with the OS page cache dropped before every query, so each `t1` is a true cold-storage read. The upstream reference cold numbers run against a warm OS cache (data already resident from load). The two are not comparable.
-2. **Cold path still in progress.** infino currently re-opens the table and cold-fetches whole superfiles per query. That path is an active optimization target, so the cold numbers will move.
+2. **Cold path still improving.** Cross-process cache reuse landed (a fresh process rebuilds its cache index from files a prior process left on disk instead of re-fetching from source) and already cut cold sharply: cold sum from 926s to 610s, cold geomean from 20.8s to 8.3s between runs. It is still an active optimization target, so the numbers will keep moving.
 
 Hot is the comparable, meaningful metric today.
 
@@ -51,7 +51,7 @@ No query returns a wrong computation.
 
 ## Sources
 
-infino's JSON is from our `clickbench-cloud` run on 2026-07-19: infino `main` (commit `8d45bdc1`), AWS c6a.4xlarge, 100M rows, portable build (no `target-cpu`) with fat LTO and `codegen-units = 1`, matching DataFusion's build recipe.
+infino's JSON is from our `clickbench-cloud` run on 2026-07-21: infino `main` (commit `aa3a6247`), AWS c6a.4xlarge, 100M rows, 32 GiB disk cache, portable build (no `target-cpu`) with fat LTO and `codegen-units = 1`, matching DataFusion's build recipe.
 
 Reference numbers are from upstream [ClickBench](https://github.com/ClickHouse/ClickBench). The three committed here are copied verbatim from:
 
