@@ -198,29 +198,17 @@ jobs:
       - name: Checkout (this repo, for composite actions)
         uses: actions/checkout@v4
 
-      # --- cloud auth (OIDC; only the selected cloud runs) ---
-      - name: Azure login
-        if: ${{ inputs.cloud == 'azure' }}
-        uses: azure/login@v2
+      - name: Cloud login
+        uses: ./.github/actions/cloud-login
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: AWS login
-        if: ${{ inputs.cloud == 'aws' }}
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ inputs.location != '' && inputs.location || 'us-east-1' }}
-      - name: GCP login
-        if: ${{ inputs.cloud == 'gcp' }}
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-      - name: Setup gcloud
-        if: ${{ inputs.cloud == 'gcp' }}
-        uses: google-github-actions/setup-gcloud@v2
+          cloud: ${{ inputs.cloud }}
+          location: ${{ inputs.location }}
+          azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          aws_role_arn: ${{ secrets.AWS_ROLE_ARN }}
+          gcp_wif_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          gcp_service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       # Ephemeral SSH keypair; the private key stays on the runner.
       - name: Generate SSH key
@@ -265,8 +253,8 @@ jobs:
           ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${VM_IP}" "mkdir -p /tmp/infino_wheel"
           scp $SSH_OPTS -i "$SSH_KEY" wheels/*.whl "${SSH_USER}@${VM_IP}:/tmp/infino_wheel/"
 
-      # Install the harness, then either the branch-built wheel (scp'd above) or
-      # the published PyPI binding, then run this leg's bench. No compiler on the VM.
+      # Install the harness + infino binding and run this leg's bench. The VM-side
+      # script is piped over SSH; inputs pass as env vars on the command line.
       - name: Run VectorDBBench (on VM)
         run: |
           set -euo pipefail
@@ -284,64 +272,7 @@ jobs:
              NUM_CONC='${{ inputs.num_concurrency }}' \
              N_CENT='${{ inputs.n_cent }}' \
              NPROBE='${{ inputs.nprobe }}' \
-             bash -s" <<'REMOTE' 2>&1 | tee /tmp/vdbbench.log
-          set -euo pipefail
-
-          echo "===== APT ====="
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            git wget curl ca-certificates python3 python3-venv python3-dev
-
-          echo "===== CLONE HARNESS ====="
-          rm -rf "$HOME/VectorDBBench"
-          git clone --depth 1 --branch "$VDB_REF" \
-            "https://github.com/${VDB_REPO}.git" "$HOME/VectorDBBench"
-
-          echo "===== VENV + HARNESS INSTALL ====="
-          cd "$HOME/VectorDBBench"
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip install --upgrade pip
-          pip install -e '.[infino]'
-
-          if [ "$BINDING" = "branch" ]; then
-            echo "===== INSTALL BRANCH-BUILT INFINO WHEEL ====="
-            pip install --force-reinstall /tmp/infino_wheel/*.whl
-          else
-            echo "===== USING PUBLISHED INFINO WHEEL ====="
-          fi
-          python3 -c "import infino; print('infino binding:', getattr(infino, '__version__', 'unknown'))"
-
-          echo "===== RUN ($BENCH) ====="
-          # Engine tuning knobs (INFINO_...=value pairs) applied to the bench.
-          if [ -n "$INFINO_ENV" ]; then
-            export $INFINO_ENV
-            echo "infino env:"; env | grep '^INFINO_' | sort
-          fi
-          export RESULTS_LOCAL_DIR=/tmp/vdb_results
-          mkdir -p "$RESULTS_LOCAL_DIR"
-
-          if [ "$BENCH" = "vector" ]; then
-            echo "----- VECTOR: $VECTOR_CASE -----"
-            vectordbbench infino \
-              --case-type "$VECTOR_CASE" \
-              --k "$K" \
-              --num-concurrency "$NUM_CONC" \
-              --n-cent "$N_CENT" \
-              --nprobe "$NPROBE" \
-              --drop-old
-          else
-            echo "----- FTS: $FTS_CASE / $FTS_DATASET -----"
-            vectordbbench infinofts \
-              --case-type "$FTS_CASE" \
-              --dataset-with-size-type "$FTS_DATASET" \
-              --payload-profile "$PAYLOAD_PROFILE" \
-              --drop-old
-          fi
-
-          echo "===== RESULTS ====="
-          find "$RESULTS_LOCAL_DIR" -name 'result_*.json' -print
-          REMOTE
+             bash -s" < .github/scripts/run_vdbbench.sh 2>&1 | tee /tmp/vdbbench.log
 
       - name: Copy results back
         if: ${{ !cancelled() }}
@@ -355,6 +286,7 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           CLOUD: ${{ inputs.cloud }}
+          BINDING: ${{ inputs.binding_source }}
           INFINO_REF: ${{ inputs.infino_ref }}
           MODE: ${{ matrix.bench }}
         run: |
@@ -375,25 +307,18 @@ jobs:
 
       # Re-auth before teardown: a long run can outlive the initial cloud token,
       # which would make teardown fail auth and silently leak the VM.
-      - name: Re-auth Azure (teardown)
-        if: ${{ always() && inputs.cloud == 'azure' }}
-        uses: azure/login@v2
+      - name: Cloud re-login (teardown)
+        if: ${{ always() }}
+        uses: ./.github/actions/cloud-login
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: Re-auth AWS (teardown)
-        if: ${{ always() && inputs.cloud == 'aws' }}
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ inputs.location != '' && inputs.location || 'us-east-1' }}
-      - name: Re-auth GCP (teardown)
-        if: ${{ always() && inputs.cloud == 'gcp' }}
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          cloud: ${{ inputs.cloud }}
+          location: ${{ inputs.location }}
+          azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          aws_role_arn: ${{ secrets.AWS_ROLE_ARN }}
+          gcp_wif_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          gcp_service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       # --- teardown (always; composite; only the selected cloud runs) ---
       - name: Teardown

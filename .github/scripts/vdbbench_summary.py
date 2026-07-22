@@ -58,14 +58,18 @@ def table(title: str, items: list[dict]) -> list[str]:
 def main() -> int:
     results_dir, summary_path = sys.argv[1], sys.argv[2]
     cloud = os.environ.get("CLOUD", "?")
-    infino_ref = os.environ.get("INFINO_REF", "?")
     mode = os.environ.get("MODE", "both")
+    # Describe the binding provenance: a built branch, or the published wheel.
+    if os.environ.get("BINDING") == "published":
+        binding = "published wheel"
+    else:
+        binding = f"infino ref `{os.environ.get('INFINO_REF', '?')}`"
 
     rows = collect(results_dir)
     lines = [
         f"## VectorDBBench — Infino ({cloud})",
         "",
-        f"- cloud `{cloud}` · infino ref `{infino_ref}` · mode `{mode}`",
+        f"- cloud `{cloud}` · {binding} · mode `{mode}`",
         "",
     ]
     if mode in ("vector", "both"):

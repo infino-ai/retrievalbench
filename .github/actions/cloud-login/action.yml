@@ -1,0 +1,59 @@
+name: Cloud login
+description: OIDC federated login to the selected cloud (azure/aws/gcp).
+
+# Only the branch matching `cloud` runs. Secrets can't be read inside a composite,
+# so the caller passes them as inputs. Used for both the initial login and the
+# pre-teardown re-auth (a long run can outlive the first token).
+
+inputs:
+  cloud:
+    description: "azure | aws | gcp"
+    required: true
+  location:
+    description: "Region (AWS aws-region); empty = us-east-1."
+    required: false
+    default: ""
+  azure_client_id:
+    required: false
+    default: ""
+  azure_tenant_id:
+    required: false
+    default: ""
+  azure_subscription_id:
+    required: false
+    default: ""
+  aws_role_arn:
+    required: false
+    default: ""
+  gcp_wif_provider:
+    required: false
+    default: ""
+  gcp_service_account:
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Azure login
+      if: ${{ inputs.cloud == 'azure' }}
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure_client_id }}
+        tenant-id: ${{ inputs.azure_tenant_id }}
+        subscription-id: ${{ inputs.azure_subscription_id }}
+    - name: AWS login
+      if: ${{ inputs.cloud == 'aws' }}
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.aws_role_arn }}
+        aws-region: ${{ inputs.location != '' && inputs.location || 'us-east-1' }}
+    - name: GCP login
+      if: ${{ inputs.cloud == 'gcp' }}
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ inputs.gcp_wif_provider }}
+        service_account: ${{ inputs.gcp_service_account }}
+    - name: Setup gcloud
+      if: ${{ inputs.cloud == 'gcp' }}
+      uses: google-github-actions/setup-gcloud@v2
