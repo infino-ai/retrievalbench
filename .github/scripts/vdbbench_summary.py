@@ -35,7 +35,9 @@ def collect(results_dir: str) -> dict[str, list[dict]]:
                     "qps": m.get("qps", 0.0),
                     "p99": m.get("serial_latency_p99", 0.0),
                     "load": m.get("load_duration", 0.0),
-                    "count": m.get("max_load_count", 0),
+                    # Performance cases report inserted_count; max_load_count is
+                    # only set for Capacity cases.
+                    "count": m.get("inserted_count") or m.get("max_load_count", 0),
                 }
             )
     return rows
