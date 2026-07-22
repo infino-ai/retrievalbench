@@ -1,10 +1,11 @@
 name: VectorDBBench (Cloud)
 
-# Manually-triggered VectorDBBench (Infino client) on a per-run ephemeral VM
-# (Azure/AWS/GCP via `cloud`). Only provision/auth/teardown are cloud-specific;
-# the bench runs over SSH, identical everywhere. The `infino` binding is rebuilt
-# from `infino_ref` via maturin, so the run measures that branch, not the
-# published wheel. `mode` selects vector / fts / both. The VM is always torn down.
+# Manually-triggered VectorDBBench (Infino client) on per-run ephemeral VMs
+# (Azure/AWS/GCP via `cloud`). `binding_source` selects the infino binding:
+# `branch` builds an abi3 wheel once from `infino_ref` on the runner (rust-cache)
+# and copies it to each VM; `published` uses the PyPI wheel. `mode`
+# (vector / fts / both) fans out into a matrix: each bench gets its own VM and
+# runs in parallel. Every VM is torn down.
 
 on:
   workflow_dispatch:
@@ -16,26 +17,33 @@ on:
         type: choice
         options: [azure, aws, gcp]
       mode:
-        description: "Which benchmark(s) to run."
+        description: "Which benchmark(s) to run (both = parallel VMs)."
         required: false
-        default: vector
+        default: both
         type: choice
         options: [vector, fts, both]
       vector_case:
-        description: "Vector CaseType (init_bench Infino --case-type)."
+        description: "Vector CaseType (vectordbbench infino --case-type)."
         required: false
-        default: Performance768D10M
+        default: Performance768D1M
         type: string
       fts_case:
-        description: "FTS CaseType (init_bench InfinoFTS --case-type)."
+        description: "FTS CaseType (vectordbbench infinofts --case-type)."
         required: false
         default: FTSBm25Performance
         type: string
       fts_dataset:
         description: "FTS dataset + size (--dataset-with-size-type)."
         required: false
-        default: MSMarcoSmall
-        type: string
+        default: "MS MARCO Medium (1M documents)"
+        type: choice
+        options:
+          - "MS MARCO Small (100K documents)"
+          - "MS MARCO Medium (1M documents)"
+          - "MS MARCO Large (8.8M documents)"
+          - "HotpotQA Small (100K documents)"
+          - "HotpotQA Medium (1M documents)"
+          - "HotpotQA Large (5.2M documents)"
       payload_profile:
         description: "FTS payload profile (--payload-profile)."
         required: false
@@ -49,7 +57,12 @@ on:
       num_concurrency:
         description: "Concurrency levels for the QPS sweep (comma-separated)."
         required: false
-        default: "1,10,50"
+        default: "1,10"
+        type: string
+      num_per_batch:
+        description: "Rows per insert batch (VDBBench NUM_PER_BATCH). Large avoids manifest-part write amplification."
+        required: false
+        default: "50000"
         type: string
       n_cent:
         description: "Infino IVF centroid count (vector build)."
@@ -81,18 +94,34 @@ on:
         required: false
         default: "feat/infino-client"
         type: string
+      binding_source:
+        description: "infino binding: build from a branch, or use the published PyPI wheel."
+        required: false
+        default: branch
+        type: choice
+        options: [branch, published]
       infino_repo:
-        description: "infino git repo to build the binding against."
+        description: "infino git repo to build the binding from (binding_source=branch)."
         required: false
         default: "infino-ai/infino"
         type: string
       infino_ref:
-        description: "infino git branch to build (measures that branch, not the published wheel)."
+        description: "infino git branch to build (binding_source=branch); measures that branch, not the published wheel."
         required: false
         default: "main"
         type: string
+      opt_level:
+        description: "Cargo release opt-level for the wheel build (0-3, s, z); binding_source=branch."
+        required: false
+        default: "3"
+        type: string
+      infino_env:
+        description: "Engine tuning: space-separated INFINO_...=value pairs exported before the bench (e.g. 'INFINO_SUPERTABLE__READER_THREADS=8 INFINO_COMPACTION__MIN_FILL_PERCENT=60')."
+        required: false
+        default: ""
+        type: string
       timeout_minutes:
-        description: "Hard auto-stop (min); VM torn down when hit."
+        description: "Hard auto-stop per bench (min); VM torn down when hit."
         required: false
         default: "180"
         type: string
@@ -110,37 +139,81 @@ env:
   SSH_OPTS: "-o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
 
 jobs:
-  vectordbbench:
+  # Expand `mode` into the matrix of benches to run (each becomes its own VM).
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        run: |
+          set -euo pipefail
+          case "${{ inputs.mode }}" in
+            vector) inc='[{"bench":"vector"}]';;
+            fts)    inc='[{"bench":"fts"}]';;
+            both)   inc='[{"bench":"vector"},{"bench":"fts"}]';;
+            *) echo "::error::unknown mode ${{ inputs.mode }}"; exit 1;;
+          esac
+          echo "matrix={\"include\":$inc}" >> "$GITHUB_OUTPUT"
+
+  # Build the infino binding once (cached) and share it with every bench leg.
+  # The abi3 wheel is portable across CPython minors; runner and VM share
+  # glibc/arch (both Ubuntu 24.04). Skipped when using the published wheel.
+  build:
+    if: ${{ inputs.binding_source == 'branch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout infino
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.infino_repo }}
+          ref: ${{ inputs.infino_ref }}
+          path: infino
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: infino/infino-python
+      - name: Build infino wheel
+        env:
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: ${{ inputs.opt_level }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip maturin
+          maturin build --release --manifest-path infino/infino-python/Cargo.toml --out wheels
+          ls -la wheels
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: infino-wheel
+          path: wheels/*.whl
+          if-no-files-found: error
+
+  bench:
+    needs: [plan, build]
+    # Run when the build succeeded (branch) or was skipped (published); a skipped
+    # dependency would otherwise skip this job too.
+    if: ${{ always() && needs.plan.result == 'success' && needs.build.result != 'failure' && needs.build.result != 'cancelled' }}
     runs-on: ubuntu-latest
     environment: ci
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
+    strategy:
+      fail-fast: false   # one bench failing must not kill the other's VM/run
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - name: Checkout (this repo, for composite actions)
         uses: actions/checkout@v4
 
-      # --- cloud auth (OIDC; only the selected cloud runs) ---
-      - name: Azure login
-        if: ${{ inputs.cloud == 'azure' }}
-        uses: azure/login@v2
+      - name: Cloud login
+        uses: ./.github/actions/cloud-login
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: AWS login
-        if: ${{ inputs.cloud == 'aws' }}
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ inputs.location != '' && inputs.location || 'us-east-1' }}
-      - name: GCP login
-        if: ${{ inputs.cloud == 'gcp' }}
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-      - name: Setup gcloud
-        if: ${{ inputs.cloud == 'gcp' }}
-        uses: google-github-actions/setup-gcloud@v2
+          cloud: ${{ inputs.cloud }}
+          location: ${{ inputs.location }}
+          azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          aws_role_arn: ${{ secrets.AWS_ROLE_ARN }}
+          gcp_wif_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          gcp_service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       # Ephemeral SSH keypair; the private key stays on the runner.
       - name: Generate SSH key
@@ -148,6 +221,13 @@ jobs:
           set -euo pipefail
           ssh-keygen -t ed25519 -f "$HOME/.ssh/bench_key" -N "" -q
           echo "SSH_KEY=$HOME/.ssh/bench_key" >> "$GITHUB_ENV"
+
+      - name: Download infino wheel
+        if: ${{ inputs.binding_source == 'branch' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: infino-wheel
+          path: wheels
 
       # --- provision (composite; only the selected cloud runs) ---
       - name: Provision
@@ -158,7 +238,7 @@ jobs:
           vm_size: ${{ inputs.vm_size }}
           location: ${{ inputs.location }}
           ssh_pub: ${{ env.SSH_KEY }}.pub
-          name_prefix: vdbbench
+          name_prefix: vdbbench-${{ matrix.bench }}
 
       - name: Wait for SSH
         run: |
@@ -171,18 +251,25 @@ jobs:
           done
           echo "::error::SSH never came up"; exit 1
 
-      # Build the harness + branch-built infino binding on the VM, then run the
-      # selected bench(es). Building on the VM keeps the wheel's Python ABI in
-      # sync with the VM interpreter.
+      - name: Copy infino wheel to VM
+        if: ${{ inputs.binding_source == 'branch' }}
+        run: |
+          set -euo pipefail
+          ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${VM_IP}" "mkdir -p /tmp/infino_wheel"
+          scp $SSH_OPTS -i "$SSH_KEY" wheels/*.whl "${SSH_USER}@${VM_IP}:/tmp/infino_wheel/"
+
+      # Install the harness + infino binding and run this leg's bench. The VM-side
+      # script is piped over SSH; inputs pass as env vars on the command line.
       - name: Run VectorDBBench (on VM)
         run: |
           set -euo pipefail
           ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${VM_IP}" \
             "VDB_REPO='${{ inputs.vdbbench_repo }}' \
              VDB_REF='${{ inputs.vdbbench_ref }}' \
-             INFINO_REPO='${{ inputs.infino_repo }}' \
-             INFINO_REF='${{ inputs.infino_ref }}' \
-             MODE='${{ inputs.mode }}' \
+             BINDING='${{ inputs.binding_source }}' \
+             INFINO_ENV='${{ inputs.infino_env }}' \
+             NUM_PER_BATCH='${{ inputs.num_per_batch }}' \
+             BENCH='${{ matrix.bench }}' \
              VECTOR_CASE='${{ inputs.vector_case }}' \
              FTS_CASE='${{ inputs.fts_case }}' \
              FTS_DATASET='${{ inputs.fts_dataset }}' \
@@ -191,70 +278,7 @@ jobs:
              NUM_CONC='${{ inputs.num_concurrency }}' \
              N_CENT='${{ inputs.n_cent }}' \
              NPROBE='${{ inputs.nprobe }}' \
-             bash -s" <<'REMOTE' 2>&1 | tee /tmp/vdbbench.log
-          set -euo pipefail
-
-          echo "===== APT ====="
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            git wget curl ca-certificates build-essential pkg-config libssl-dev \
-            python3 python3-venv python3-dev
-
-          echo "===== RUST ====="
-          if ! command -v cargo >/dev/null 2>&1; then
-            curl --proto '=https' --tlsv1.2 -sSf --retry 5 --retry-connrefused \
-              --retry-delay 2 https://sh.rustup.rs | sh -s -- -y --profile minimal
-          fi
-          source "$HOME/.cargo/env"
-
-          echo "===== CLONE HARNESS ====="
-          rm -rf "$HOME/VectorDBBench"
-          git clone --depth 1 --branch "$VDB_REF" \
-            "https://github.com/${VDB_REPO}.git" "$HOME/VectorDBBench"
-
-          echo "===== VENV + HARNESS INSTALL ====="
-          cd "$HOME/VectorDBBench"
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip install --upgrade pip maturin
-          pip install -e '.[infino]'
-
-          echo "===== BUILD INFINO BINDING FROM BRANCH ====="
-          rm -rf "$HOME/infino"
-          git clone --depth 1 --branch "$INFINO_REF" \
-            "https://github.com/${INFINO_REPO}.git" "$HOME/infino"
-          rm -rf /tmp/wheels && mkdir -p /tmp/wheels
-          ( cd "$HOME/infino/infino-python" && maturin build --release -o /tmp/wheels )
-          pip install --force-reinstall /tmp/wheels/*.whl
-          python3 -c "import infino; print('infino binding:', getattr(infino, '__version__', 'unknown'))"
-
-          echo "===== RUN ====="
-          export RESULTS_LOCAL_DIR=/tmp/vdb_results
-          mkdir -p "$RESULTS_LOCAL_DIR"
-
-          if [ "$MODE" = "vector" ] || [ "$MODE" = "both" ]; then
-            echo "----- VECTOR: $VECTOR_CASE -----"
-            init_bench Infino \
-              --case-type "$VECTOR_CASE" \
-              --k "$K" \
-              --num-concurrency "$NUM_CONC" \
-              --n-cent "$N_CENT" \
-              --nprobe "$NPROBE" \
-              --drop-old
-          fi
-
-          if [ "$MODE" = "fts" ] || [ "$MODE" = "both" ]; then
-            echo "----- FTS: $FTS_CASE / $FTS_DATASET -----"
-            init_bench InfinoFTS \
-              --case-type "$FTS_CASE" \
-              --dataset-with-size-type "$FTS_DATASET" \
-              --payload-profile "$PAYLOAD_PROFILE" \
-              --drop-old
-          fi
-
-          echo "===== RESULTS ====="
-          find "$RESULTS_LOCAL_DIR" -name 'result_*.json' -print
-          REMOTE
+             bash -s" < .github/scripts/run_vdbbench.sh 2>&1 | tee /tmp/vdbbench.log
 
       - name: Copy results back
         if: ${{ !cancelled() }}
@@ -268,22 +292,39 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           CLOUD: ${{ inputs.cloud }}
+          BINDING: ${{ inputs.binding_source }}
           INFINO_REF: ${{ inputs.infino_ref }}
-          MODE: ${{ inputs.mode }}
+          MODE: ${{ matrix.bench }}
         run: |
           set +e -u -o pipefail
           python3 .github/scripts/vdbbench_summary.py \
             /tmp/vdb_results "$GITHUB_STEP_SUMMARY"
 
+      # always() so a timeout/cancel still yields the log for diagnostics.
       - name: Upload artifacts
-        if: ${{ !cancelled() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: vectordbbench-results
+          name: vectordbbench-results-${{ matrix.bench }}
           path: |
             /tmp/vdbbench.log
             /tmp/vdb_results/**/result_*.json
           if-no-files-found: warn
+
+      # Re-auth before teardown: a long run can outlive the initial cloud token,
+      # which would make teardown fail auth and silently leak the VM.
+      - name: Cloud re-login (teardown)
+        if: ${{ always() }}
+        uses: ./.github/actions/cloud-login
+        with:
+          cloud: ${{ inputs.cloud }}
+          location: ${{ inputs.location }}
+          azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          aws_role_arn: ${{ secrets.AWS_ROLE_ARN }}
+          gcp_wif_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          gcp_service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       # --- teardown (always; composite; only the selected cloud runs) ---
       - name: Teardown
@@ -292,4 +333,4 @@ jobs:
         with:
           op: teardown
           cloud: ${{ inputs.cloud }}
-          name_prefix: vdbbench
+          name_prefix: vdbbench-${{ matrix.bench }}
