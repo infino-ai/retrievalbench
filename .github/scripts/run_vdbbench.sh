@@ -2,9 +2,14 @@
 # Runs on the ephemeral VM (piped in via `ssh … bash -s`). Installs the harness,
 # installs the infino binding (branch-built wheel scp'd to /tmp/infino_wheel, or
 # the published PyPI wheel), then runs one bench leg. Inputs arrive as env vars
-# set on the ssh command line: VDB_REPO VDB_REF BINDING INFINO_ENV BENCH
-# VECTOR_CASE FTS_CASE FTS_DATASET PAYLOAD_PROFILE K NUM_CONC N_CENT NPROBE.
+# set on the ssh command line: VDB_REPO VDB_REF BINDING INFINO_ENV NUM_PER_BATCH
+# BENCH VECTOR_CASE FTS_CASE FTS_DATASET PAYLOAD_PROFILE K NUM_CONC N_CENT NPROBE.
+# NUM_PER_BATCH is consumed by the harness; the rest are used below.
 set -euo pipefail
+
+# The superfile build opens many fds at scale; the default soft limit (1024)
+# trips "Too many open files". Raise the soft limit to the hard limit.
+ulimit -n "$(ulimit -Hn)" 2>/dev/null || true
 
 echo "===== APT ====="
 sudo DEBIAN_FRONTEND=noninteractive apt-get update -y

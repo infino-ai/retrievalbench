@@ -19,13 +19,13 @@ on:
       mode:
         description: "Which benchmark(s) to run (both = parallel VMs)."
         required: false
-        default: vector
+        default: both
         type: choice
         options: [vector, fts, both]
       vector_case:
         description: "Vector CaseType (vectordbbench infino --case-type)."
         required: false
-        default: Performance768D10M
+        default: Performance768D1M
         type: string
       fts_case:
         description: "FTS CaseType (vectordbbench infinofts --case-type)."
@@ -35,7 +35,7 @@ on:
       fts_dataset:
         description: "FTS dataset + size (--dataset-with-size-type)."
         required: false
-        default: "MS MARCO Small (100K documents)"
+        default: "MS MARCO Medium (1M documents)"
         type: choice
         options:
           - "MS MARCO Small (100K documents)"
@@ -57,7 +57,12 @@ on:
       num_concurrency:
         description: "Concurrency levels for the QPS sweep (comma-separated)."
         required: false
-        default: "1,10,50"
+        default: "1,10"
+        type: string
+      num_per_batch:
+        description: "Rows per insert batch (VDBBench NUM_PER_BATCH). Large avoids manifest-part write amplification."
+        required: false
+        default: "50000"
         type: string
       n_cent:
         description: "Infino IVF centroid count (vector build)."
@@ -263,6 +268,7 @@ jobs:
              VDB_REF='${{ inputs.vdbbench_ref }}' \
              BINDING='${{ inputs.binding_source }}' \
              INFINO_ENV='${{ inputs.infino_env }}' \
+             NUM_PER_BATCH='${{ inputs.num_per_batch }}' \
              BENCH='${{ matrix.bench }}' \
              VECTOR_CASE='${{ inputs.vector_case }}' \
              FTS_CASE='${{ inputs.fts_case }}' \
