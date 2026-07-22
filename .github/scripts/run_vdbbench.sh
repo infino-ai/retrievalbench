@@ -61,6 +61,7 @@ else
     --case-type "$FTS_CASE" \
     --dataset-with-size-type "$FTS_DATASET" \
     --payload-profile "$PAYLOAD_PROFILE" \
+    --num-concurrency "$NUM_CONC" \
     --drop-old
 fi
 
