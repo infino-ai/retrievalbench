@@ -1,11 +1,9 @@
 name: VectorDBBench (Cloud)
 
-# Manually-triggered VectorDBBench (Infino client) on per-run ephemeral VMs
-# (Azure/AWS/GCP via `cloud`). `binding_source` selects the infino binding:
-# `branch` builds an abi3 wheel once from `infino_ref` on the runner (rust-cache)
-# and copies it to each VM; `published` uses the PyPI wheel. `mode`
-# (vector / fts / both) fans out into a matrix: each bench gets its own VM and
-# runs in parallel. Every VM is torn down.
+# Manually-triggered VectorDBBench (Infino) on per-run ephemeral VMs (Azure/AWS/GCP).
+# `mode` (vector/fts/both) fans out to one VM per bench, in parallel. `binding_source`
+# builds the infino wheel from `infino_ref` (rust-cache, scp'd to the VM) or uses the
+# published PyPI wheel. Every VM is torn down.
 
 on:
   workflow_dispatch:
@@ -156,9 +154,8 @@ jobs:
           esac
           echo "matrix={\"include\":$inc}" >> "$GITHUB_OUTPUT"
 
-  # Build the infino binding once (cached) and share it with every bench leg.
-  # The abi3 wheel is portable across CPython minors; runner and VM share
-  # glibc/arch (both Ubuntu 24.04). Skipped when using the published wheel.
+  # Build the infino wheel once (rust-cache), shared with every bench leg via
+  # artifact. abi3 + matching glibc/arch (Ubuntu 24.04) → it loads on the VM as-is.
   build:
     if: ${{ inputs.binding_source == 'branch' }}
     runs-on: ubuntu-latest
@@ -258,8 +255,7 @@ jobs:
           ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${VM_IP}" "mkdir -p /tmp/infino_wheel"
           scp $SSH_OPTS -i "$SSH_KEY" wheels/*.whl "${SSH_USER}@${VM_IP}:/tmp/infino_wheel/"
 
-      # Install the harness + infino binding and run this leg's bench. The VM-side
-      # script is piped over SSH; inputs pass as env vars on the command line.
+      # VM-side script piped over SSH; inputs pass as env vars on the command line.
       - name: Run VectorDBBench (on VM)
         run: |
           set -euo pipefail
