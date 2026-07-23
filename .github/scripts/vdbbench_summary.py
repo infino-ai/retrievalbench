@@ -2,8 +2,9 @@
 """Render VectorDBBench result JSON into a GitHub step-summary table.
 
 Usage: vdbbench_summary.py <results_dir> <summary_path>
-Reads CLOUD, INFINO_REF, MODE from the environment. Exits non-zero if no
-result JSON is found, so an empty run fails the job.
+Env: CLOUD BINDING INFINO_REF MODE VM_SIZE LOCATION NUM_CONC NUM_PER_BATCH
+VECTOR_CASE FTS_CASE FTS_DATASET. Exits non-zero if no result JSON is found or
+any case failed, so a bad run fails the job.
 """
 
 import glob
@@ -13,6 +14,14 @@ import sys
 
 FTS_CASE_ID = 503  # CaseType.FTSBm25Performance
 _STATUS = {":)": "✓", "x": "✗ FAILED", "?": "? out-of-range"}  # ResultLabel
+
+# recall@k means different things per bench: vector compares to the exact
+# nearest neighbours (retrieval quality); FTS compares to a reference BM25
+# top-k (implementation parity, not relevance). Spell that out in the heading.
+_RECALL_MEANING = {
+    "vector": "recall@k vs exact nearest-neighbors",
+    "fts": "recall@k vs reference BM25 top-k",
+}
 
 
 def collect(results_dir: str) -> dict[str, list[dict]]:
@@ -43,11 +52,11 @@ def collect(results_dir: str) -> dict[str, list[dict]]:
     return rows
 
 
-def table(title: str, items: list[dict]) -> list[str]:
-    lines = [f"### {title}"]
+def table(heading: str, items: list[dict]) -> list[str]:
+    lines = [f"### {heading}"]
     if not items:
         return lines + ["**❌ No results — see the uploaded log.**", ""]
-    lines.append("| case_id | status | recall | QPS | p99 (s) | load (s) | rows |")
+    lines.append("| case_id | status | recall@k | QPS | p99 (s) | load (s) | rows |")
     lines.append("|--:|:--|--:|--:|--:|--:|--:|")
     for it in items:
         lines.append(
@@ -59,25 +68,30 @@ def table(title: str, items: list[dict]) -> list[str]:
 
 def main() -> int:
     results_dir, summary_path = sys.argv[1], sys.argv[2]
-    cloud = os.environ.get("CLOUD", "?")
-    mode = os.environ.get("MODE", "both")
-    # Describe the binding provenance: a built branch, or the published wheel.
-    if os.environ.get("BINDING") == "published":
-        binding = "published wheel"
-    else:
-        binding = f"infino ref `{os.environ.get('INFINO_REF', '?')}`"
+    env = os.environ.get
+    cloud = env("CLOUD", "?")
+    mode = env("MODE", "both")
+    binding = (
+        "published wheel"
+        if env("BINDING") == "published"
+        else f"infino ref `{env('INFINO_REF', '?')}`"
+    )
 
     rows = collect(results_dir)
     lines = [
         f"## VectorDBBench — Infino ({cloud})",
         "",
         f"- cloud `{cloud}` · {binding} · mode `{mode}`",
+        f"- VM `{env('VM_SIZE') or 'per-cloud default'}` @ `{env('LOCATION') or 'per-cloud default'}`"
+        f" · concurrency `{env('NUM_CONC', '?')}` · batch `{env('NUM_PER_BATCH', '?')}`",
         "",
     ]
     if mode in ("vector", "both"):
-        lines += table("Vector", rows["vector"])
+        heading = f"Vector — {_RECALL_MEANING['vector']} · case `{env('VECTOR_CASE', '?')}`"
+        lines += table(heading, rows["vector"])
     if mode in ("fts", "both"):
-        lines += table("FTS (BM25)", rows["fts"])
+        heading = f"FTS (BM25) — {_RECALL_MEANING['fts']} · dataset `{env('FTS_DATASET', '?')}`"
+        lines += table(heading, rows["fts"])
 
     with open(summary_path, "a") as fh:
         fh.write("\n".join(lines) + "\n")

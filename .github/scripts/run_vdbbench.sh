@@ -3,7 +3,8 @@
 # installs the infino binding (branch-built wheel scp'd to /tmp/infino_wheel, or
 # the published PyPI wheel), then runs one bench leg. Inputs arrive as env vars
 # set on the ssh command line: VDB_REPO VDB_REF BINDING INFINO_ENV NUM_PER_BATCH
-# BENCH VECTOR_CASE FTS_CASE FTS_DATASET PAYLOAD_PROFILE K NUM_CONC N_CENT NPROBE.
+# CACHE_BUDGET_BYTES CACHE_DIR BENCH VECTOR_CASE FTS_CASE FTS_DATASET
+# PAYLOAD_PROFILE K NUM_CONC N_CENT NPROBE.
 # NUM_PER_BATCH is consumed by the harness; the rest are used below.
 set -euo pipefail
 
@@ -46,6 +47,10 @@ fi
 export RESULTS_LOCAL_DIR=/tmp/vdb_results
 mkdir -p "$RESULTS_LOCAL_DIR"
 
+# Connection cache tuning, shared by both benches; --cache-dir only when set.
+cache_args=(--cache-budget-bytes "$CACHE_BUDGET_BYTES")
+[ -n "$CACHE_DIR" ] && cache_args+=(--cache-dir "$CACHE_DIR")
+
 if [ "$BENCH" = "vector" ]; then
   echo "----- VECTOR: $VECTOR_CASE -----"
   vectordbbench infino \
@@ -54,6 +59,7 @@ if [ "$BENCH" = "vector" ]; then
     --num-concurrency "$NUM_CONC" \
     --n-cent "$N_CENT" \
     --nprobe "$NPROBE" \
+    "${cache_args[@]}" \
     --drop-old
 else
   echo "----- FTS: $FTS_CASE / $FTS_DATASET -----"
@@ -61,7 +67,9 @@ else
     --case-type "$FTS_CASE" \
     --dataset-with-size-type "$FTS_DATASET" \
     --payload-profile "$PAYLOAD_PROFILE" \
+    --k "$K" \
     --num-concurrency "$NUM_CONC" \
+    "${cache_args[@]}" \
     --drop-old
 fi
 

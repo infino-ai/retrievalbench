@@ -1,0 +1,36 @@
+name: VectorDBBench Reaper
+
+# Safety net for leaked VectorDBBench VMs: the bench job tears its own VM down,
+# but a killed runner or partial provision can leave one billing. This sweeps
+# expired vdbbench-* resources hourly (and on demand). Azure only — the only
+# cloud these benches run on today.
+
+on:
+  schedule:
+    - cron: "17 * * * *"   # hourly, off the top of the hour
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: vdbbench-reaper
+  cancel-in-progress: false
+
+jobs:
+  reap:
+    runs-on: ubuntu-latest
+    environment: ci
+    steps:
+      - name: Checkout (for composite + script)
+        uses: actions/checkout@v4
+      - name: Azure login
+        uses: ./.github/actions/cloud-login
+        with:
+          cloud: azure
+          azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Reap
+        run: bash .github/scripts/reap_vdbbench.sh

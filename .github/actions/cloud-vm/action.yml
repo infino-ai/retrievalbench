@@ -72,6 +72,8 @@ runs:
             echo "SSH_USER=azureuser"
             echo "AZ_RG=$AZURE_RG"
             echo "AZ_VM=$VM"
+            echo "VM_SIZE=$SIZE"
+            echo "VM_LOCATION=$LOC"
           } >> "$GITHUB_ENV"
           echo "Provisioned azure $VM ($SIZE) at $VM_IP in $LOC"
           ;;
@@ -105,6 +107,8 @@ runs:
             echo "AWS_SG=$SG"
             echo "AWS_KEY=$NAME"
             echo "AWS_REGION_R=$REGION"
+            echo "VM_SIZE=$SIZE"
+            echo "VM_LOCATION=$REGION"
           } >> "$GITHUB_ENV"
           echo "Provisioned aws $IID ($SIZE) at $VM_IP in $REGION"
           ;;
@@ -126,6 +130,8 @@ runs:
             echo "SSH_USER=benchuser"
             echo "GCP_NAME=$NAME"
             echo "GCP_ZONE_R=$ZONE"
+            echo "VM_SIZE=$SIZE"
+            echo "VM_LOCATION=$ZONE"
           } >> "$GITHUB_ENV"
           echo "Provisioned gcp $NAME ($SIZE) at $VM_IP in $ZONE"
           ;;
