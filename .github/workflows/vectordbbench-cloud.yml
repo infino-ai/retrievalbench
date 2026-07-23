@@ -118,6 +118,16 @@ on:
         required: false
         default: ""
         type: string
+      cache_budget_bytes:
+        description: "Infino disk-cache ceiling (--cache-budget-bytes). Default 64 GiB; lower it on small VMs / large corpora."
+        required: false
+        default: "68719476736"
+        type: string
+      cache_dir:
+        description: "Infino disk-cache directory (--cache-dir); empty = client default."
+        required: false
+        default: ""
+        type: string
       timeout_minutes:
         description: "Hard auto-stop per bench (min); VM torn down when hit."
         required: false
@@ -265,6 +275,8 @@ jobs:
              BINDING='${{ inputs.binding_source }}' \
              INFINO_ENV='${{ inputs.infino_env }}' \
              NUM_PER_BATCH='${{ inputs.num_per_batch }}' \
+             CACHE_BUDGET_BYTES='${{ inputs.cache_budget_bytes }}' \
+             CACHE_DIR='${{ inputs.cache_dir }}' \
              BENCH='${{ matrix.bench }}' \
              VECTOR_CASE='${{ inputs.vector_case }}' \
              FTS_CASE='${{ inputs.fts_case }}' \
