@@ -291,6 +291,13 @@ jobs:
           BINDING: ${{ inputs.binding_source }}
           INFINO_REF: ${{ inputs.infino_ref }}
           MODE: ${{ matrix.bench }}
+          VM_SIZE: ${{ inputs.vm_size }}
+          LOCATION: ${{ inputs.location }}
+          NUM_CONC: ${{ inputs.num_concurrency }}
+          NUM_PER_BATCH: ${{ inputs.num_per_batch }}
+          VECTOR_CASE: ${{ inputs.vector_case }}
+          FTS_CASE: ${{ inputs.fts_case }}
+          FTS_DATASET: ${{ inputs.fts_dataset }}
         run: |
           set +e -u -o pipefail
           python3 .github/scripts/vdbbench_summary.py \
