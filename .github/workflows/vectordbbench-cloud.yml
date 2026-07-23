@@ -119,9 +119,9 @@ on:
         default: ""
         type: string
       cache_budget_bytes:
-        description: "Infino disk-cache ceiling (--cache-budget-bytes). Default 64 GiB; lower it on small VMs / large corpora."
+        description: "Infino disk-cache ceiling (--cache-budget-bytes). Default 20 GiB (fits 1M on a 64 GiB VM); raise for larger corpora."
         required: false
-        default: "68719476736"
+        default: "21474836480"
         type: string
       cache_dir:
         description: "Infino disk-cache directory (--cache-dir); empty = client default."
