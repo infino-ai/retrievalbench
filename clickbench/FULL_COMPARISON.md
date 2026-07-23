@@ -1,6 +1,6 @@
 # ClickBench full comparison (c6a.4xlarge, 100M rows)
 
-Every self-hosted engine on the ClickBench board with a complete c6a.4xlarge run, ranked by hot-run total across the 43 queries. infino sits at **#22 of 94**.
+Every self-hosted engine on the ClickBench board with a complete c6a.4xlarge run, ranked by hot-run total across the 43 queries. infino sits at **#21 of 94**.
 
 Reference numbers are sourced from upstream [ClickBench](https://github.com/ClickHouse/ClickBench); each system links to its folder there. Managed cloud warehouses (Snowflake, Databricks, BigQuery, Redshift, and similar) are excluded because they do not run on c6a.4xlarge. Only infino's number is measured by us; see the [README](README.md) for methodology and the correctness check.
 
@@ -26,8 +26,8 @@ Reference numbers are sourced from upstream [ClickBench](https://github.com/Clic
 | 18 | [chDB](https://github.com/ClickHouse/ClickBench/tree/main/chdb) | 33.82s | 0.2001 |
 | 19 | [Polars (DataFrame)](https://github.com/ClickHouse/ClickBench/tree/main/polars-dataframe) | 34.12s | 0.2344 |
 | 20 | [Spice.ai OSS (Cayenne)](https://github.com/ClickHouse/ClickBench/tree/main/spiceai-cayenne) | 34.46s | 0.2447 |
-| 21 | [CedarDB](https://github.com/ClickHouse/ClickBench/tree/main/cedardb) | 37.14s | 0.0693 |
-| 22 | [**infino**](results/infino/c6a.4xlarge.json) | **37.37s** | **0.3100** |
+| 21 | [**infino**](results/infino/c6a.4xlarge.json) | **35.66s** | **0.2953** |
+| 22 | [CedarDB](https://github.com/ClickHouse/ClickBench/tree/main/cedardb) | 37.14s | 0.0693 |
 | 23 | [Polars (Parquet)](https://github.com/ClickHouse/ClickBench/tree/main/polars) | 37.62s | 0.2857 |
 | 24 | [DuckDB (Vortex, single)](https://github.com/ClickHouse/ClickBench/tree/main/duckdb-vortex) | 40.99s | 0.3269 |
 | 25 | [Spice.ai OSS (Parquet, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/spiceai-parquet-partitioned) | 41.41s | 0.3807 |
