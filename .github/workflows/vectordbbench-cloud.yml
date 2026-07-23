@@ -303,8 +303,8 @@ jobs:
           BINDING: ${{ inputs.binding_source }}
           INFINO_REF: ${{ inputs.infino_ref }}
           MODE: ${{ matrix.bench }}
-          VM_SIZE: ${{ inputs.vm_size }}
-          LOCATION: ${{ inputs.location }}
+          VM_SIZE: ${{ env.VM_SIZE }}
+          LOCATION: ${{ env.VM_LOCATION }}
           NUM_CONC: ${{ inputs.num_concurrency }}
           NUM_PER_BATCH: ${{ inputs.num_per_batch }}
           VECTOR_CASE: ${{ inputs.vector_case }}
