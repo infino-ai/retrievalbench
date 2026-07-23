@@ -2,7 +2,7 @@
 
 infino's ClickBench numbers against the published reference engines, on the ClickBench reference machine **c6a.4xlarge** at the full 100M-row scale.
 
-Across the full self-hosted ClickBench field on c6a.4xlarge, infino ranks **#22 of 94** engines by hot-run total, and beats every general-purpose engine reading Parquet except DuckDB and CedarDB. See the [full comparison](FULL_COMPARISON.md) for all 94.
+Across the full self-hosted ClickBench field on c6a.4xlarge, infino ranks **#21 of 94** engines by hot-run total, and beats every general-purpose engine reading Parquet except DuckDB and CedarDB. See the [full comparison](FULL_COMPARISON.md) for all 94.
 
 This README keeps the headline comparison against the two engines that matter most for us, DataFusion and ClickHouse. infino's result file is stored here; the reference numbers link to their source on upstream ClickBench.
 
@@ -10,7 +10,7 @@ This README keeps the headline comparison against the two engines that matter mo
 
 | System | Cold sum | Cold geomean | Hot sum | Hot geomean |
 |---|--:|--:|--:|--:|
-| [**infino**](results/infino/c6a.4xlarge.json) | 609.98s * | 8.33s * | **37.37s** | 0.3100s |
+| [**infino**](results/infino/c6a.4xlarge.json) | 603.36s * | 8.34s * | **35.66s** | 0.2953s |
 | [DataFusion (Parquet, single)](results/datafusion/c6a.4xlarge.json) | 185.82s | 1.22s | 45.92s | 0.3556s |
 | [ClickHouse (Parquet, single)](results/clickhouse-parquet/c6a.4xlarge.json) | 198.14s | 1.33s | 48.05s | 0.4264s |
 | [ClickHouse (native, MergeTree)](results/clickhouse/c6a.4xlarge.json) | 154.79s | 1.58s | 32.26s | 0.1306s |
