@@ -2,12 +2,12 @@ name: VectorDBBench Reaper
 
 # Safety net for leaked VectorDBBench VMs: the bench job tears its own VM down,
 # but a killed runner or partial provision can leave one billing. This sweeps
-# expired vdbbench-* resources hourly (and on demand). Azure only — the only
+# expired vdbbench-* resources daily (and on demand). Azure only — the only
 # cloud these benches run on today.
 
 on:
   schedule:
-    - cron: "17 * * * *"   # hourly, off the top of the hour
+    - cron: "17 6 * * *"   # daily 06:17 UTC
   workflow_dispatch: {}
 
 permissions:
