@@ -92,10 +92,11 @@ runs:
             --description clickbench --vpc-id "$VPC" --query GroupId --output text)"
           aws ec2 authorize-security-group-ingress --region "$REGION" --group-id "$SG" \
             --protocol tcp --port 22 --cidr "${RUNNER_IP}/32" >/dev/null
+          DELETE_AFTER="$(date -u -d '+3 hours' +%s)"   # epoch; reaper compares numerically
           IID="$(aws ec2 run-instances --region "$REGION" --image-id "$AMI" --instance-type "$SIZE" \
             --key-name "$NAME" --security-group-ids "$SG" \
             --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":128,"VolumeType":"gp3"}}]' \
-            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$NAME},{Key=purpose,Value=${NAME_PREFIX}-bench},{Key=run-id,Value=${{ github.run_id }}}]" \
+            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$NAME},{Key=purpose,Value=${NAME_PREFIX}-bench},{Key=run-id,Value=${{ github.run_id }}},{Key=auto-delete,Value=true},{Key=delete-after,Value=$DELETE_AFTER}]" \
             --query 'Instances[0].InstanceId' --output text)"
           aws ec2 wait instance-running --region "$REGION" --instance-ids "$IID"
           VM_IP="$(aws ec2 describe-instances --region "$REGION" --instance-ids "$IID" \
@@ -119,9 +120,11 @@ runs:
           RUNNER_IP="$(curl -s https://api.ipify.org)"
           gcloud compute firewall-rules create "$NAME" --quiet \
             --allow tcp:22 --source-ranges "${RUNNER_IP}/32" --target-tags "$NAME"
+          DELETE_AFTER="$(date -u -d '+3 hours' +%s)"   # epoch label; GCP labels forbid ':' in ISO
           gcloud compute instances create "$NAME" --quiet --zone "$ZONE" --machine-type "$SIZE" \
             --image-family ubuntu-2404-lts-amd64 --image-project ubuntu-os-cloud \
             --boot-disk-size 128GB --tags "$NAME" \
+            --labels "delete-after=$DELETE_AFTER,auto-delete=true" \
             --metadata "ssh-keys=benchuser:$(cat "$SSH_PUB")"
           VM_IP="$(gcloud compute instances describe "$NAME" --zone "$ZONE" \
             --format='get(networkInterfaces[0].accessConfigs[0].natIP)')"
