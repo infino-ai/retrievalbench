@@ -1,0 +1,53 @@
+name: VM Reaper
+
+# Safety net for leaked bench VMs: each bench job tears its own VM down, but a
+# killed runner or partial provision can leave one billing. This sweeps expired
+# vdbbench-* and clickbench-* resources daily (and on demand) across azure, aws
+# and gcp. Never touches bench-vm-* (infino's own Benchmark run): the reaper is
+# scoped to an explicit prefix allowlist.
+#
+# One matrix leg per cloud. Login is best-effort — a cloud whose OIDC secrets
+# aren't configured skips its sweep rather than failing the run, so the legs
+# that are wired (azure today) always run.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"   # daily 06:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: vm-reaper
+  cancel-in-progress: false
+
+jobs:
+  reap:
+    runs-on: ubuntu-latest
+    environment: ci
+    strategy:
+      fail-fast: false
+      matrix:
+        cloud: [azure, aws, gcp]
+    steps:
+      - name: Checkout (for composite + script)
+        uses: actions/checkout@v4
+      - name: Login (${{ matrix.cloud }})
+        id: login
+        continue-on-error: true
+        uses: ./.github/actions/cloud-login
+        with:
+          cloud: ${{ matrix.cloud }}
+          azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          aws_role_arn: ${{ secrets.AWS_ROLE_ARN }}
+          gcp_wif_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          gcp_service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - name: Reap (${{ matrix.cloud }})
+        if: steps.login.outcome == 'success'
+        env:
+          CLOUD: ${{ matrix.cloud }}
+        run: bash .github/scripts/reap_vms.sh
