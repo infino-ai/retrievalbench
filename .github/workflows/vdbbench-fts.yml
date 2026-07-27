@@ -1,0 +1,112 @@
+name: VectorDBBench — FTS
+
+# BM25 full-text bench (MS MARCO / HotpotQA) on one ephemeral VM. Machinery
+# lives in vdbbench-run.yml; this file is the dispatch form.
+
+on:
+  workflow_dispatch:
+    inputs:
+      fts_dataset:
+        description: "Dataset + size."
+        required: false
+        default: "MS MARCO Medium (1M documents)"
+        type: choice
+        options:
+          - "MS MARCO Small (100K documents)"
+          - "MS MARCO Medium (1M documents)"
+          - "MS MARCO Large (8.8M documents)"
+          - "HotpotQA Small (100K documents)"
+          - "HotpotQA Medium (1M documents)"
+          - "HotpotQA Large (5.2M documents)"
+      fts_k:
+        description: "Top-k for BM25 search."
+        required: false
+        default: "100"
+        type: string
+      payload_profile:
+        description: "Payload profile — how much row data each query returns."
+        required: false
+        default: ids_only
+        type: string
+      num_concurrency:
+        description: "Concurrency levels for the QPS sweep (comma-separated)."
+        required: false
+        default: "1,8,16"
+        type: string
+      num_per_batch:
+        description: "Rows per insert batch (VDBBench NUM_PER_BATCH)."
+        required: false
+        default: "1000"
+        type: string
+      infino_env:
+        description: "Engine tuning: space-separated INFINO_...=value pairs."
+        required: false
+        default: ""
+        type: string
+      cache_budget_bytes:
+        description: "Infino disk-cache ceiling in bytes, per connection."
+        required: false
+        default: "21474836480"
+        type: string
+      cloud:
+        description: "Cloud to provision on."
+        required: false
+        default: azure
+        type: choice
+        options: [azure, aws, gcp]
+      vm_size:
+        description: "Instance type (cloud-specific; empty = per-cloud default)."
+        required: false
+        default: ""
+        type: string
+      location:
+        description: "Region (Azure/AWS) or zone (GCP); empty = per-cloud default."
+        required: false
+        default: ""
+        type: string
+      binding_source:
+        description: "infino binding: build from a branch, or use the published PyPI wheel."
+        required: false
+        default: branch
+        type: choice
+        options: [branch, published]
+      infino_ref:
+        description: "infino branch to build (binding_source=branch)."
+        required: false
+        default: main
+        type: string
+      vdbbench_ref:
+        description: "VectorDBBench harness ref."
+        required: false
+        default: main
+        type: string
+      timeout_minutes:
+        description: "Hard auto-stop (min); VM torn down when hit."
+        required: false
+        default: "180"
+        type: string
+
+permissions:
+  id-token: write   # OIDC federated login; a called workflow cannot exceed this
+  contents: read
+
+jobs:
+  fts:
+    uses: ./.github/workflows/vdbbench-run.yml
+    secrets: inherit
+    with:
+      bench: fts
+      fts_dataset: ${{ inputs.fts_dataset }}
+      fts_k: ${{ inputs.fts_k }}
+      payload_profile: ${{ inputs.payload_profile }}
+      num_concurrency: ${{ inputs.num_concurrency }}
+      num_per_batch: ${{ inputs.num_per_batch }}
+      infino_env: ${{ inputs.infino_env }}
+      cache_budget_bytes: ${{ inputs.cache_budget_bytes }}
+      cloud: ${{ inputs.cloud }}
+      vm_size: ${{ inputs.vm_size }}
+      location: ${{ inputs.location }}
+      binding_source: ${{ inputs.binding_source }}
+      infino_ref: ${{ inputs.infino_ref }}
+      vdbbench_ref: ${{ inputs.vdbbench_ref }}
+      timeout_minutes: ${{ inputs.timeout_minutes }}
