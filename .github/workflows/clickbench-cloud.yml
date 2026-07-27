@@ -71,8 +71,18 @@ on:
         required: false
         default: "3"
         type: string
+      rustflags:
+        description: "Extra RUSTFLAGS for the build. On a metal box set '-C target-cpu=native' to emit the box's full ISA (AVX-512 on Zen4, SVE/NEON on Graviton) and autovectorize the hot loops. Empty = portable. Non-portable: bench-only, never shipped."
+        required: false
+        default: ""
+        type: string
+      lto:
+        description: "Cargo release LTO (thin|fat|off). Empty = crate default (thin). Use 'fat' on metal to match the DataFusion recipe."
+        required: false
+        default: ""
+        type: string
       prebuilt:
-        description: "Build on runner (rust-cache) + scp to VM; off = build on VM."
+        description: "Build on runner (rust-cache) + scp to VM; off = build on VM. MUST be false for metal/target-cpu=native (build on the target) and for aarch64 (Graviton) where a runner-built x86 binary cannot run."
         required: false
         default: true
         type: boolean
@@ -159,9 +169,13 @@ jobs:
           workspaces: cb/infino/bench
       - name: Build binary (runner, prebuilt)
         if: ${{ inputs.prebuilt }}
-        env:
-          CARGO_PROFILE_RELEASE_OPT_LEVEL: ${{ inputs.opt_level }}
-        run: cargo build --release --manifest-path cb/infino/bench/Cargo.toml
+        run: |
+          set -euo pipefail
+          export CARGO_PROFILE_RELEASE_OPT_LEVEL="${{ inputs.opt_level }}"
+          [ -n "${{ inputs.rustflags }}" ] && export RUSTFLAGS="${{ inputs.rustflags }}"
+          [ -n "${{ inputs.lto }}" ] && export CARGO_PROFILE_RELEASE_LTO="${{ inputs.lto }}"
+          echo "build flags: RUSTFLAGS='${RUSTFLAGS:-}' LTO='${CARGO_PROFILE_RELEASE_LTO:-thin(crate default)}'"
+          cargo build --release --manifest-path cb/infino/bench/Cargo.toml
 
       # --- provision (composite; only the selected cloud runs) ---
       - name: Provision
@@ -216,6 +230,8 @@ jobs:
              ROWS='${{ inputs.rows }}' \
              TARGET_SF_MB='${{ inputs.target_sf_mb }}' \
              OPT_LEVEL='${{ inputs.opt_level }}' \
+             RUSTFLAGS='${{ inputs.rustflags }}' \
+             CARGO_LTO='${{ inputs.lto }}' \
              INFINO_REPO='${{ inputs.infino_repo }}' \
              INFINO_REF='${{ inputs.infino_ref }}' \
              CACHE_BUDGET_GIB='${{ inputs.cache_budget_gib }}' \
@@ -234,6 +250,11 @@ jobs:
             fi
             source "$HOME/.cargo/env"
             export CARGO_PROFILE_RELEASE_OPT_LEVEL="$OPT_LEVEL"
+            # RUSTFLAGS arrives via the inline ssh env (already exported).
+            # LTO is a separate name so an empty value never overrides the
+            # crate default with "" (which cargo rejects); export only when set.
+            [ -n "${CARGO_LTO:-}" ] && export CARGO_PROFILE_RELEASE_LTO="$CARGO_LTO"
+            echo "VM build flags: RUSTFLAGS='${RUSTFLAGS:-}' LTO='${CARGO_PROFILE_RELEASE_LTO:-thin(crate default)}'"
             # Measure the requested infino branch, not the published crate.
             sed -i "s|^infino = .*|infino = { git = \"https://github.com/${INFINO_REPO}\", branch = \"${INFINO_REF}\" }|" bench/Cargo.toml
             rm -f bench/Cargo.lock
@@ -245,6 +266,23 @@ jobs:
           ./check                        # fail fast; also verifies a prebuilt binary execs on this VM
           RESOLVED="$(grep -A1 '^name = "infino"' bench/Cargo.lock | grep '^version' | head -1 | cut -d'"' -f2)"
           echo "infino crate: ${RESOLVED}"
+
+          # ---- metal smoke verify: is the build optimal + all cores present? ----
+          # Read these in the run log BEFORE trusting the sweep: nproc should be
+          # the box's full vCPU (192 on a metal-48xl); a metal build with
+          # target-cpu=native must show wide-vector instructions (AVX-512 %zmm on
+          # Zen4, SVE z-regs on Graviton). Zero + a metal box = the ISA lever is
+          # NOT engaged (portable build) and the number will be handicapped.
+          echo "===== HW/ISA VERIFY ====="
+          echo "cores (nproc): $(nproc)"
+          BIN="bench/target/release/clickbench-infino"
+          if command -v objdump >/dev/null 2>&1 && [ -f "$BIN" ]; then
+            ZMM=$(objdump -d "$BIN" 2>/dev/null | grep -c '%zmm' || true)
+            SVE=$(objdump -d "$BIN" 2>/dev/null | grep -ciE 'z[0-9]+\.[sbhd]|ptrue' || true)
+            echo "ISA in binary: AVX-512(%zmm)=${ZMM}  SVE(z-regs)=${SVE}"
+          else
+            echo "ISA in binary: objdump unavailable (skip)"
+          fi
 
           echo "===== DOWNLOAD (${PARTS} partitions) ====="
           END=$((PARTS - 1))
