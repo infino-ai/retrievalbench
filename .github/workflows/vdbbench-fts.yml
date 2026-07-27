@@ -90,6 +90,10 @@ on:
         default: "180"
         type: string
 
+permissions:
+  id-token: write   # OIDC federated login; a called workflow cannot exceed this
+  contents: read
+
 jobs:
   fts:
     uses: ./.github/workflows/vdbbench-run.yml

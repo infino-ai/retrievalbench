@@ -47,6 +47,10 @@ on:
         default: "180"
         type: string
 
+permissions:
+  id-token: write   # OIDC federated login; a called workflow cannot exceed this
+  contents: read
+
 jobs:
   vector:
     if: ${{ inputs.mode == 'vector' || inputs.mode == 'both' }}
