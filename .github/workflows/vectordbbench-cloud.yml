@@ -90,7 +90,7 @@ on:
       vdbbench_ref:
         description: "VectorDBBench harness ref."
         required: false
-        default: "feat/infino-client"
+        default: "main"
         type: string
       binding_source:
         description: "infino binding: build from a branch, or use the published PyPI wheel."
