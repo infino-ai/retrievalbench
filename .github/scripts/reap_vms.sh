@@ -91,7 +91,7 @@ reap_aws() {
   live="$(aws ec2 describe-instances --region "$AWS_REGION_R" \
     --filters "Name=tag:Name,Values=${pfx}*" \
               "Name=instance-state-name,Values=pending,running,stopping,stopped" \
-    --query "Reservations[].Instances[].(Tags[?Key=='Name'].Value)[0]" --output text 2>/dev/null | tr '\t' '\n')"
+    --query "Reservations[].Instances[].[(Tags[?Key=='Name'].Value)[0]]" --output text 2>/dev/null | tr '\t' '\n')"
   aws ec2 describe-security-groups --region "$AWS_REGION_R" \
     --filters "Name=group-name,Values=${pfx}*" --query "SecurityGroups[].GroupName" --output text 2>/dev/null |
     tr '\t' '\n' | while read -r sg; do
