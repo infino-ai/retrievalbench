@@ -70,6 +70,28 @@ These run on large clusters behind an API; the number reflects both the engine a
 
 - On the **reference machine (c6a.4xlarge)**, infino at 35.66s beats DataFusion (45.92), CedarDB (37.14), Polars (37.62), and ClickHouse-on-Parquet (39.41); loses to DuckDB-parquet (32.48), ClickHouse-native (32.26), GizmoSQL (21.03), Firebolt (21.25).
 - The **leaderboard-topping numbers are a metal-machine game**. The c6a.4xlarge leaders (GizmoSQL 21, Firebolt 21) are the same systems that top the metal board, because they scale; the ~14s gap to them on c6a.4xlarge is the real distance.
-- **infino has never been measured on metal.** Since its SQL is DataFusion-based, it would likely scale to metal similarly to DataFusion, but that is untested. A one-off c8g.metal-48xl run of infino would tell us where we actually sit on the machine the board is judged on.
+
+### infino ON metal — measured 2026-07-27 (was a projection; now real)
+
+**infino hot sum = 6.98s on c7a.metal-48xl** (192 vCPU AMD Zen4; build `RUSTFLAGS=-C target-cpu=native`, thin LTO; 192 cores + AVX-512 confirmed engaged; measured on `experiments/infino-metal-devbox`). Result file: `results/infino/c7a.metal-48xl.json`.
+
+Same-machine ranking (c7a.metal-48xl, best hot sum per system):
+
+| # | System | hot sum |
+|--:|---|--:|
+| 1 | Umbra | 1.67 |
+| 2 | CedarDB | 2.89 |
+| ~5 | GizmoSQL / DuckDB | 3.69 |
+| 9 | ClickHouse | 4.15 |
+| 13 | Firebolt | 5.02 |
+| 17 | DuckDB (Parquet, partitioned) | 6.33 |
+| 21 | DuckDB (Parquet, single) | 6.91 |
+| **~22** | **infino (thin LTO)** | **6.98** |
+| 24 | DataFusion (partitioned) | 7.43 |
+| 31 | DataFusion (single) | 9.74 |
+
+So the metal run **confirms the c6a story, it does not change it**: infino scales to metal (46s->7s class, same as DataFusion), **beats DataFusion on metal too** (6.98 vs 7.43 / 9.74), sits **tied with DuckDB-parquet**, and lands **mid-pack behind the native-format / in-memory leaders** (Umbra, CedarDB, ClickHouse, DuckDB-memory). infino is a strong *Parquet-reading* engine; the top of the board is a different substrate class (own format, in-memory), which is the structural ceiling for a search-on-Parquet-on-object-storage engine. This is still thin LTO; a fat-LTO build should shave a little more (likely edging past the DuckDB-parquet cluster).
+
+Note on machines: infino ran on **c7a.metal-48xl (AMD Zen4, x86, AVX-512)** because its x86 paths engage there with zero porting risk. The absolute-fastest board machine is **c8g.metal-48xl (Graviton4, ARM)**, ~2x the ISA (DataFusion 8.54 there vs 9.74 on c7a); an infino c8g run needs an aarch64 build validation first but would give a lower absolute number on the same relative footing.
 
 Reference: upstream [ClickBench](https://github.com/ClickHouse/ClickBench). Per-machine result files for DataFusion are in `results/datafusion/<machine>.json` and `results/datafusion-partitioned/<machine>.json`.
