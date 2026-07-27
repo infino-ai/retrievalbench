@@ -3,7 +3,7 @@
 
 Usage: vdbbench_summary.py <results_dir> <summary_path>
 Env: CLOUD BINDING INFINO_REF INFINO_ENV MODE VM_SIZE LOCATION NUM_CONC
-NUM_PER_BATCH CACHE_BUDGET_BYTES VECTOR_CASE FTS_CASE FTS_DATASET.
+NUM_PER_BATCH CACHE_BUDGET_BYTES VECTOR_CASE FTS_DATASET.
 
 Reports every metric with the params that produced it — recall is still being
 tuned, so a run is a datapoint, not a pass/fail. Exits non-zero only if no
