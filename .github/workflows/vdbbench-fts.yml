@@ -23,9 +23,9 @@ on:
           - "HotpotQA Medium (1M documents)"
           - "HotpotQA Large (5.2M documents)"
       fts_k:
-        description: "Top-k. MS MARCO / HotpotQA relevance is judged at 10."
+        description: "Top-k for BM25 search."
         required: false
-        default: "10"
+        default: "100"
         type: string
       payload_profile:
         description: "Payload profile — how much row data each query returns."
