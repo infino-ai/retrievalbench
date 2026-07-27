@@ -4,6 +4,9 @@ name: VectorDBBench (Cloud)
 # `mode` (vector/fts/both) fans out to one VM per bench, in parallel. `binding_source`
 # builds the infino wheel from `infino_ref` (rust-cache, scp'd to the VM) or uses the
 # published PyPI wheel. Every VM is torn down.
+#
+# One dispatch = one measured point, reported with the params that produced it.
+# A recall/QPS curve is several dispatches varying `nprobe`.
 
 on:
   workflow_dispatch:
@@ -47,30 +50,40 @@ on:
         required: false
         default: ids_only
         type: string
-      k:
-        description: "Top-k for vector search."
+      vector_k:
+        description: "Top-k for vector search. 100 is the VDBBench standard and its ceiling — the ground truth holds 100 neighbors."
         required: false
         default: "100"
         type: string
-      num_concurrency:
-        description: "Concurrency levels for the QPS sweep (comma-separated)."
+      fts_k:
+        description: "Top-k for BM25 search. MS MARCO / HotpotQA relevance is judged at 10."
         required: false
-        default: "1,10"
+        default: "10"
+        type: string
+      num_concurrency:
+        description: "Concurrency levels for the QPS sweep (comma-separated); max QPS is the best level. 16 = vCPUs on the default VMs; past ~32 the load OOMs 64 GiB."
+        required: false
+        default: "1,5,10,16"
         type: string
       num_per_batch:
-        description: "Rows per insert batch (VDBBench NUM_PER_BATCH). Large avoids manifest-part write amplification."
+        description: "Rows per insert batch (VDBBench NUM_PER_BATCH). Large avoids manifest-part write amplification; upstream uses 100, so load timings are not comparable."
         required: false
         default: "50000"
         type: string
       n_cent:
-        description: "Infino IVF centroid count (vector build)."
+        description: "Fine IVF clusters per (superfile, cell) fragment, not a whole-corpus count. Size to sqrt(corpus / user_cell_count); 64 suits 1M over the engine's 256 cells."
         required: false
-        default: "256"
+        default: "64"
         type: string
       nprobe:
-        description: "Infino IVF cells probed (vector query)."
+        description: "Coarse grid cells probed per query, of user_cell_count (default 256). 64 lands near LanceDB's default probe fraction (~2%), for a comparable starting point."
         required: false
-        default: "32"
+        default: "64"
+        type: string
+      rerank_mult:
+        description: "Coarse candidates re-scored exactly = k * rerank_mult. The 256 default sits above what routing supplies, so it only becomes a QPS lever once recall is on target."
+        required: false
+        default: "256"
         type: string
       vm_size:
         description: "Instance type (cloud-specific; empty = per-cloud default)."
@@ -90,7 +103,7 @@ on:
       vdbbench_ref:
         description: "VectorDBBench harness ref."
         required: false
-        default: "feat/infino-client"
+        default: "main"
         type: string
       binding_source:
         description: "infino binding: build from a branch, or use the published PyPI wheel."
@@ -114,12 +127,12 @@ on:
         default: "3"
         type: string
       infino_env:
-        description: "Engine tuning: space-separated INFINO_...=value pairs exported before the bench (e.g. 'INFINO_SUPERTABLE__READER_THREADS=8 INFINO_COMPACTION__MIN_FILL_PERCENT=60')."
+        description: "Engine tuning: space-separated INFINO_...=value pairs exported before the bench. The other recall levers live here — INFINO_VECTOR__FINE_NPROBE_PCT=0.25 scales fine-probe depth with cell size instead of the flat floor of 4; INFINO_VECTOR__USER_CELL_COUNT=1024 suits corpora past 1M."
         required: false
         default: ""
         type: string
       cache_budget_bytes:
-        description: "Infino disk-cache ceiling (--cache-budget-bytes). Default 20 GiB (fits 1M on a 64 GiB VM); raise for larger corpora."
+        description: "Infino disk-cache ceiling (--cache-budget-bytes), per connection. Below the client's 64 GiB default because every concurrency worker opens its own. 20 GiB covers 1M; raise for MS MARCO Large."
         required: false
         default: "21474836480"
         type: string
@@ -282,10 +295,12 @@ jobs:
              FTS_CASE='${{ inputs.fts_case }}' \
              FTS_DATASET='${{ inputs.fts_dataset }}' \
              PAYLOAD_PROFILE='${{ inputs.payload_profile }}' \
-             K='${{ inputs.k }}' \
+             VECTOR_K='${{ inputs.vector_k }}' \
+             FTS_K='${{ inputs.fts_k }}' \
              NUM_CONC='${{ inputs.num_concurrency }}' \
              N_CENT='${{ inputs.n_cent }}' \
              NPROBE='${{ inputs.nprobe }}' \
+             RERANK_MULT='${{ inputs.rerank_mult }}' \
              bash -s" < .github/scripts/run_vdbbench.sh 2>&1 | tee /tmp/vdbbench.log
 
       - name: Copy results back
@@ -310,6 +325,8 @@ jobs:
           VECTOR_CASE: ${{ inputs.vector_case }}
           FTS_CASE: ${{ inputs.fts_case }}
           FTS_DATASET: ${{ inputs.fts_dataset }}
+          INFINO_ENV: ${{ inputs.infino_env }}
+          CACHE_BUDGET_BYTES: ${{ inputs.cache_budget_bytes }}
         run: |
           set +e -u -o pipefail
           python3 .github/scripts/vdbbench_summary.py \

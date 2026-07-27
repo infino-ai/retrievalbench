@@ -4,7 +4,7 @@
 # the published PyPI wheel), then runs one bench leg. Inputs arrive as env vars
 # set on the ssh command line: VDB_REPO VDB_REF BINDING INFINO_ENV NUM_PER_BATCH
 # CACHE_BUDGET_BYTES CACHE_DIR BENCH VECTOR_CASE FTS_CASE FTS_DATASET
-# PAYLOAD_PROFILE K NUM_CONC N_CENT NPROBE.
+# PAYLOAD_PROFILE VECTOR_K FTS_K NUM_CONC N_CENT NPROBE RERANK_MULT.
 # NUM_PER_BATCH is consumed by the harness; the rest are used below.
 set -euo pipefail
 
@@ -52,13 +52,14 @@ cache_args=(--cache-budget-bytes "$CACHE_BUDGET_BYTES")
 [ -n "$CACHE_DIR" ] && cache_args+=(--cache-dir "$CACHE_DIR")
 
 if [ "$BENCH" = "vector" ]; then
-  echo "----- VECTOR: $VECTOR_CASE -----"
+  echo "----- VECTOR: $VECTOR_CASE n_cent=$N_CENT nprobe=$NPROBE rerank_mult=$RERANK_MULT -----"
   vectordbbench infino \
     --case-type "$VECTOR_CASE" \
-    --k "$K" \
+    --k "$VECTOR_K" \
     --num-concurrency "$NUM_CONC" \
     --n-cent "$N_CENT" \
     --nprobe "$NPROBE" \
+    --rerank-mult "$RERANK_MULT" \
     "${cache_args[@]}" \
     --drop-old
 else
@@ -67,7 +68,7 @@ else
     --case-type "$FTS_CASE" \
     --dataset-with-size-type "$FTS_DATASET" \
     --payload-profile "$PAYLOAD_PROFILE" \
-    --k "$K" \
+    --k "$FTS_K" \
     --num-concurrency "$NUM_CONC" \
     "${cache_args[@]}" \
     --drop-old
