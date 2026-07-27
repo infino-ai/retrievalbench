@@ -72,6 +72,11 @@ on:
         required: false
         default: "32"
         type: string
+      rerank_mult:
+        description: "Infino coarse candidates re-scored exactly = k * rerank_mult (vector query)."
+        required: false
+        default: "256"
+        type: string
       vm_size:
         description: "Instance type (cloud-specific; empty = per-cloud default)."
         required: false
@@ -286,6 +291,7 @@ jobs:
              NUM_CONC='${{ inputs.num_concurrency }}' \
              N_CENT='${{ inputs.n_cent }}' \
              NPROBE='${{ inputs.nprobe }}' \
+             RERANK_MULT='${{ inputs.rerank_mult }}' \
              bash -s" < .github/scripts/run_vdbbench.sh 2>&1 | tee /tmp/vdbbench.log
 
       - name: Copy results back

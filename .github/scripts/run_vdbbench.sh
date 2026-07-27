@@ -4,7 +4,7 @@
 # the published PyPI wheel), then runs one bench leg. Inputs arrive as env vars
 # set on the ssh command line: VDB_REPO VDB_REF BINDING INFINO_ENV NUM_PER_BATCH
 # CACHE_BUDGET_BYTES CACHE_DIR BENCH VECTOR_CASE FTS_CASE FTS_DATASET
-# PAYLOAD_PROFILE K NUM_CONC N_CENT NPROBE.
+# PAYLOAD_PROFILE K NUM_CONC N_CENT NPROBE RERANK_MULT.
 # NUM_PER_BATCH is consumed by the harness; the rest are used below.
 set -euo pipefail
 
@@ -59,6 +59,7 @@ if [ "$BENCH" = "vector" ]; then
     --num-concurrency "$NUM_CONC" \
     --n-cent "$N_CENT" \
     --nprobe "$NPROBE" \
+    --rerank-mult "$RERANK_MULT" \
     "${cache_args[@]}" \
     --drop-old
 else
