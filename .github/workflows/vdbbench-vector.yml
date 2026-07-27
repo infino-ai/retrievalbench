@@ -2,11 +2,6 @@ name: VectorDBBench — Vector
 
 # Vector ANN bench (Cohere, cosine) on one ephemeral VM. Machinery lives in
 # vdbbench-run.yml; this file is the dispatch form.
-#
-# Recall is the number to read first: QPS unqualified by recall compares to
-# nothing. Recall is still being tuned — n_cent is the dominant lever and it
-# runs inverse (finer clusters, worse recall), because the engine probes a flat
-# INFINO_VECTOR__FINE_NPROBE_FLOOR (4) of them per cell.
 
 on:
   workflow_dispatch:
@@ -17,42 +12,42 @@ on:
         default: Performance768D1M
         type: string
       vector_k:
-        description: "Top-k. 100 is the VDBBench standard and its ceiling — the ground truth holds 100 neighbors."
+        description: "Top-k for vector search."
         required: false
         default: "100"
         type: string
       n_cent:
-        description: "Fine IVF clusters per (superfile, cell) fragment, not a whole-corpus count. Size to sqrt(corpus / user_cell_count); 64 suits 1M over the engine's 256 cells."
+        description: "Fine IVF clusters per (superfile, cell) fragment."
         required: false
         default: "64"
         type: string
       nprobe:
-        description: "Coarse grid cells probed per query, of user_cell_count (default 256). 64 ~= LanceDB's default probe fraction; measured runs show little effect on recall or cost."
+        description: "Coarse grid cells probed per query."
         required: false
         default: "64"
         type: string
       rerank_mult:
-        description: "Coarse candidates re-scored exactly = k * rerank_mult. The 256 default sits above what routing supplies, so it only becomes a QPS lever once recall is on target."
+        description: "Coarse candidates re-scored exactly (k * rerank_mult)."
         required: false
         default: "256"
         type: string
       num_concurrency:
-        description: "Concurrency levels for the QPS sweep (comma-separated); max QPS is the best level. 16 = vCPUs on the default VMs; past ~32 the load OOMs 64 GiB."
+        description: "Concurrency levels for the QPS sweep (comma-separated)."
         required: false
-        default: "1,5,10,16"
+        default: "1,8,16"
         type: string
       num_per_batch:
-        description: "Rows per insert batch. Large avoids manifest-part write amplification; upstream uses 100, so load timings are not comparable."
+        description: "Rows per insert batch (VDBBench NUM_PER_BATCH)."
         required: false
-        default: "50000"
+        default: "1000"
         type: string
       infino_env:
-        description: "Engine tuning: space-separated INFINO_...=value pairs. The untried recall lever is INFINO_VECTOR__FINE_NPROBE_PCT=0.25 (scales fine-probe depth with cell size instead of the flat floor of 4)."
+        description: "Engine tuning: space-separated INFINO_...=value pairs."
         required: false
         default: ""
         type: string
       cache_budget_bytes:
-        description: "Infino disk-cache ceiling, per connection. Below the client's 64 GiB default because every concurrency worker opens its own."
+        description: "Infino disk-cache ceiling in bytes, per connection."
         required: false
         default: "21474836480"
         type: string
@@ -79,7 +74,7 @@ on:
         type: choice
         options: [branch, published]
       infino_ref:
-        description: "infino branch to build (binding_source=branch); measures that branch, not the published wheel."
+        description: "infino branch to build (binding_source=branch)."
         required: false
         default: main
         type: string

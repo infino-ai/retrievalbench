@@ -5,9 +5,7 @@ Usage: vdbbench_summary.py <results_dir> <summary_path>
 Env: CLOUD BINDING INFINO_REF INFINO_ENV MODE VM_SIZE LOCATION NUM_CONC
 NUM_PER_BATCH CACHE_BUDGET_BYTES VECTOR_CASE FTS_DATASET.
 
-Reports every metric with the params that produced it — recall is still being
-tuned, so a run is a datapoint, not a pass/fail. Exits non-zero only if no
-result JSON was produced or a case failed outright.
+Exits non-zero if no result JSON was produced or a case failed.
 """
 
 import glob
@@ -107,7 +105,7 @@ def table(bucket: str, items: list[dict]) -> list[str]:
 
 
 def concurrency_table(item: dict) -> list[str]:
-    """Per-level QPS and latency. Max QPS alone hides where it saturates."""
+    """Per-level QPS and latency."""
     m = item["metrics"]
     levels = m.get("conc_num_list") or []
     if not levels:
@@ -115,7 +113,7 @@ def concurrency_table(item: dict) -> list[str]:
     qps = m.get("conc_qps_list") or []
     p99 = m.get("conc_latency_p99_list") or []
     avg = m.get("conc_latency_avg_list") or []
-    lines = [
+    lines = saturation(levels, qps, p99) + [
         "| clients | QPS | p99 (s) | avg (s) |",
         "|--:|--:|--:|--:|",
     ]
@@ -125,21 +123,51 @@ def concurrency_table(item: dict) -> list[str]:
             f"| {cell(p99[i] if i < len(p99) else None, '.4f')} "
             f"| {cell(avg[i] if i < len(avg) else None, '.4f')} |"
         )
-    return lines + [""]
+    return lines + [""] + chart(levels, qps)
+
+
+def saturation(levels: list[int], qps: list[float], p99: list[float]) -> list[str]:
+    """Where the QPS curve peaks, and the p99 cost at that point."""
+    if len(levels) < 2 or len(qps) < len(levels):
+        return []
+    peak = max(range(len(qps)), key=lambda i: qps[i])
+    note = f"QPS peaks at **{levels[peak]} clients** ({qps[peak]:.2f})"
+    if len(p99) >= len(levels) and p99[0]:
+        note += f", where p99 is {p99[peak] / p99[0]:.1f}× the single-client latency"
+    return [f"{note}.", ""]
+
+
+def chart(levels: list[int], qps: list[float]) -> list[str]:
+    """Mermaid line chart of the QPS curve."""
+    if len(levels) < 2 or len(qps) < len(levels):
+        return []
+    top = max(qps)
+    return [
+        "```mermaid",
+        "xychart-beta",
+        '    title "QPS vs concurrent clients"',
+        f"    x-axis [{', '.join(str(c) for c in levels)}]",
+        f'    y-axis "QPS" 0 --> {top * 1.1:.2f}',
+        f"    line [{', '.join(f'{q:.2f}' for q in qps)}]",
+        "```",
+        "",
+    ]
 
 
 def gib(raw: str | None) -> str:
+    if not raw:
+        return "client default"
     try:
-        return f"{int(raw) / 1024**3:.0f} GiB"  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return raw or "client default"
+        return f"{int(raw) / 1024**3:.0f} GiB"
+    except ValueError:
+        return raw
 
 
 def main() -> int:
     results_dir, summary_path = sys.argv[1], sys.argv[2]
     env = os.environ.get
     cloud = env("CLOUD", "?")
-    mode = env("MODE", "both")
+    mode = env("MODE", "?")
     binding = (
         "published wheel"
         if env("BINDING") == "published"
@@ -155,17 +183,14 @@ def main() -> int:
         f"- concurrency `{env('NUM_CONC', '?')}` · insert batch `{env('NUM_PER_BATCH', '?')}`"
         f" · cache budget `{gib(env('CACHE_BUDGET_BYTES'))}`",
         f"- engine env `{env('INFINO_ENV') or 'defaults'}`",
-        "- load timings are not comparable to published entries: the insert batch"
-        " is far above the upstream default of 100.",
         "",
     ]
-    for bucket in (b for b in ("vector", "fts") if mode in (b, "both")):
+    for bucket in ("vector", "fts"):
+        if not rows[bucket]:
+            continue
         case = env("VECTOR_CASE", "?") if bucket == "vector" else env("FTS_DATASET", "?")
         label = "Vector" if bucket == "vector" else "FTS (BM25)"
         lines += [f"### {label} — `{case}` · {_RECALL_MEANING[bucket]}"]
-        if not rows[bucket]:
-            lines += ["**❌ No results — see the uploaded log.**", ""]
-            continue
         lines += table(bucket, rows[bucket])
         for it in rows[bucket]:
             curve = concurrency_table(it)

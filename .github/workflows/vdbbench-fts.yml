@@ -2,10 +2,6 @@ name: VectorDBBench — FTS
 
 # BM25 full-text bench (MS MARCO / HotpotQA) on one ephemeral VM. Machinery
 # lives in vdbbench-run.yml; this file is the dispatch form.
-#
-# recall@k here is parity against a reference BM25 top-k, not relevance. It is
-# capped short of 1.0 by doc-side tokenizer divergence, so read it as an
-# implementation-parity figure.
 
 on:
   workflow_dispatch:
@@ -33,22 +29,22 @@ on:
         default: ids_only
         type: string
       num_concurrency:
-        description: "Concurrency levels for the QPS sweep (comma-separated); max QPS is the best level. 16 = vCPUs on the default VMs; past ~32 the load OOMs 64 GiB."
+        description: "Concurrency levels for the QPS sweep (comma-separated)."
         required: false
-        default: "1,5,10,16"
+        default: "1,8,16"
         type: string
       num_per_batch:
-        description: "Rows per insert batch. Large avoids manifest-part write amplification; upstream uses 100, so load timings are not comparable."
+        description: "Rows per insert batch (VDBBench NUM_PER_BATCH)."
         required: false
-        default: "50000"
+        default: "1000"
         type: string
       infino_env:
-        description: "Engine tuning: space-separated INFINO_...=value pairs (e.g. INFINO_SUPERTABLE__READER_THREADS=8)."
+        description: "Engine tuning: space-separated INFINO_...=value pairs."
         required: false
         default: ""
         type: string
       cache_budget_bytes:
-        description: "Infino disk-cache ceiling, per connection. 20 GiB covers a 1M corpus; raise it for MS MARCO Large."
+        description: "Infino disk-cache ceiling in bytes, per connection."
         required: false
         default: "21474836480"
         type: string
@@ -75,7 +71,7 @@ on:
         type: choice
         options: [branch, published]
       infino_ref:
-        description: "infino branch to build (binding_source=branch); measures that branch, not the published wheel."
+        description: "infino branch to build (binding_source=branch)."
         required: false
         default: main
         type: string

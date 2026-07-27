@@ -27,7 +27,7 @@ on:
         type: choice
         options: [branch, published]
       infino_ref:
-        description: "infino branch to build (binding_source=branch); measures that branch, not the published wheel."
+        description: "infino branch to build (binding_source=branch)."
         required: false
         default: main
         type: string

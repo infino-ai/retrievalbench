@@ -3,8 +3,6 @@ name: VectorDBBench (run)
 # Machinery for one bench leg on one ephemeral VM (Azure/AWS/GCP): build the
 # wheel, provision, run, summarize, tear down. Not dispatchable — the callers
 # are vectordbbench-cloud.yml, vdbbench-vector.yml and vdbbench-fts.yml.
-#
-# One call = one measured point, reported with the params that produced it.
 
 on:
   workflow_call:
@@ -47,11 +45,11 @@ on:
         type: string
       num_concurrency:
         required: false
-        default: "1,5,10,16"
+        default: "1,8,16"
         type: string
       num_per_batch:
         required: false
-        default: "50000"
+        default: "1000"
         type: string
       timeout_minutes:
         required: false
@@ -211,7 +209,6 @@ jobs:
              INFINO_ENV='${{ inputs.infino_env }}' \
              NUM_PER_BATCH='${{ inputs.num_per_batch }}' \
              CACHE_BUDGET_BYTES='${{ inputs.cache_budget_bytes }}' \
-             CACHE_DIR='' \
              BENCH='${{ inputs.bench }}' \
              VECTOR_CASE='${{ inputs.vector_case }}' \
              FTS_CASE='FTSBm25Performance' \
