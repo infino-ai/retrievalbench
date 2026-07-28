@@ -1,0 +1,205 @@
+name: VectorDBBench — Viewer
+
+# On-demand deploy of the VDBBench results UI to Cloud Run, at a stable public
+# URL. Results are whatever the deployed ref of the fork has committed under
+# vectordb_bench/results/, so merging there is the publish gate. Image build and
+# run-mode removal live in vdbbench-viewer/; see its README for the GCP setup.
+
+on:
+  workflow_dispatch:
+    inputs:
+      vdbbench_ref:
+        description: "VectorDBBench ref to publish."
+        required: false
+        default: main
+        type: string
+      region:
+        description: "Cloud Run and Artifact Registry region."
+        required: false
+        default: us-central1
+        type: string
+      gcp_project:
+        description: "GCP project; empty = vars.GCP_PROJECT_ID."
+        required: false
+        default: ""
+        type: string
+      runtime_service_account:
+        description: "Identity the public container runs as; empty = vars.VDBBENCH_VIEWER_RUNTIME_SA."
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  id-token: write   # OIDC federated login
+  contents: read
+
+# A deploy is short but must not be interrupted half-rolled-out.
+concurrency:
+  group: vdbbench-viewer
+  cancel-in-progress: false
+
+env:
+  SERVICE: vdbbench-viewer
+  AR_REPO: vdbbench-viewer
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ci
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (this repo, for the image build and composite actions)
+        uses: actions/checkout@v4
+
+      # Public repo, so no token: the fork is cloned anonymously into the
+      # Docker build context.
+      - name: Checkout VectorDBBench
+        uses: actions/checkout@v4
+        with:
+          repository: infino-ai/VectorDBBench
+          ref: ${{ inputs.vdbbench_ref }}
+          path: vdbbench-viewer/src
+          fetch-depth: 1
+
+      - name: Resolve deploy settings
+        env:
+          INPUT_PROJECT: ${{ inputs.gcp_project }}
+          INPUT_RUNTIME_SA: ${{ inputs.runtime_service_account }}
+          INPUT_REGION: ${{ inputs.region }}
+          VAR_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          VAR_RUNTIME_SA: ${{ vars.VDBBENCH_VIEWER_RUNTIME_SA }}
+        run: |
+          set -euo pipefail
+          PROJECT="${INPUT_PROJECT:-}"; PROJECT="${PROJECT:-$VAR_PROJECT}"
+          RUNTIME_SA="${INPUT_RUNTIME_SA:-}"; RUNTIME_SA="${RUNTIME_SA:-$VAR_RUNTIME_SA}"
+
+          if [ -z "$PROJECT" ]; then
+            echo "::error::No GCP project. Set repo variable GCP_PROJECT_ID or pass gcp_project."
+            exit 1
+          fi
+          # The default compute service account carries project Editor, which is
+          # never acceptable for an unauthenticated container. Refuse instead.
+          if [ -z "$RUNTIME_SA" ]; then
+            echo "::error::No runtime service account. See vdbbench-viewer/README.md."
+            exit 1
+          fi
+
+          SHA="$(git -C vdbbench-viewer/src rev-parse --short HEAD)"
+          {
+            echo "PROJECT=$PROJECT"
+            echo "RUNTIME_SA=$RUNTIME_SA"
+            echo "REGION=$INPUT_REGION"
+            echo "TAG=$SHA"
+            echo "IMAGE=${INPUT_REGION}-docker.pkg.dev/${PROJECT}/${AR_REPO}/viewer"
+          } >> "$GITHUB_ENV"
+
+      - name: GCP login
+        uses: ./.github/actions/cloud-login
+        with:
+          cloud: gcp
+          gcp_wif_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          gcp_service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      # Idempotent: first run creates the registry, later runs only refresh the
+      # policy that stops images accumulating forever.
+      - name: Ensure Artifact Registry
+        run: |
+          set -euo pipefail
+          gcloud artifacts repositories describe "$AR_REPO" \
+            --location="$REGION" --project="$PROJECT" >/dev/null 2>&1 \
+            || gcloud artifacts repositories create "$AR_REPO" \
+                 --repository-format=docker --location="$REGION" --project="$PROJECT" \
+                 --description="VDBBench results viewer images"
+
+          cat > /tmp/cleanup-policy.json <<'JSON'
+          [
+            {
+              "name": "keep-recent",
+              "action": {"type": "Keep"},
+              "mostRecentVersions": {"keepCount": 5}
+            },
+            {
+              "name": "delete-superseded",
+              "action": {"type": "Delete"},
+              "condition": {"tagState": "ANY", "olderThan": "7d"}
+            }
+          ]
+          JSON
+
+          gcloud artifacts repositories set-cleanup-policies "$AR_REPO" \
+            --location="$REGION" --project="$PROJECT" \
+            --policy=/tmp/cleanup-policy.json --no-dry-run
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Build image
+        run: docker build -t "$IMAGE:$TAG" -t "$IMAGE:latest" vdbbench-viewer
+
+      # strip_run_mode.py already failed the build if it could not remove these,
+      # so this only catches a Dockerfile that stopped invoking it.
+      - name: Assert the image has no run-mode UI
+        run: |
+          docker run --rm --entrypoint python "$IMAGE:$TAG" - <<'PY'
+          import pathlib
+          import sys
+
+          root = pathlib.Path("/app/vectordb_bench/frontend")
+          present = [p for p in ("pages/run_test.py", "pages/custom.py", "components/run_test")
+                     if (root / p).exists()]
+          if present:
+              sys.exit(f"run-mode UI present in image: {', '.join(present)}")
+          print("image carries no run-mode UI")
+          PY
+
+      - name: Push image
+        run: |
+          set -euo pipefail
+          docker push "$IMAGE:$TAG"
+          docker push "$IMAGE:latest"
+
+      - name: Deploy to Cloud Run
+        run: |
+          set -euo pipefail
+          gcloud run deploy "$SERVICE" \
+            --image="$IMAGE:$TAG" \
+            --region="$REGION" \
+            --project="$PROJECT" \
+            --service-account="$RUNTIME_SA" \
+            --allow-unauthenticated \
+            --port=8501 \
+            --cpu=1 \
+            --memory=2Gi \
+            --min-instances=0 \
+            --max-instances=2 \
+            --concurrency=20 \
+            --session-affinity \
+            --timeout=900 \
+            --quiet
+
+          URL="$(gcloud run services describe "$SERVICE" \
+            --region="$REGION" --project="$PROJECT" --format='value(status.url)')"
+          echo "URL=$URL" >> "$GITHUB_ENV"
+
+      # First request pays the cold start, so retry rather than race it.
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          curl -fsS --retry 10 --retry-delay 6 --retry-all-errors \
+            --max-time 60 "$URL/_stcore/health"
+          echo
+
+      - name: Summary
+        if: ${{ always() && env.URL != '' }}
+        run: |
+          {
+            echo "## VDBBench viewer"
+            echo
+            echo "**$URL**"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| VectorDBBench ref | \`${{ inputs.vdbbench_ref }}\` (\`$TAG\`) |"
+            echo "| Region | \`$REGION\` |"
+            echo "| Image | \`$IMAGE:$TAG\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
