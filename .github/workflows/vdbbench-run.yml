@@ -210,6 +210,7 @@ jobs:
              NUM_PER_BATCH='${{ inputs.num_per_batch }}' \
              CACHE_BUDGET_BYTES='${{ inputs.cache_budget_bytes }}' \
              BENCH='${{ inputs.bench }}' \
+             VM_SIZE='${{ env.VM_SIZE }}' \
              VECTOR_CASE='${{ inputs.vector_case }}' \
              FTS_CASE='FTSBm25Performance' \
              FTS_DATASET='${{ inputs.fts_dataset }}' \
