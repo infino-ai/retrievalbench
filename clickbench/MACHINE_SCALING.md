@@ -92,23 +92,22 @@ Same-machine ranking (c7a.metal-48xl, best hot sum per system):
 
 So the metal run **confirms the c6a story, it does not change it**: infino scales to metal (46s->7s class, same as DataFusion), **beats DataFusion on metal too** (6.98 vs 7.43 / 9.74), sits **tied with DuckDB-parquet**, and lands **mid-pack behind the native-format / in-memory leaders** (Umbra, CedarDB, ClickHouse, DuckDB-memory). infino is a strong *Parquet-reading* engine; the top of the board is a different substrate class (own format, in-memory), which is the structural ceiling for a search-on-Parquet-on-object-storage engine. Build note: **fat LTO was tried and did NOT help** — 7.24s vs thin's 6.98s (geomean 0.0993 vs 0.0981), i.e. marginally worse (run-noise or a slight cross-crate-inlining deopt). Thin LTO + `target-cpu=native` is the best/published build; fat LTO is slower to build, fragile (chokes the link unless jobs are capped), and buys nothing here.
 
-### infino on Graviton4 (c8g.metal-48xl, aarch64) — measured 2026-07-27
+### infino on Graviton4 (c8g.metal-48xl, aarch64) — measured 2026-07-28
 
-infino **builds and runs correctly on ARM** (first aarch64 run; gated: exact 100M scale, and GROUP BY / COUNT(DISTINCT) / regex+HAVING all return correct row counts). **hot sum 7.16s, geomean 0.0959** (`results/infino/c8g.metal-48xl.json`).
+infino **builds and runs correctly on ARM** (first aarch64 run; gated: exact 100M scale, and GROUP BY / COUNT(DISTINCT) / regex+HAVING all return correct row counts). Build is `target-cpu=native` -> NEON + SVE emitted (verified in the binary), thin LTO.
 
-The twist: unlike DataFusion (which speeds up on Graviton: 8.54 vs 9.74 on c7a), infino is **marginally slower on Graviton by hot-sum** (7.16 vs 6.98 on c7a) but **faster by geomean** (0.0959 vs 0.117). Reason: infino's heavy CPU-bound queries lean on x86 AVX-512 (best on the AMD box), while Graviton's bandwidth/cores help the many light queries (better geomean). So infino's best machine depends on the metric: **AMD c7a for hot-sum, Graviton c8g for geomean**.
+**hot sum ~6.6s, geomean ~0.090** (clean measurement, reproduced 6.60 and 6.66 across two runs with the box idle and Ubuntu's apt/unattended-upgrades/man-db timers disabled; `results/infino/c8g.metal-48xl.json`).
 
-Placement on the c8g.metal-48xl board:
-- **By hot sum: ~#20** (7.16) — beats plain DataFusion (8.54) and chdb; near DuckDB-dataframe (7.02) and DataFusion-partitioned (7.27).
-- **By geomean (the homepage metric): ~#16** (0.0959) — beats DuckDB-parquet (0.105), plain + partitioned DataFusion (0.140 / 0.116), and chdb; sits with Firebolt (0.092) and Polars (0.095).
+**Methodology note (why the number moved):** an earlier c8g run read 7.16s. A rigor re-check found it was a cold / not-fully-warm run on a box with the default Ubuntu background timers still armed. With the timers disabled, the box idle, and the cache fully warm, the clean number is ~6.6s and reproducible. So **6.6 is the rigorous figure; 7.16 was the cold outlier.** (The c7a figure of 6.98 was taken under the same pre-rigor conditions on a box since torn down, so it too likely improves a little on a clean run; the clean c8g 6.6 is the most rigorous metal number we have.)
 
-Same story as c6a and c7a, now on the fastest board machine: infino is a strong Parquet reader, ahead of DataFusion, mid-pack behind the native-format / in-memory leaders (Umbra, CedarDB, DuckDB, ClickHouse). The only "DataFusion" ahead of it is the Vortex-format + partitioned build (0.090), a different substrate.
+Corrected read: **Graviton is faster for infino too** (clean 6.6 < c7a 6.98), consistent with DataFusion — the earlier "infino is slower on Graviton" was purely the cold-run artifact, now retracted.
 
-Why the c8g hot-sum (7.16) is marginally above c7a (6.98) despite Graviton being the "faster" machine: it is +0.19s net, and one query accounts for more than all of it. Per-query c7a -> c8g:
-- Q23 (`SELECT *` + `URL LIKE` + ORDER BY + LIMIT): 0.209 -> 0.452 (+0.244). A wide all-column materialization + substring scan; infino's scan/string hot paths are x86-tuned (AVX-512) with no ARM equivalent in its own code, so this one query alone exceeds the whole gap.
-- Q32/Q33/Q34 (high-card GROUP BY) +0.10 each and Q28 (regex) +0.08 — the same x86-SIMD-favoured string/hash work.
-- Offsetting: Q27/Q21/Q9/Q20/Q16 are all faster on Graviton (-0.04 to -0.09), which is why c8g's geomean (0.0959) beats c7a's (0.117).
+Placement on the c8g.metal-48xl board (~6.6s / geomean ~0.090):
+- **By hot sum: ~#18** — beats plain + partitioned Parquet DataFusion (8.54 / 7.27), DuckDB-parquet-single (6.19 is faster; ~ties duckdb-dataframe 7.02), chdb.
+- **By geomean (the homepage metric): ~#15** — beats DuckDB-parquet (0.105), plain + partitioned DataFusion (0.140 / 0.116), chdb; sits with Firebolt (0.092) and Polars (0.095).
 
-So the metric split is real, not a regression: Graviton wins the many mid/light queries (better geomean) but loses a handful of x86-SIMD-heavy ones (worse sum), dominated by Q23. Remove Q23 and Graviton wins the sum too.
+Same story as c6a and c7a, now on the fastest board machine: infino is a strong Parquet reader, ahead of DataFusion, mid-pack behind the native-format / in-memory leaders (Umbra, CedarDB, DuckDB, ClickHouse). The only "DataFusion" ahead is the Vortex-format + partitioned build (0.090), a different substrate.
+
+Rigor caveats (verified): `target_partitions` defaults to 192 (not capped in the query path); NEON+SVE engaged; box single-tenant with background timers disabled during the clean runs. Peak core use is ~50-72 of 192 across queries — workload-bound (short, memory-bandwidth-limited queries), the same ceiling every engine hits at 100M, not a config defect.
 
 Reference: upstream [ClickBench](https://github.com/ClickHouse/ClickBench). Per-machine result files for DataFusion are in `results/datafusion/<machine>.json` and `results/datafusion-partitioned/<machine>.json`.
