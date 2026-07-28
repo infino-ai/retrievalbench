@@ -29,6 +29,7 @@ on:
         default: ""
         type: string
 
+  # Same inputs as above; Actions has no way to share one block. Keep in sync.
   workflow_call:
     inputs:
       vdbbench_ref:

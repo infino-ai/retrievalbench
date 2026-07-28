@@ -48,7 +48,7 @@ on:
         type: string
 
       publish_results:
-        description: "Open a PR adding these numbers to the viewer."
+        description: "Upload these numbers and redeploy the viewer."
         required: false
         default: false
         type: boolean
@@ -99,3 +99,5 @@ jobs:
     if: ${{ needs.publish.result == 'success' }}
     uses: ./.github/workflows/vdbbench-viewer.yml
     secrets: inherit
+    with:
+      vdbbench_ref: ${{ inputs.vdbbench_ref }}

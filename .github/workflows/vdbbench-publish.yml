@@ -77,9 +77,4 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t files < <(find /tmp/vdb_results -name 'result_*.json')
-          if [ "${#files[@]}" -eq 0 ]; then
-            echo "::error::the run produced no result JSON to publish."
-            exit 1
-          fi
           gcloud storage cp "${files[@]}" "$BUCKET/Infino/" --project="$PROJECT"
-

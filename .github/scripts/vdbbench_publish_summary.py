@@ -54,8 +54,12 @@ def main() -> int:
         print("::error::no VectorDBBench result JSON to publish.")
         return 1
 
+    cases = rows["vector"] + rows["fts"]
+    failed = [r for r in cases if r["status"] != "✓"]
     meta = load_meta(results_dir)
-    lines = [f"## Published {len(rows['vector']) + len(rows['fts'])} case result(s)", ""]
+
+    verb = "Not publishing" if failed else "Publishing"
+    lines = [f"## {verb} {len(cases)} case result(s)", ""]
 
     for bucket in ("vector", "fts"):
         if not rows[bucket]:
@@ -70,7 +74,6 @@ def main() -> int:
         ]
         lines += table(bucket, rows[bucket])
 
-    failed = [r for r in rows["vector"] + rows["fts"] if r["status"] != "✓"]
     if failed:
         lines += [f"> {len(failed)} case(s) did not pass; nothing was published.", ""]
 
