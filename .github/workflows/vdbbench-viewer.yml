@@ -1,9 +1,8 @@
 name: VectorDBBench — Viewer
 
 # On-demand deploy of the VDBBench results UI to Cloud Run, at a stable public
-# URL. The page shows whatever the deployed ref of the fork has committed under
-# vectordb_bench/results/, so merging there is the publish gate. Image build and
-# GCP setup live in vdbbench-viewer/.
+# URL. Peer results come from the fork, ours from the results bucket. Image
+# build and GCP setup live in vdbbench-viewer/.
 
 on:
   workflow_dispatch:
@@ -142,8 +141,8 @@ jobs:
       - name: Sync published results
         run: |
           set -euo pipefail
-          mkdir -p vdbbench-viewer/results/Infino
-          gcloud storage rsync "$BUCKET/Infino" vdbbench-viewer/results/Infino \
+          mkdir -p vdbbench-viewer/results
+          gcloud storage rsync --recursive "$BUCKET" vdbbench-viewer/results \
             --project="$PROJECT" --delete-unmatched-destination-objects
           echo "synced $(find vdbbench-viewer/results -name '*.json' | wc -l) result file(s)"
 

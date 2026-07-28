@@ -38,7 +38,7 @@ each one syncs the whole bucket.
 To pull a number back, delete the object and redeploy:
 
 ```sh
-gcloud storage rm gs://vdbbench-results-887234897611/Infino/<file>.json \
+gcloud storage rm gs://vdbbench-results-887234897611/<prefix>/<file>.json \
   --project=infino-ai-engine
 ```
 
@@ -67,6 +67,15 @@ About five minutes. The URL is in the run's step summary.
 | results bucket, synced at deploy | Infino's numbers, overlaid onto the tree |
 | `vectordb_bench/results/` in the fork | every peer backend, as upstream ships them |
 
+The bucket mirrors the results tree, because the full-text-search page reads
+only `FullTextSearch/<backend>/` while every other page uses the generic
+loader. Publishing routes each file accordingly:
+
+```
+Infino/                  vector results
+FullTextSearch/Infino/   BM25 results
+```
+
 Keeping our numbers in a private bucket rather than the public fork leaves raw
 results unpublished and the fork clean for upstream merges. `results/` here is
 a sync target; its JSON is git-ignored.
@@ -88,7 +97,7 @@ To see what the deployed page would show, sync and rebuild. The overlay is the
 last image layer, so this takes under a second:
 
 ```sh
-gcloud storage rsync gs://vdbbench-results-887234897611/Infino results/Infino \
+gcloud storage rsync --recursive gs://vdbbench-results-887234897611 results \
   --project=infino-ai-engine
 docker build -t vdbbench-viewer . && docker run --rm -p 8501:8501 vdbbench-viewer
 ```
