@@ -202,7 +202,7 @@ account keys exist.
 | Cloud Run service | `vdbbench-viewer`, `us-central1`, unauthenticated |
 | Artifact Registry | `vdbbench-viewer`, Docker, tagged `<fork-sha>-<run-id>` |
 | Results bucket | `vdbbench-results-887234897611`, `us-central1`, public access prevented |
-| Deploy account | `vdbbench-ci` — `run.admin` on the project, `artifactregistry.writer` on the one registry, `storage.objectAdmin` on the results bucket, `iam.serviceAccountUser` on the runtime account |
+| Deploy account | `vdbbench-ci` — `run.admin` on the project, `artifactregistry.writer` on the one registry, `storage.objectAdmin` + `storage.legacyBucketReader` on the results bucket, `iam.serviceAccountUser` on the runtime account |
 | Runtime account | `vdbbench-viewer-runtime` — no roles |
 | Config | `GCP_PROJECT_ID`, `VDBBENCH_RESULTS_BUCKET`, `VDBBENCH_VIEWER_DEPLOY_SA`, `VDBBENCH_VIEWER_RUNTIME_SA` on the `ci` environment |
 
@@ -254,6 +254,9 @@ gcloud storage buckets create "$BUCKET" --project="$PROJECT" --location="$REGION
   --uniform-bucket-level-access --public-access-prevention
 gcloud storage buckets add-iam-policy-binding "$BUCKET" --project="$PROJECT" \
   --member="serviceAccount:$DEPLOY_SA" --role=roles/storage.objectAdmin
+# objectAdmin covers objects only; rsync at bucket root also stats the bucket.
+gcloud storage buckets add-iam-policy-binding "$BUCKET" --project="$PROJECT" \
+  --member="serviceAccount:$DEPLOY_SA" --role=roles/storage.legacyBucketReader
 
 gcloud projects add-iam-policy-binding "$PROJECT" \
   --member="serviceAccount:$DEPLOY_SA" --role=roles/run.admin --condition=None
@@ -277,6 +280,7 @@ gh variable set VDBBENCH_VIEWER_RUNTIME_SA --env ci --body "$RUNTIME_SA" --repo 
 | `the run produced no result JSON to publish` | the bench failed before writing results |
 | `N case(s) did not pass; refusing to publish` | the run had a failed or out-of-range case; nothing was uploaded |
 | publish skipped despite `publish_results=true` | a requested leg failed, or none succeeded |
+| `does not have storage.buckets.get access` | the deploy account is missing `storage.legacyBucketReader` on the results bucket |
 | publish fails on `storage.objects.create` | the deploy account lost `storage.objectAdmin` on the results bucket |
 | page missing recent numbers | the run published but no deploy followed |
 | build fails in `strip_run_mode.py` | upstream moved the code an anchor targets; re-anchor it |
