@@ -140,7 +140,7 @@ jobs:
       # so this only catches a Dockerfile that stopped invoking it.
       - name: Assert the image has no run-mode UI
         run: |
-          docker run --rm --entrypoint python "$IMAGE:$TAG" - <<'PY'
+          docker run --rm -i --entrypoint python "$IMAGE:$TAG" - <<'PY'
           import pathlib
           import sys
 
