@@ -8,8 +8,12 @@
 
 FROM python:3.11-slim-bookworm AS build
 
+# The context excludes src/.git, so setuptools-scm cannot derive a version.
+# Nothing reads it: the package is installed only to resolve dependencies, then
+# uninstalled below.
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VECTORDB_BENCH=0.0.0+viewer
 
 # Present for dependencies without a cp311 manylinux wheel; discarded with this stage.
 RUN apt-get update \
@@ -36,13 +40,13 @@ FROM python:3.11-slim-bookworm
 COPY --from=build /venv /venv
 COPY --from=build /src/vectordb_bench /app/vectordb_bench
 
+# vectordb_bench opens LOG_FILE at import and creates its parent, so it has to
+# be somewhere the unprivileged user can write.
 ENV PATH=/venv/bin:$PATH \
     PYTHONPATH=/app \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HOME=/home/viewer \
-    # vectordb_bench opens this at import and creates its parent, so it has to
-    # be somewhere the unprivileged user can write.
     LOG_FILE=/tmp/vdbbench-viewer/vectordb_bench.log
 
 RUN useradd --create-home --uid 10001 viewer

@@ -44,6 +44,11 @@ as an in-flight request for its whole lifetime; `--timeout=900` caps an
 abandoned tab at fifteen minutes. Images are pruned by an Artifact Registry
 cleanup policy that keeps the five most recent.
 
+Cold start is dominated by pulling the 1.7 GB image, not by the app: importing
+`vectordb_bench.interface` takes 0.6 s, since the vector-store clients load
+lazily. Raise `--min-instances` to 1 only if that pull becomes annoying — it
+converts an idle service from free to always-billed.
+
 ## One-time GCP setup
 
 The workflow creates the Artifact Registry repository and its cleanup policy on
