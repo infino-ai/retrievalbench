@@ -34,6 +34,13 @@ RUN python -m venv /venv \
  && /venv/bin/pip install /src \
  && /venv/bin/pip uninstall --yes vectordb-bench
 
+# components/qps_recall/charts.py imports matplotlib but upstream's pyproject
+# never declares it, so a clean install has none. The bound is the second half
+# of the same gap: that file calls plt.cm.get_cmap, dropped in matplotlib 3.9.
+# Both go away when the fork declares the dependency and moves to
+# matplotlib.colormaps.
+RUN /venv/bin/pip install 'matplotlib<3.9'
+
 
 FROM python:3.11-slim-bookworm
 
