@@ -37,6 +37,9 @@ FROM python:3.11-slim-bookworm
 COPY --from=build /venv /venv
 COPY --from=build /src/vectordb_bench /app/vectordb_bench
 
+# Our own numbers, merged into the backends upstream ships.
+COPY results/ /app/vectordb_bench/results/
+
 # vectordb_bench creates LOG_FILE's parent at import, so it must sit somewhere
 # the unprivileged user can write.
 ENV PATH=/venv/bin:$PATH \

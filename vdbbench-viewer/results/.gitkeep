@@ -1,0 +1,2 @@
+# Result JSON is synced here from the results bucket at deploy time and is
+# never committed. The directory must exist for the image build to copy it.
