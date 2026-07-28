@@ -47,6 +47,12 @@ fi
 export RESULTS_LOCAL_DIR=/tmp/vdb_results
 mkdir -p "$RESULTS_LOCAL_DIR"
 
+# Without these the viewer lists the run as an opaque "res-<uuid>" and the
+# series as a bare "Infino", while every peer backend carries its hardware.
+TASK_LABEL="infino_${BENCH}_$(date -u +%Y%m%d)"
+DB_LABEL="${VM_SIZE:-unspecified}"
+echo "task label: $TASK_LABEL | db label: $DB_LABEL"
+
 if [ "$BENCH" = "vector" ]; then
   echo "----- VECTOR: $VECTOR_CASE n_cent=$N_CENT nprobe=$NPROBE rerank_mult=$RERANK_MULT -----"
   vectordbbench infino \
@@ -57,6 +63,8 @@ if [ "$BENCH" = "vector" ]; then
     --nprobe "$NPROBE" \
     --rerank-mult "$RERANK_MULT" \
     --cache-budget-bytes "$CACHE_BUDGET_BYTES" \
+    --task-label "$TASK_LABEL" \
+    --db-label "$DB_LABEL" \
     --drop-old
 else
   echo "----- FTS: $FTS_CASE / $FTS_DATASET -----"
@@ -67,6 +75,8 @@ else
     --k "$FTS_K" \
     --num-concurrency "$NUM_CONC" \
     --cache-budget-bytes "$CACHE_BUDGET_BYTES" \
+    --task-label "$TASK_LABEL" \
+    --db-label "$DB_LABEL" \
     --drop-old
 fi
 

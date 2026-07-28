@@ -1,12 +1,35 @@
 name: VectorDBBench — Viewer
 
 # On-demand deploy of the VDBBench results UI to Cloud Run, at a stable public
-# URL. The page shows whatever the deployed ref of the fork has committed under
-# vectordb_bench/results/, so merging there is the publish gate. Image build and
-# GCP setup live in vdbbench-viewer/.
+# URL. Peer results come from the fork, ours from the results bucket. Image
+# build and GCP setup live in vdbbench-viewer/.
 
 on:
   workflow_dispatch:
+    inputs:
+      vdbbench_ref:
+        description: "VectorDBBench ref to publish."
+        required: false
+        default: main
+        type: string
+      region:
+        description: "Cloud Run and Artifact Registry region."
+        required: false
+        default: us-central1
+        type: string
+      gcp_project:
+        description: "GCP project; empty = vars.GCP_PROJECT_ID."
+        required: false
+        default: ""
+        type: string
+      runtime_service_account:
+        description: "Identity the public container runs as; empty = vars.VDBBENCH_VIEWER_RUNTIME_SA."
+        required: false
+        default: ""
+        type: string
+
+  # Same inputs as above; Actions has no way to share one block. Keep in sync.
+  workflow_call:
     inputs:
       vdbbench_ref:
         description: "VectorDBBench ref to publish."
@@ -68,6 +91,7 @@ jobs:
           VAR_PROJECT: ${{ vars.GCP_PROJECT_ID }}
           VAR_DEPLOY_SA: ${{ vars.VDBBENCH_VIEWER_DEPLOY_SA }}
           VAR_RUNTIME_SA: ${{ vars.VDBBENCH_VIEWER_RUNTIME_SA }}
+          VAR_BUCKET: ${{ vars.VDBBENCH_RESULTS_BUCKET }}
         run: |
           set -euo pipefail
           PROJECT="${INPUT_PROJECT:-}"; PROJECT="${PROJECT:-$VAR_PROJECT}"
@@ -75,20 +99,24 @@ jobs:
 
           for pair in "GCP_PROJECT_ID=$PROJECT" \
                       "VDBBENCH_VIEWER_DEPLOY_SA=$VAR_DEPLOY_SA" \
-                      "VDBBENCH_VIEWER_RUNTIME_SA=$RUNTIME_SA"; do
+                      "VDBBENCH_VIEWER_RUNTIME_SA=$RUNTIME_SA" \
+                      "VDBBENCH_RESULTS_BUCKET=$VAR_BUCKET"; do
             if [ -z "${pair#*=}" ]; then
               echo "::error::${pair%%=*} is unset on the ci environment. See vdbbench-viewer/README.md."
               exit 1
             fi
           done
 
-          SHA="$(git -C vdbbench-viewer/src rev-parse --short HEAD)"
+          # Results change without the fork moving, so the fork SHA alone would
+          # let one tag mean two different images.
+          TAG="$(git -C vdbbench-viewer/src rev-parse --short HEAD)-${GITHUB_RUN_ID}"
           {
             echo "PROJECT=$PROJECT"
             echo "RUNTIME_SA=$RUNTIME_SA"
             echo "REGION=$INPUT_REGION"
-            echo "TAG=$SHA"
+            echo "TAG=$TAG"
             echo "IMAGE=${INPUT_REGION}-docker.pkg.dev/${PROJECT}/${AR_REPO}/viewer"
+            echo "BUCKET=$VAR_BUCKET"
           } >> "$GITHUB_ENV"
 
       - name: GCP login
@@ -108,6 +136,15 @@ jobs:
               echo "::error::Artifact Registry '$AR_REPO' missing in $REGION. See vdbbench-viewer/README.md."
               exit 1
             }
+
+      # The Dockerfile copies whatever lands here over upstream's results.
+      - name: Sync published results
+        run: |
+          set -euo pipefail
+          mkdir -p vdbbench-viewer/results
+          gcloud storage rsync --recursive "$BUCKET" vdbbench-viewer/results \
+            --project="$PROJECT" --delete-unmatched-destination-objects
+          echo "synced $(find vdbbench-viewer/results -name '*.json' | wc -l) result file(s)"
 
       - name: Configure Docker auth
         run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet

@@ -47,6 +47,12 @@ on:
         default: "180"
         type: string
 
+      publish_results:
+        description: "Upload these numbers and redeploy the viewer."
+        required: false
+        default: false
+        type: boolean
+
 permissions:
   id-token: write   # OIDC federated login; a called workflow cannot exceed this
   contents: read
@@ -77,3 +83,19 @@ jobs:
       vdbbench_ref: ${{ inputs.vdbbench_ref }}
       infino_env: ${{ inputs.infino_env }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
+
+  # All requested legs must pass; a skipped leg is not a failure.
+  publish:
+    needs: [vector, fts]
+    if: ${{ inputs.publish_results && !cancelled() && !contains(needs.*.result, 'failure') && contains(needs.*.result, 'success') }}
+    uses: ./.github/workflows/vdbbench-publish.yml
+    secrets: inherit
+
+  # Numbers are baked into the image, so uploading alone changes nothing.
+  deploy-viewer:
+    needs: publish
+    if: ${{ needs.publish.result == 'success' }}
+    uses: ./.github/workflows/vdbbench-viewer.yml
+    secrets: inherit
+    with:
+      vdbbench_ref: ${{ inputs.vdbbench_ref }}

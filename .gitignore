@@ -1,5 +1,8 @@
 /target
 /vdbbench-viewer/src
+/vdbbench-viewer/results/**/*.json
+*.env
+__pycache__/
 lcov.info
 *.profraw
 .DS_Store

@@ -210,6 +210,7 @@ jobs:
              NUM_PER_BATCH='${{ inputs.num_per_batch }}' \
              CACHE_BUDGET_BYTES='${{ inputs.cache_budget_bytes }}' \
              BENCH='${{ inputs.bench }}' \
+             VM_SIZE='${{ env.VM_SIZE }}' \
              VECTOR_CASE='${{ inputs.vector_case }}' \
              FTS_CASE='FTSBm25Performance' \
              FTS_DATASET='${{ inputs.fts_dataset }}' \
@@ -229,6 +230,40 @@ jobs:
           mkdir -p /tmp/vdb_results
           scp $SSH_OPTS -i "$SSH_KEY" -r \
             "${SSH_USER}@${VM_IP}:/tmp/vdb_results/." /tmp/vdb_results/ || true
+
+      # Travels with the results; the caller's vm_size is often blank.
+      - name: Record run context
+        if: ${{ !cancelled() }}
+        env:
+          BENCH: ${{ inputs.bench }}
+          CLOUD: ${{ inputs.cloud }}
+          BINDING_SOURCE: ${{ inputs.binding_source }}
+          INFINO_REF: ${{ inputs.infino_ref }}
+          NUM_CONC: ${{ inputs.num_concurrency }}
+          NUM_PER_BATCH: ${{ inputs.num_per_batch }}
+          VECTOR_CASE: ${{ inputs.vector_case }}
+          FTS_DATASET: ${{ inputs.fts_dataset }}
+          VM_SIZE: ${{ env.VM_SIZE }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/vdb_results
+          python3 - <<'PY' > "/tmp/vdb_results/run_meta_${BENCH}.json"
+          import json
+          import os
+
+          env = os.environ.get
+          published = env("BINDING_SOURCE") == "published"
+          print(json.dumps({
+              "bench": env("BENCH"),
+              "cloud": env("CLOUD"),
+              "vm_size": env("VM_SIZE"),
+              "infino_ref": "" if published else env("INFINO_REF"),
+              "num_concurrency": env("NUM_CONC"),
+              "num_per_batch": env("NUM_PER_BATCH"),
+              "vector_case": env("VECTOR_CASE"),
+              "fts_dataset": env("FTS_DATASET"),
+          }, indent=2, sort_keys=True))
+          PY
 
       - name: Publish summary
         if: ${{ !cancelled() }}

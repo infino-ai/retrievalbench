@@ -1,0 +1,82 @@
+name: VectorDBBench — Publish results
+
+# Uploads a bench run's result JSON to the results bucket. The caller
+# redeploys the viewer afterwards, which is what puts it on the page.
+
+on:
+  workflow_call:
+    inputs:
+      gcp_project:
+        description: "GCP project; empty = vars.GCP_PROJECT_ID."
+        required: false
+        default: ""
+        type: string
+      results_bucket:
+        description: "Results bucket; empty = vars.VDBBENCH_RESULTS_BUCKET."
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  id-token: write   # OIDC federated login
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: ci
+    timeout-minutes: 15
+    steps:
+      - name: Checkout (this repo, for composite actions)
+        uses: actions/checkout@v4
+
+      # Whichever legs ran; a single-bench dispatch uploads only its own.
+      - name: Download results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: vectordbbench-results-*
+          merge-multiple: true
+          path: /tmp/vdb_results
+
+      - name: Resolve settings
+        env:
+          INPUT_PROJECT: ${{ inputs.gcp_project }}
+          INPUT_BUCKET: ${{ inputs.results_bucket }}
+          VAR_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          VAR_BUCKET: ${{ vars.VDBBENCH_RESULTS_BUCKET }}
+        run: |
+          set -euo pipefail
+          PROJECT="${INPUT_PROJECT:-}"; PROJECT="${PROJECT:-$VAR_PROJECT}"
+          BUCKET="${INPUT_BUCKET:-}"; BUCKET="${BUCKET:-$VAR_BUCKET}"
+          for pair in "GCP_PROJECT_ID=$PROJECT" "VDBBENCH_RESULTS_BUCKET=$BUCKET"; do
+            if [ -z "${pair#*=}" ]; then
+              echo "::error::${pair%%=*} is unset on the ci environment. See vdbbench-viewer/README.md."
+              exit 1
+            fi
+          done
+          { echo "PROJECT=$PROJECT"; echo "BUCKET=$BUCKET"; } >> "$GITHUB_ENV"
+
+      # Before the upload: a failed case must never reach the bucket.
+      - name: Summarize and gate the run
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/vdbbench_publish_summary.py \
+            /tmp/vdb_results "$GITHUB_STEP_SUMMARY"
+
+      # The bench may have run on any cloud; publishing always targets GCP.
+      - name: GCP login
+        uses: ./.github/actions/cloud-login
+        with:
+          cloud: gcp
+          gcp_wif_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          gcp_service_account: ${{ vars.VDBBENCH_VIEWER_DEPLOY_SA }}
+
+      - name: Upload results
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find /tmp/vdb_results -name 'result_*.json')
+          for file in "${files[@]}"; do
+            prefix="$(python3 .github/scripts/vdbbench_result_prefix.py "$file")"
+            echo "  ${file##*/} -> $prefix/"
+            gcloud storage cp "$file" "$BUCKET/$prefix/" --project="$PROJECT"
+          done

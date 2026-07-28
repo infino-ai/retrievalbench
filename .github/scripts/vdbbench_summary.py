@@ -19,7 +19,9 @@ _STATUS = {":)": "✓", "x": "✗ FAILED", "?": "? out-of-range"}  # ResultLabel
 # recall@k means different things per bench: vector compares to the exact
 # nearest neighbours (retrieval quality); FTS compares to a reference BM25
 # top-k (implementation parity, not relevance). Spell that out in the heading.
-_RECALL_MEANING = {
+LABEL = {"vector": "Vector", "fts": "FTS (BM25)"}
+
+RECALL_MEANING = {
     "vector": "recall@k vs exact nearest-neighbors",
     "fts": "recall@k vs reference BM25 top-k",
 }
@@ -189,8 +191,7 @@ def main() -> int:
         if not rows[bucket]:
             continue
         case = env("VECTOR_CASE", "?") if bucket == "vector" else env("FTS_DATASET", "?")
-        label = "Vector" if bucket == "vector" else "FTS (BM25)"
-        lines += [f"### {label} — `{case}` · {_RECALL_MEANING[bucket]}"]
+        lines += [f"### {LABEL[bucket]} — `{case}` · {RECALL_MEANING[bucket]}"]
         lines += table(bucket, rows[bucket])
         for it in rows[bucket]:
             curve = concurrency_table(it)
