@@ -1,11 +1,14 @@
 # VDBBench results viewer
 
+**<https://vdbbench-viewer-q6unoyyhua-uc.a.run.app>**
+
 Public web UI for VectorDBBench results — Infino against every other backend,
 on QPS, recall, latency, cost-per-query and full-text search.
 
-Upstream's Streamlit app, packaged as a container and served on Cloud Run at a
-stable URL. Nine read-only pages; the two pages that start benchmark runs are
-removed from the image.
+Upstream's Streamlit app, packaged as a container and served on Cloud Run.
+Nine read-only pages; the two pages that start benchmark runs are removed from
+the image. The URL is fixed for the life of the service — each deploy replaces
+the revision behind it.
 
 ## Deploy
 
@@ -95,6 +98,51 @@ Images are pruned to the five most recent.
 Cold start is dominated by pulling the 1.8 GB image; the app itself imports in
 0.6 s. Raising `--min-instances` to 1 removes the pull but converts an idle
 service from free to always-billed.
+
+## Shutting it down
+
+An idle service already costs nothing to run, so leaving it up is not what you
+pay for. The standing cost is image storage in Artifact Registry — five images
+at roughly 1.8 GB, under a dollar a month. Tear down for that, or to take the
+page offline; not to stop compute charges that are not accruing.
+
+Take it private, keeping the service and URL:
+
+```sh
+gcloud run services remove-iam-policy-binding vdbbench-viewer \
+  --region=us-central1 --project=infino-ai-engine \
+  --member=allUsers --role=roles/run.invoker
+```
+
+Delete the service:
+
+```sh
+gcloud run services delete vdbbench-viewer \
+  --region=us-central1 --project=infino-ai-engine --quiet
+```
+
+Redeploying afterwards normally returns the same URL, since it derives from
+project, region and service name — but treat that as likely rather than
+guaranteed, and prefer the private route above if the link is published
+anywhere.
+
+Remove everything, including the images and both identities:
+
+```sh
+PROJECT=infino-ai-engine
+gcloud run services delete vdbbench-viewer --region=us-central1 --project="$PROJECT" --quiet
+gcloud artifacts repositories delete vdbbench-viewer --location=us-central1 --project="$PROJECT" --quiet
+gcloud iam service-accounts delete "vdbbench-ci@$PROJECT.iam.gserviceaccount.com" --project="$PROJECT" --quiet
+gcloud iam service-accounts delete "vdbbench-viewer-runtime@$PROJECT.iam.gserviceaccount.com" --project="$PROJECT" --quiet
+
+for V in GCP_PROJECT_ID VDBBENCH_VIEWER_DEPLOY_SA VDBBENCH_VIEWER_RUNTIME_SA; do
+  gh variable delete "$V" --env ci --repo infino-ai/retrievalbench
+done
+```
+
+Deleting the accounts drops their role bindings with them. Leave
+`run.googleapis.com` and `artifactregistry.googleapis.com` enabled — disabling
+shared APIs affects anything else in the project that uses them.
 
 ## Infrastructure
 
