@@ -105,15 +105,15 @@ Federation. No service account keys exist.
 |---|---|
 | Cloud Run service | `vdbbench-viewer`, `us-central1`, unauthenticated |
 | Artifact Registry | `vdbbench-viewer`, Docker, tagged by fork commit |
-| Deploy account | `vdbbench-ci` — `run.admin` on the project, `artifactregistry.repoAdmin` on the one registry, `iam.serviceAccountUser` on the runtime account |
+| Deploy account | `vdbbench-ci` — `run.admin` on the project, `artifactregistry.writer` on the one registry, `iam.serviceAccountUser` on the runtime account |
 | Runtime account | `vdbbench-viewer-runtime` — no roles |
 | Config | `GCP_PROJECT_ID`, `VDBBENCH_VIEWER_DEPLOY_SA`, `VDBBENCH_VIEWER_RUNTIME_SA` on the `ci` environment |
 
 The runtime account holds no roles because the container only reads files baked
 into its own image; without it Cloud Run would default to the compute account,
-which carries project Editor. The registry grant covers one repository rather
-than the project, so the workflow verifies the registry exists instead of
-creating one.
+which carries project Editor. The deploy account may only push to the one
+registry, so the registry and its cleanup policy are created here rather than by
+the workflow.
 
 <details>
 <summary>Recreating this in another project</summary>
@@ -142,7 +142,16 @@ gcloud artifacts repositories create vdbbench-viewer \
   --description="VDBBench results viewer images"
 gcloud artifacts repositories add-iam-policy-binding vdbbench-viewer \
   --location="$REGION" --project="$PROJECT" \
-  --member="serviceAccount:$DEPLOY_SA" --role=roles/artifactregistry.repoAdmin
+  --member="serviceAccount:$DEPLOY_SA" --role=roles/artifactregistry.writer
+
+cat > /tmp/cleanup-policy.json <<'JSON'
+[
+  {"name": "keep-recent", "action": {"type": "Keep"}, "mostRecentVersions": {"keepCount": 5}},
+  {"name": "delete-superseded", "action": {"type": "Delete"}, "condition": {"tagState": "ANY", "olderThan": "7d"}}
+]
+JSON
+gcloud artifacts repositories set-cleanup-policies vdbbench-viewer \
+  --location="$REGION" --project="$PROJECT" --policy=/tmp/cleanup-policy.json --no-dry-run
 
 gcloud projects add-iam-policy-binding "$PROJECT" \
   --member="serviceAccount:$DEPLOY_SA" --role=roles/run.admin --condition=None

@@ -98,7 +98,8 @@ jobs:
           gcp_wif_provider: ${{ secrets.GCP_WIF_PROVIDER }}
           gcp_service_account: ${{ vars.VDBBENCH_VIEWER_DEPLOY_SA }}
 
-      # The deploy account is scoped to this registry and cannot create one.
+      # The deploy account may only push here; the registry and its cleanup
+      # policy are set up once, out of band.
       - name: Check Artifact Registry
         run: |
           set -euo pipefail
@@ -107,25 +108,6 @@ jobs:
               echo "::error::Artifact Registry '$AR_REPO' missing in $REGION. See vdbbench-viewer/README.md."
               exit 1
             }
-
-          cat > /tmp/cleanup-policy.json <<'JSON'
-          [
-            {
-              "name": "keep-recent",
-              "action": {"type": "Keep"},
-              "mostRecentVersions": {"keepCount": 5}
-            },
-            {
-              "name": "delete-superseded",
-              "action": {"type": "Delete"},
-              "condition": {"tagState": "ANY", "olderThan": "7d"}
-            }
-          ]
-          JSON
-
-          gcloud artifacts repositories set-cleanup-policies "$AR_REPO" \
-            --location="$REGION" --project="$PROJECT" \
-            --policy=/tmp/cleanup-policy.json --no-dry-run
 
       - name: Configure Docker auth
         run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
