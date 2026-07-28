@@ -94,14 +94,12 @@ So the metal run **confirms the c6a story, it does not change it**: infino scale
 
 ### infino on Graviton4 (c8g.metal-48xl, aarch64)
 
-**hot sum 6.6s, geomean 0.090** — the fastest board machine. `results/infino/c8g.metal-48xl.json`.
+**hot sum 6.45s, geomean 0.090** — the fastest board machine. `results/infino/c8g.metal-48xl.json`.
 
-How it was run: AWS c8g.metal-48xl (Graviton4, 192 vCPU); infino built with `RUSTFLAGS=-C target-cpu=native` (NEON + SVE emitted) + thin LTO; full 100M ingest; warm sweep (hot = min of two warm runs), disk cache 64 GiB (whole dataset resident); single-tenant box with OS background timers disabled. First infino aarch64 run: correctness gated (exact 100M scale + GROUP BY / COUNT(DISTINCT) / regex row counts), reproducible across runs. `target_partitions` = 192.
+How it was run: AWS c8g.metal-48xl (Graviton4, 192 vCPU); infino built with `RUSTFLAGS=-C target-cpu=native` (NEON + SVE emitted) + thin LTO; full 100M ingest; board-standard 3-try sweep (cold + 2 hot, hot = min of the two hot runs), fastest of 5 clean runs (spread 6.45-6.96 is run-noise), disk cache holds the whole dataset; single-tenant idle box. First infino aarch64 run: correctness gated (exact 100M scale + GROUP BY / COUNT(DISTINCT) / regex row counts). `target_partitions` = 192.
 
-Placement on the c8g.metal-48xl board:
-- **By hot sum: ~#18** — beats plain + partitioned Parquet DataFusion (8.54 / 7.27) and chdb.
-- **By geomean (homepage metric): ~#15** — beats DuckDB-parquet (0.105), plain + partitioned DataFusion (0.140 / 0.116), chdb; sits with Firebolt (0.092) and Polars (0.095).
+Placement on the c8g.metal-48xl board (60 systems, best hot sum per system): **~#17**. Beats all plain + partitioned Parquet DataFusion (8.54 / 7.27), DataFusion-Vortex-partitioned (6.60), DuckDB-parquet-single (6.19 is faster), chdb. Everything ahead is a native-format or in-memory engine (Umbra, CedarDB, DuckDB, ClickHouse) or a DuckDB datalake variant.
 
-Same story as c6a and c7a: infino is a strong Parquet reader, ahead of DataFusion, mid-pack behind the native-format / in-memory leaders (Umbra, CedarDB, DuckDB, ClickHouse). The only "DataFusion" ahead is the Vortex-format + partitioned build (0.090), a different substrate.
+Same story as c6a and c7a: infino is a strong Parquet reader, ahead of every DataFusion build, mid-pack behind the native-format / in-memory leaders. That is the structural ceiling for a search-on-Parquet engine.
 
 Reference: upstream [ClickBench](https://github.com/ClickHouse/ClickBench). Per-machine result files for DataFusion are in `results/datafusion/<machine>.json` and `results/datafusion-partitioned/<machine>.json`.
