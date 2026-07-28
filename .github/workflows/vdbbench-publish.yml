@@ -1,8 +1,7 @@
 name: VectorDBBench — Publish results
 
-# Uploads a bench run's result JSON to the results bucket, which the viewer
-# deploy syncs into its image. Publishing does not make numbers public: they
-# reach the page only on the next viewer deploy.
+# Uploads a bench run's result JSON to the results bucket. The caller
+# redeploys the viewer afterwards, which is what puts it on the page.
 
 on:
   workflow_call:
@@ -57,8 +56,7 @@ jobs:
           done
           { echo "PROJECT=$PROJECT"; echo "BUCKET=$BUCKET"; } >> "$GITHUB_ENV"
 
-      # Runs before the upload: the deploy that follows is automatic and the
-      # page is public, so a run with a failed case must not reach the bucket.
+      # Before the upload: a failed case must never reach the bucket.
       - name: Summarize and gate the run
         run: |
           set -euo pipefail

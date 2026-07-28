@@ -3,11 +3,9 @@
 
 Usage: vdbbench_publish_summary.py <results_dir> <summary_path>
 
-Run context comes from the run_meta_<bench>.json files the bench writes beside
-its results, so each leg reports the hardware it actually ran on.
-
-Exits non-zero if no result JSON was found or any case did not pass, which
-keeps a bad run out of the results bucket.
+Per-leg context comes from the run_meta_<bench>.json files beside the results.
+Exits non-zero on no results or any failed case, keeping a bad run out of the
+bucket.
 """
 
 import glob

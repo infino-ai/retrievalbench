@@ -11,9 +11,7 @@ bench run  ──►  results bucket  ──►  viewer deploy  ──►  live
    (opt-in)                           (automatic)
 ```
 
-Publishing is opt-in: an ordinary bench run changes nothing. Opting in is the
-single decision — the deploy that puts the numbers on the page follows on its
-own.
+Publishing is opt-in; everything after it is automatic.
 
 ## Publish a run's numbers
 
@@ -27,22 +25,15 @@ gh workflow run vectordbbench-cloud.yml --repo infino-ai/retrievalbench \
 Also on `vdbbench-vector.yml` and `vdbbench-fts.yml` for a single leg. The
 toggle defaults to off, so ordinary runs publish nothing.
 
-The run's `result_*.json` is uploaded to the results bucket and the viewer
-redeploys, so the page is current when the run finishes. The run summary lists
-the hardware, dataset, parameters and metrics for each leg.
+Results go to the bucket, then the viewer redeploys — the page is current when
+the run finishes. The run summary shows the hardware, parameters and metrics.
 
-Publishing is all-or-nothing, because the deploy is automatic and the page is
-public. It is skipped entirely unless:
+Publishing is all-or-nothing: skipped unless every requested leg succeeded, and
+aborted before the upload if any case failed. A partial run would refresh half
+the page and leave the rest silently stale.
 
-- every requested leg succeeded — a partial run would refresh half the page and
-  leave the rest silently stale; and
-- every case is labelled passing — a failed or out-of-range case aborts the
-  publish before anything reaches the bucket.
-
-Deploys are serialized on one concurrency group, so two runs finishing together
-cannot deploy over each other. A queued deploy that gets superseded loses
-nothing: each deploy syncs the whole bucket, so the one that does run carries
-every published result.
+Deploys serialize on one concurrency group. A superseded deploy loses nothing —
+each one syncs the whole bucket.
 
 To pull a number back, delete the object and redeploy:
 
@@ -76,10 +67,9 @@ About five minutes. The URL is in the run's step summary.
 | results bucket, synced at deploy | Infino's numbers, overlaid onto the tree |
 | `vectordb_bench/results/` in the fork | every peer backend, as upstream ships them |
 
-Our results live in a private bucket rather than the public fork, so raw numbers
-stay private until the page renders them, and the fork stays clean for upstream
-merges. `results/` in this repo is a sync target — its JSON is git-ignored and
-never committed.
+Keeping our numbers in a private bucket rather than the public fork leaves raw
+results unpublished and the fork clean for upstream merges. `results/` here is
+a sync target; its JSON is git-ignored.
 
 Nine read-only pages. The two upstream pages that *start* benchmark runs are
 removed from the image — see [Image internals](#image-internals).
@@ -94,8 +84,8 @@ docker run --rm -p 8501:8501 vdbbench-viewer
 
 Serves on <http://localhost:8501>. `src/` is git-ignored.
 
-To see what the deployed page would show, sync the bucket and rebuild — that
-overlay is the last image layer, so the rebuild takes under a second:
+To see what the deployed page would show, sync and rebuild. The overlay is the
+last image layer, so this takes under a second:
 
 ```sh
 gcloud storage rsync gs://vdbbench-results-887234897611/Infino results/Infino \
@@ -116,21 +106,20 @@ docker run --rm -p 8501:8501 \
 
 ## Running costs
 
-Idle is free: `--min-instances=0` means no container runs when nobody is
-looking. The only standing charge is image storage, five images at ~1.8 GB —
-under a dollar a month.
+Idle is free — `--min-instances=0`. The only standing charge is image storage,
+five images at ~1.8 GB, under a dollar a month.
 
-An open browser tab holds a Streamlit websocket, which Cloud Run bills as an
-in-flight request for as long as it lives. `--timeout=900` drops abandoned tabs
-after fifteen minutes and `--max-instances=2` caps a scraper.
+An open tab holds a Streamlit websocket, which Cloud Run bills as an in-flight
+request for its lifetime. `--timeout=900` drops abandoned tabs; `--max-instances=2`
+caps a scraper.
 
-Cold start is the 1.8 GB image pull; the app itself imports in 0.6 s. Setting
-`--min-instances=1` removes the pull but makes an idle service always-billed.
+Cold start is the 1.8 GB image pull; the app imports in 0.6 s. `--min-instances=1`
+removes the pull and makes an idle service always-billed.
 
 ## Taking it down
 
-Teardown saves under a dollar a month, so do it to take the page offline, not to
-stop compute charges that are not accruing.
+Teardown saves under a dollar a month — do it to take the page offline, not to
+stop charges that are not accruing.
 
 Offline, keeping the service and URL:
 
@@ -147,9 +136,9 @@ gcloud run services delete vdbbench-viewer \
   --region=us-central1 --project=infino-ai-engine --quiet
 ```
 
-A later redeploy normally returns the same URL — it derives from project, region
-and service name — but treat that as likely, not guaranteed. If the link is
-published anywhere, prefer taking it offline.
+A later redeploy normally returns the same URL, since it derives from project,
+region and service name — likely, not guaranteed. If the link is published
+anywhere, take it offline instead.
 
 <details>
 <summary>Remove everything, including images and identities</summary>
@@ -177,8 +166,8 @@ project.
 ## Image internals
 
 Dependencies resolve from the fork's `pyproject`, so no second requirements file
-can drift from it. The package is then uninstalled and the app runs from the
-source tree, preserving `results/` and Streamlit's `pages/` layout.
+can drift. The package is then uninstalled and the app runs from the source
+tree, preserving `results/` and Streamlit's `pages/` layout.
 
 `strip_run_mode.py` removes two pages, because the URL is unauthenticated:
 

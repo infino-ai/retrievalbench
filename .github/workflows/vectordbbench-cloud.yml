@@ -84,16 +84,14 @@ jobs:
       infino_env: ${{ inputs.infino_env }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
 
-  # Every requested leg must pass: a partial run would refresh half the page
-  # and silently leave the rest stale. Skipped legs are not failures.
+  # All requested legs must pass; a skipped leg is not a failure.
   publish:
     needs: [vector, fts]
     if: ${{ inputs.publish_results && !cancelled() && !contains(needs.*.result, 'failure') && contains(needs.*.result, 'success') }}
     uses: ./.github/workflows/vdbbench-publish.yml
     secrets: inherit
 
-  # Fresh numbers are only visible once the image is rebuilt, so publishing
-  # without redeploying would leave the page stale.
+  # Numbers are baked into the image, so uploading alone changes nothing.
   deploy-viewer:
     needs: publish
     if: ${{ needs.publish.result == 'success' }}

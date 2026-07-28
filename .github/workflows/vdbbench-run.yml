@@ -230,8 +230,7 @@ jobs:
           scp $SSH_OPTS -i "$SSH_KEY" -r \
             "${SSH_USER}@${VM_IP}:/tmp/vdb_results/." /tmp/vdb_results/ || true
 
-      # Travels with the results so a later publish reports the hardware this
-      # leg actually got, not the caller's blank default.
+      # Travels with the results; the caller's vm_size is often blank.
       - name: Record run context
         if: ${{ !cancelled() }}
         env:

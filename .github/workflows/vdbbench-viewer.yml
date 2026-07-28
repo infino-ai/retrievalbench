@@ -136,8 +136,7 @@ jobs:
               exit 1
             }
 
-      # Published numbers live in the bucket, never in git; the Dockerfile
-      # copies whatever lands here over upstream's results.
+      # The Dockerfile copies whatever lands here over upstream's results.
       - name: Sync published results
         run: |
           set -euo pipefail
