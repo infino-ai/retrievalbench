@@ -102,19 +102,25 @@ Then open <http://localhost:8501>. `src/` is git-ignored.
 
 ### Previewing results that are not committed yet
 
-`RESULTS_LOCAL_DIR` overrides where the app reads results, so a bench run's
-artifacts can be viewed before any PR lands in the fork:
+`src/vectordb_bench/results/` is where a local `init_bench` run writes, one
+directory per engine, and it is the path the image reads. Mounting it over the
+baked-in copy shows uncommitted results without a rebuild:
+
+```sh
+docker run --rm -p 8501:8501 \
+  -v "$PWD/src/vectordb_bench/results:/app/vectordb_bench/results:ro" \
+  vdbbench-viewer
+```
+
+Results from a CI run go to the same place. `results/Infino/` is an empty
+directory upstream, so git does not carry it and a fresh clone needs it created:
 
 ```sh
 gh run download <run-id> --repo infino-ai/retrievalbench \
   -n vectordbbench-results-vector -n vectordbbench-results-fts -D /tmp/vdb
-cp -R src/vectordb_bench/results /tmp/merged
-find /tmp/vdb -name 'result_*.json' -exec cp {} /tmp/merged/Infino/ \;
-
-docker run --rm -p 8501:8501 \
-  -v /tmp/merged:/results:ro -e RESULTS_LOCAL_DIR=/results \
-  vdbbench-viewer
+mkdir -p src/vectordb_bench/results/Infino
+find /tmp/vdb -name 'result_*.json' -exec cp {} src/vectordb_bench/results/Infino/ \;
 ```
 
-The deployed service does not use this — it only ever shows what the fork has
+The deployed service ignores all of this — it only ever shows what the fork has
 committed.
