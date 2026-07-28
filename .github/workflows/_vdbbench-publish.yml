@@ -1,4 +1,4 @@
-name: VectorDBBench — Publish results
+name: VectorDBBench — Publish
 
 # Uploads a bench run's result JSON to the results bucket. The caller
 # redeploys the viewer afterwards, which is what puts it on the page.

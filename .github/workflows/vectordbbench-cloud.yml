@@ -1,9 +1,9 @@
 name: VectorDBBench (Cloud)
 
-# Both benches in one dispatch, at their default params: two jobs, two VMs, in
-# parallel (each bench has its own concurrency group, so they never block each
-# other). Only the knobs that apply to both are exposed — to vary n_cent,
-# nprobe, or the dataset, dispatch vdbbench-vector.yml / vdbbench-fts.yml.
+# Both benches in one dispatch, at their default params: two VMs in parallel,
+# one shared wheel. Only the knobs that apply to both are exposed — to vary
+# n_cent, nprobe, or the dataset, dispatch vdbbench-vector.yml / vdbbench-fts.yml.
+# The pipeline itself lives in _vdbbench-pipeline.yml.
 
 on:
   workflow_dispatch:
@@ -58,44 +58,15 @@ permissions:
   contents: read
 
 jobs:
-  vector:
-    if: ${{ inputs.mode == 'vector' || inputs.mode == 'both' }}
-    uses: ./.github/workflows/vdbbench-run.yml
+  run:
+    uses: ./.github/workflows/_vdbbench-pipeline.yml
     secrets: inherit
     with:
-      bench: vector
+      mode: ${{ inputs.mode }}
       cloud: ${{ inputs.cloud }}
       binding_source: ${{ inputs.binding_source }}
       infino_ref: ${{ inputs.infino_ref }}
       vdbbench_ref: ${{ inputs.vdbbench_ref }}
       infino_env: ${{ inputs.infino_env }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
-
-  fts:
-    if: ${{ inputs.mode == 'fts' || inputs.mode == 'both' }}
-    uses: ./.github/workflows/vdbbench-run.yml
-    secrets: inherit
-    with:
-      bench: fts
-      cloud: ${{ inputs.cloud }}
-      binding_source: ${{ inputs.binding_source }}
-      infino_ref: ${{ inputs.infino_ref }}
-      vdbbench_ref: ${{ inputs.vdbbench_ref }}
-      infino_env: ${{ inputs.infino_env }}
-      timeout_minutes: ${{ inputs.timeout_minutes }}
-
-  # All requested legs must pass; a skipped leg is not a failure.
-  publish:
-    needs: [vector, fts]
-    if: ${{ inputs.publish_results && !cancelled() && !contains(needs.*.result, 'failure') && contains(needs.*.result, 'success') }}
-    uses: ./.github/workflows/vdbbench-publish.yml
-    secrets: inherit
-
-  # Numbers are baked into the image, so uploading alone changes nothing.
-  deploy-viewer:
-    needs: publish
-    if: ${{ needs.publish.result == 'success' }}
-    uses: ./.github/workflows/vdbbench-viewer.yml
-    secrets: inherit
-    with:
-      vdbbench_ref: ${{ inputs.vdbbench_ref }}
+      publish_results: ${{ inputs.publish_results }}

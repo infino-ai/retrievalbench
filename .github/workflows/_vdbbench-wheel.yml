@@ -1,0 +1,46 @@
+name: VectorDBBench — Wheel
+
+# Builds the infino binding once per dispatch and uploads it as `infino-wheel`.
+# Callers that run both benches share the one artifact rather than compiling
+# the same commit twice.
+
+on:
+  workflow_call:
+    inputs:
+      infino_ref:
+        description: "infino branch to build."
+        required: false
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  # abi3 + matching glibc/arch (Ubuntu 24.04) → the wheel loads on the VM as-is.
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout infino
+        uses: actions/checkout@v4
+        with:
+          repository: infino-ai/infino
+          ref: ${{ inputs.infino_ref }}
+          path: infino
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: infino/infino-python
+      - name: Build infino wheel
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip maturin
+          maturin build --release --manifest-path infino/infino-python/Cargo.toml --out wheels
+          ls -la wheels
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: infino-wheel
+          path: wheels/*.whl
+          if-no-files-found: error

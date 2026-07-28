@@ -1,8 +1,8 @@
-name: VectorDBBench (run)
+name: VectorDBBench — Run
 
-# Machinery for one bench leg on one ephemeral VM (Azure/AWS/GCP): build the
-# wheel, provision, run, summarize, tear down. Not dispatchable — the callers
-# are vectordbbench-cloud.yml, vdbbench-vector.yml and vdbbench-fts.yml.
+# One bench leg on one ephemeral VM (Azure/AWS/GCP): provision, run, summarize,
+# tear down. The wheel it installs is built by _vdbbench-wheel.yml. Not
+# dispatchable — _vdbbench-pipeline.yml is the only caller.
 
 on:
   workflow_call:
@@ -102,41 +102,7 @@ env:
   SSH_OPTS: "-o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
 
 jobs:
-  # abi3 + matching glibc/arch (Ubuntu 24.04) → the wheel loads on the VM as-is.
-  build:
-    if: ${{ inputs.binding_source == 'branch' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout infino
-        uses: actions/checkout@v4
-        with:
-          repository: infino-ai/infino
-          ref: ${{ inputs.infino_ref }}
-          path: infino
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: infino/infino-python
-      - name: Build infino wheel
-        run: |
-          set -euo pipefail
-          python3 -m pip install --upgrade pip maturin
-          maturin build --release --manifest-path infino/infino-python/Cargo.toml --out wheels
-          ls -la wheels
-      # Scoped by bench: the parent workflow calls this twice in one run, and
-      # two uploads under one name collide.
-      - name: Upload wheel
-        uses: actions/upload-artifact@v4
-        with:
-          name: infino-wheel-${{ inputs.bench }}
-          path: wheels/*.whl
-          if-no-files-found: error
-
   bench:
-    needs: build
-    # Run when the build succeeded (branch) or was skipped (published); a skipped
-    # dependency would otherwise skip this job too.
-    if: ${{ always() && needs.build.result != 'failure' && needs.build.result != 'cancelled' }}
     runs-on: ubuntu-latest
     environment: ci
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
@@ -167,7 +133,7 @@ jobs:
         if: ${{ inputs.binding_source == 'branch' }}
         uses: actions/download-artifact@v4
         with:
-          name: infino-wheel-${{ inputs.bench }}
+          name: infino-wheel
           path: wheels
 
       - name: Provision

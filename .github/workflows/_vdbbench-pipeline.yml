@@ -1,0 +1,170 @@
+name: VectorDBBench — Pipeline
+
+# Wheel, bench legs, publish, redeploy. The three dispatch workflows differ only
+# in which knobs they expose, so the order and the gates between these jobs live
+# here once rather than in each of them.
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "vector, fts, or both."
+        required: false
+        default: both
+        type: string
+      publish_results:
+        required: false
+        default: false
+        type: boolean
+      cloud:
+        required: false
+        default: azure
+        type: string
+      vm_size:
+        required: false
+        default: ""
+        type: string
+      location:
+        required: false
+        default: ""
+        type: string
+      vdbbench_ref:
+        required: false
+        default: main
+        type: string
+      binding_source:
+        required: false
+        default: branch
+        type: string
+      infino_ref:
+        required: false
+        default: main
+        type: string
+      infino_env:
+        required: false
+        default: ""
+        type: string
+      cache_budget_bytes:
+        required: false
+        default: "21474836480"
+        type: string
+      num_concurrency:
+        required: false
+        default: "1,8,16"
+        type: string
+      num_per_batch:
+        required: false
+        default: "1000"
+        type: string
+      timeout_minutes:
+        required: false
+        default: "180"
+        type: string
+      vector_case:
+        required: false
+        default: Performance768D1M
+        type: string
+      vector_k:
+        required: false
+        default: "100"
+        type: string
+      n_cent:
+        required: false
+        default: "64"
+        type: string
+      nprobe:
+        required: false
+        default: "64"
+        type: string
+      rerank_mult:
+        required: false
+        default: "256"
+        type: string
+      fts_dataset:
+        required: false
+        default: "MS MARCO Medium (1M documents)"
+        type: string
+      fts_k:
+        required: false
+        default: "100"
+        type: string
+      payload_profile:
+        required: false
+        default: ids_only
+        type: string
+
+permissions:
+  id-token: write   # OIDC federated login; a called workflow cannot exceed this
+  contents: read
+
+jobs:
+  # Built once and shared: both legs run the same commit.
+  wheel:
+    if: ${{ inputs.binding_source == 'branch' }}
+    uses: ./.github/workflows/_vdbbench-wheel.yml
+    secrets: inherit
+    with:
+      infino_ref: ${{ inputs.infino_ref }}
+
+  vector:
+    needs: wheel
+    # A skipped wheel (binding_source=published) must not skip the bench too.
+    if: ${{ (inputs.mode == 'vector' || inputs.mode == 'both') && !cancelled() && needs.wheel.result != 'failure' && needs.wheel.result != 'cancelled' }}
+    uses: ./.github/workflows/_vdbbench-run.yml
+    secrets: inherit
+    with:
+      bench: vector
+      cloud: ${{ inputs.cloud }}
+      vm_size: ${{ inputs.vm_size }}
+      location: ${{ inputs.location }}
+      vdbbench_ref: ${{ inputs.vdbbench_ref }}
+      binding_source: ${{ inputs.binding_source }}
+      infino_ref: ${{ inputs.infino_ref }}
+      infino_env: ${{ inputs.infino_env }}
+      cache_budget_bytes: ${{ inputs.cache_budget_bytes }}
+      num_concurrency: ${{ inputs.num_concurrency }}
+      num_per_batch: ${{ inputs.num_per_batch }}
+      timeout_minutes: ${{ inputs.timeout_minutes }}
+      vector_case: ${{ inputs.vector_case }}
+      vector_k: ${{ inputs.vector_k }}
+      n_cent: ${{ inputs.n_cent }}
+      nprobe: ${{ inputs.nprobe }}
+      rerank_mult: ${{ inputs.rerank_mult }}
+
+  fts:
+    needs: wheel
+    if: ${{ (inputs.mode == 'fts' || inputs.mode == 'both') && !cancelled() && needs.wheel.result != 'failure' && needs.wheel.result != 'cancelled' }}
+    uses: ./.github/workflows/_vdbbench-run.yml
+    secrets: inherit
+    with:
+      bench: fts
+      cloud: ${{ inputs.cloud }}
+      vm_size: ${{ inputs.vm_size }}
+      location: ${{ inputs.location }}
+      vdbbench_ref: ${{ inputs.vdbbench_ref }}
+      binding_source: ${{ inputs.binding_source }}
+      infino_ref: ${{ inputs.infino_ref }}
+      infino_env: ${{ inputs.infino_env }}
+      cache_budget_bytes: ${{ inputs.cache_budget_bytes }}
+      num_concurrency: ${{ inputs.num_concurrency }}
+      num_per_batch: ${{ inputs.num_per_batch }}
+      timeout_minutes: ${{ inputs.timeout_minutes }}
+      fts_dataset: ${{ inputs.fts_dataset }}
+      fts_k: ${{ inputs.fts_k }}
+      payload_profile: ${{ inputs.payload_profile }}
+
+  # All requested legs must pass; a skipped leg is not a failure.
+  publish:
+    needs: [vector, fts]
+    if: ${{ inputs.publish_results && !cancelled() && !contains(needs.*.result, 'failure') && contains(needs.*.result, 'success') }}
+    uses: ./.github/workflows/_vdbbench-publish.yml
+    secrets: inherit
+
+  # Numbers are baked into the image, so uploading alone changes nothing.
+  deploy-viewer:
+    needs: publish
+    if: ${{ needs.publish.result == 'success' }}
+    uses: ./.github/workflows/vdbbench-viewer.yml
+    secrets: inherit
+    with:
+      vdbbench_ref: ${{ inputs.vdbbench_ref }}

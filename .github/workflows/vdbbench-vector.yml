@@ -1,7 +1,7 @@
 name: VectorDBBench — Vector
 
-# Vector ANN bench (Cohere, cosine) on one ephemeral VM. Machinery lives in
-# vdbbench-run.yml; this file is the dispatch form.
+# Vector ANN bench (Cohere, cosine) on one ephemeral VM. This file is the
+# dispatch form; the pipeline lives in _vdbbench-pipeline.yml.
 
 on:
   workflow_dispatch:
@@ -100,11 +100,11 @@ permissions:
   contents: read
 
 jobs:
-  vector:
-    uses: ./.github/workflows/vdbbench-run.yml
+  run:
+    uses: ./.github/workflows/_vdbbench-pipeline.yml
     secrets: inherit
     with:
-      bench: vector
+      mode: vector
       vector_case: ${{ inputs.vector_case }}
       vector_k: ${{ inputs.vector_k }}
       n_cent: ${{ inputs.n_cent }}
@@ -121,19 +121,4 @@ jobs:
       infino_ref: ${{ inputs.infino_ref }}
       vdbbench_ref: ${{ inputs.vdbbench_ref }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
-
-  # All requested legs must pass; a skipped leg is not a failure.
-  publish:
-    needs: [vector]
-    if: ${{ inputs.publish_results && !cancelled() && !contains(needs.*.result, 'failure') && contains(needs.*.result, 'success') }}
-    uses: ./.github/workflows/vdbbench-publish.yml
-    secrets: inherit
-
-  # Numbers are baked into the image, so uploading alone changes nothing.
-  deploy-viewer:
-    needs: publish
-    if: ${{ needs.publish.result == 'success' }}
-    uses: ./.github/workflows/vdbbench-viewer.yml
-    secrets: inherit
-    with:
-      vdbbench_ref: ${{ inputs.vdbbench_ref }}
+      publish_results: ${{ inputs.publish_results }}
