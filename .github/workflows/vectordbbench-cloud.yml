@@ -47,6 +47,12 @@ on:
         default: "180"
         type: string
 
+      publish_results:
+        description: "Open a PR adding these numbers to the viewer."
+        required: false
+        default: false
+        type: boolean
+
 permissions:
   id-token: write   # OIDC federated login; a called workflow cannot exceed this
   contents: read
@@ -77,3 +83,19 @@ jobs:
       vdbbench_ref: ${{ inputs.vdbbench_ref }}
       infino_env: ${{ inputs.infino_env }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
+
+  # Runs when at least one leg produced numbers, so a failed leg does not
+  # discard the other's results.
+  publish:
+    needs: [vector, fts]
+    if: ${{ inputs.publish_results && !cancelled() && contains(needs.*.result, 'success') }}
+    uses: ./.github/workflows/vdbbench-publish.yml
+    secrets: inherit
+
+  # Fresh numbers are only visible once the image is rebuilt, so publishing
+  # without redeploying would leave the page stale.
+  deploy-viewer:
+    needs: publish
+    if: ${{ needs.publish.result == 'success' }}
+    uses: ./.github/workflows/vdbbench-viewer.yml
+    secrets: inherit
