@@ -108,12 +108,14 @@ jobs:
             fi
           done
 
-          SHA="$(git -C vdbbench-viewer/src rev-parse --short HEAD)"
+          # Results change without the fork moving, so the fork SHA alone would
+          # let one tag mean two different images.
+          TAG="$(git -C vdbbench-viewer/src rev-parse --short HEAD)-${GITHUB_RUN_ID}"
           {
             echo "PROJECT=$PROJECT"
             echo "RUNTIME_SA=$RUNTIME_SA"
             echo "REGION=$INPUT_REGION"
-            echo "TAG=$SHA"
+            echo "TAG=$TAG"
             echo "IMAGE=${INPUT_REGION}-docker.pkg.dev/${PROJECT}/${AR_REPO}/viewer"
             echo "BUCKET=$VAR_BUCKET"
           } >> "$GITHUB_ENV"

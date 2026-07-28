@@ -191,7 +191,7 @@ account keys exist.
 | Resource | Detail |
 |---|---|
 | Cloud Run service | `vdbbench-viewer`, `us-central1`, unauthenticated |
-| Artifact Registry | `vdbbench-viewer`, Docker, tagged by fork commit |
+| Artifact Registry | `vdbbench-viewer`, Docker, tagged `<fork-sha>-<run-id>` |
 | Results bucket | `vdbbench-results-887234897611`, `us-central1`, public access prevented |
 | Deploy account | `vdbbench-ci` — `run.admin` on the project, `artifactregistry.writer` on the one registry, `storage.objectAdmin` on the results bucket, `iam.serviceAccountUser` on the runtime account |
 | Runtime account | `vdbbench-viewer-runtime` — no roles |
