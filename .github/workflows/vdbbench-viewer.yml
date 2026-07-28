@@ -1,9 +1,9 @@
 name: VectorDBBench — Viewer
 
 # On-demand deploy of the VDBBench results UI to Cloud Run, at a stable public
-# URL. Results are whatever the deployed ref of the fork has committed under
+# URL. The page shows whatever the deployed ref of the fork has committed under
 # vectordb_bench/results/, so merging there is the publish gate. Image build and
-# run-mode removal live in vdbbench-viewer/; see its README for the GCP setup.
+# GCP setup live in vdbbench-viewer/.
 
 on:
   workflow_dispatch:
@@ -51,8 +51,7 @@ jobs:
       - name: Checkout (this repo, for the image build and composite actions)
         uses: actions/checkout@v4
 
-      # Public repo, so no token: the fork is cloned anonymously into the
-      # Docker build context.
+      # Public repo, so no token is needed to reach it.
       - name: Checkout VectorDBBench
         uses: actions/checkout@v4
         with:
@@ -152,9 +151,8 @@ jobs:
           print("image carries no run-mode UI")
           PY
 
-      # Executes each page the way Streamlit would. Catches an import the fork
-      # never declared and a strip that removed something still referenced —
-      # both of which look fine until someone opens the page.
+      # Catches an undeclared import or a strip that broke a live reference —
+      # both look fine until someone opens the page.
       - name: Assert every page renders
         run: |
           docker run --rm -i --entrypoint python "$IMAGE:$TAG" - <<'PY'

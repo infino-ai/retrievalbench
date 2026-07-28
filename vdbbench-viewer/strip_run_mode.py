@@ -1,24 +1,19 @@
 #!/usr/bin/env python3
-"""Strip VectorDBBench's run-mode UI from a source tree before it is served publicly.
+"""Remove VectorDBBench's run-mode UI from a source tree.
 
 The hosted viewer is unauthenticated, so no control that starts a benchmark or
-writes config may reach the image: a run submitted by a stranger downloads
-multi-gigabyte datasets and drives load against an endpoint of their choosing.
-
-Every edit is anchored to exact upstream text, and a missing anchor aborts the
-build. An upstream change that moves this code fails loudly instead of quietly
-restoring a public trigger.
+writes config may reach the image. Each edit is anchored to exact upstream
+text and a missing anchor aborts the build, so upstream moving this code fails
+loudly instead of restoring a public trigger.
 
 Usage: strip_run_mode.py <path-to-vectordb_bench-package>
 """
-
-from __future__ import annotations
 
 import shutil
 import sys
 from pathlib import Path
 
-# Removed wholesale: the pages themselves and the widgets only they use.
+# components/run_test holds widgets that only the removed pages import.
 DELETED = (
     "pages/run_test.py",
     "pages/custom.py",
@@ -68,8 +63,8 @@ WELCOME_CUSTOM_CARD = '''        {
         },
 '''
 
-# Upstream renders the first eight cards, then a "Run Your Own Test" row holding
-# the two cards deleted above. Both the slice bound and that row have to go.
+# The slice bound and the trailing row exist to place the two removed cards, so
+# they go with them.
 WELCOME_CARD_SLICE = "    for option in options[:8]:\n"
 WELCOME_CARD_SLICE_ALL = "    for option in options:\n"
 
@@ -102,16 +97,13 @@ WELCOME_CLOSING_DIV = '''    html_content += """
     """
 '''
 
-# Survives the strip: a comment in config/styles.py naming the removed page.
-ALLOWED_RESIDUE = {"config/styles.py"}
-
 
 class AnchorMissing(RuntimeError):
-    """An expected fragment of upstream source was not found."""
+    """Expected upstream source was not found."""
 
 
 def remove(target: Path) -> None:
-    """Delete a file or directory; errors if it is already absent."""
+    """Delete a file or directory; raises if it is already absent."""
     if not target.exists():
         raise AnchorMissing(f"expected to remove {target}, but it does not exist")
     if target.is_dir():
@@ -121,7 +113,7 @@ def remove(target: Path) -> None:
 
 
 def substitute(source: Path, anchor: str, replacement: str) -> None:
-    """Swap the sole occurrence of `anchor`; errors on zero or several matches."""
+    """Replace `anchor`; raises unless it matches exactly once."""
     text = source.read_text()
     matches = text.count(anchor)
     if matches != 1:
@@ -134,6 +126,7 @@ def excise(source: Path, anchor: str) -> None:
 
 
 def strip_run_mode(frontend: Path) -> None:
+    """Delete the run-mode pages and every widget and link reaching them."""
     for relative in DELETED:
         remove(frontend / relative)
 
@@ -150,21 +143,19 @@ def strip_run_mode(frontend: Path) -> None:
 
 
 def verify(frontend: Path) -> None:
-    """Fail if any run-mode path or reference survived the edits."""
+    """Raise if any run-mode path or reference survived."""
     for relative in DELETED:
         if (frontend / relative).exists():
             raise AnchorMissing(f"{relative} still present after the strip")
 
     residue = []
     for source in sorted(frontend.rglob("*.py")):
-        relative = source.relative_to(frontend).as_posix()
-        if relative in ALLOWED_RESIDUE:
-            continue
         for number, line in enumerate(source.read_text().splitlines(), start=1):
+            # A stale mention in a comment reaches no one; only live code counts.
             if line.lstrip().startswith("#"):
                 continue
             if "run_test" in line or '"link": "custom"' in line:
-                residue.append(f"{relative}:{number}: {line.strip()}")
+                residue.append(f"{source.relative_to(frontend).as_posix()}:{number}: {line.strip()}")
 
     if residue:
         joined = "\n".join(residue)

@@ -1,21 +1,14 @@
 # Read-only VectorDBBench results viewer, served unauthenticated on Cloud Run.
-#
-# Build context is this directory. `src/` must hold a checkout of
-# infino-ai/VectorDBBench; the deploy workflow puts it there.
-#
-#   git clone --depth 1 https://github.com/infino-ai/VectorDBBench src
-#   docker build -t vdbbench-viewer .
+# Build context is this directory; src/ must hold a VectorDBBench checkout.
 
 FROM python:3.11-slim-bookworm AS build
 
-# The context excludes src/.git, so setuptools-scm cannot derive a version.
-# Nothing reads it: the package is installed only to resolve dependencies, then
-# uninstalled below.
+# The context excludes src/.git, leaving setuptools-scm no version to derive.
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
     SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VECTORDB_BENCH=0.0.0+viewer
 
-# Present for dependencies without a cp311 manylinux wheel; discarded with this stage.
+# For dependencies without a cp311 wheel; discarded with this stage.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends build-essential \
  && rm -rf /var/lib/apt/lists/*
@@ -26,19 +19,16 @@ COPY strip_run_mode.py /strip_run_mode.py
 # Aborts the build if the run-mode UI cannot be located and removed.
 RUN python /strip_run_mode.py /src/vectordb_bench
 
-# Installing resolves the dependency set from pyproject, so this image and a
-# bench run agree on versions without a second requirements file to drift.
-# The package itself is then dropped: the app runs from the source tree at
-# /app, which keeps results/ and the Streamlit pages/ layout intact.
+# Installing resolves dependencies from pyproject, so no second requirements
+# file can drift from it. The package then goes: the app runs from the source
+# tree at /app, which keeps results/ and the Streamlit pages/ layout intact.
 RUN python -m venv /venv \
  && /venv/bin/pip install /src \
  && /venv/bin/pip uninstall --yes vectordb-bench
 
-# components/qps_recall/charts.py imports matplotlib but upstream's pyproject
-# never declares it, so a clean install has none. The bound is the second half
-# of the same gap: that file calls plt.cm.get_cmap, dropped in matplotlib 3.9.
-# Both go away when the fork declares the dependency and moves to
-# matplotlib.colormaps.
+# components/qps_recall/charts.py imports matplotlib, which upstream's pyproject
+# never declares, and calls plt.cm.get_cmap, dropped in 3.9. Both the install
+# and the bound go once the fork declares the dep and uses matplotlib.colormaps.
 RUN /venv/bin/pip install 'matplotlib<3.9'
 
 
@@ -47,8 +37,8 @@ FROM python:3.11-slim-bookworm
 COPY --from=build /venv /venv
 COPY --from=build /src/vectordb_bench /app/vectordb_bench
 
-# vectordb_bench opens LOG_FILE at import and creates its parent, so it has to
-# be somewhere the unprivileged user can write.
+# vectordb_bench creates LOG_FILE's parent at import, so it must sit somewhere
+# the unprivileged user can write.
 ENV PATH=/venv/bin:$PATH \
     PYTHONPATH=/app \
     PYTHONDONTWRITEBYTECODE=1 \
