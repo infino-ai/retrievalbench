@@ -2,40 +2,77 @@
 
 **<https://vdbbench-viewer-q6unoyyhua-uc.a.run.app>**
 
-Public web UI for VectorDBBench results — Infino against every other backend,
-on QPS, recall, latency, cost-per-query and full-text search.
+Public web UI comparing Infino against every other vector backend on QPS,
+recall, latency, cost-per-query and full-text search. VectorDBBench's own
+Streamlit app, served on Cloud Run at a URL that does not change.
 
-Upstream's Streamlit app, packaged as a container and served on Cloud Run.
-Nine read-only pages; the two pages that start benchmark runs are removed from
-the image. The URL is fixed for the life of the service — each deploy replaces
-the revision behind it.
-
-## Deploy
-
-```sh
-gh workflow run vdbbench-viewer.yml --repo infino-ai/retrievalbench \
-  -f vdbbench_ref=main
+```
+bench run  ──►  results bucket  ──►  viewer deploy  ──►  live
+   (opt-in)                           (automatic)
 ```
 
-Takes about five minutes. The service URL appears in the run's step summary and
-does not change between deploys.
+Publishing is opt-in: an ordinary bench run changes nothing. Opting in is the
+single decision — the deploy that puts the numbers on the page follows on its
+own.
+
+## Publish a run's numbers
+
+Add `publish_results=true` to any bench dispatch:
+
+```sh
+gh workflow run vectordbbench-cloud.yml --repo infino-ai/retrievalbench \
+  -f mode=both -f publish_results=true
+```
+
+Also on `vdbbench-vector.yml` and `vdbbench-fts.yml` for a single leg. The
+toggle defaults to off, so ordinary runs publish nothing.
+
+The run's `result_*.json` is uploaded to the results bucket and the viewer
+redeploys, so the page is current when the run finishes. The run summary lists
+the hardware, dataset, parameters and metrics for each leg. Both legs of a
+combined dispatch upload together; if one leg fails the other still publishes.
+
+Nothing reviews a diff, and the deploy is automatic — so a published number is a
+live number. Check the run summary. To pull one back, delete the object and
+redeploy:
+
+```sh
+gcloud storage rm gs://vdbbench-results-887234897611/Infino/<file>.json \
+  --project=infino-ai-engine
+```
+
+## Deploy the page
+
+Publishing triggers this automatically. Dispatch it by hand to pick up a new
+`vdbbench_ref`, or to restore the page after deleting a result:
+
+```sh
+gh workflow run vdbbench-viewer.yml --repo infino-ai/retrievalbench
+```
+
+About five minutes. The URL is in the run's step summary.
 
 | Input | Default | Purpose |
 |---|---|---|
-| `vdbbench_ref` | `main` | which `infino-ai/VectorDBBench` ref to publish |
+| `vdbbench_ref` | `main` | which `infino-ai/VectorDBBench` ref supplies the app and peer results |
 | `region` | `us-central1` | Cloud Run and Artifact Registry region |
 | `gcp_project` | `vars.GCP_PROJECT_ID` | override the target project |
 | `runtime_service_account` | `vars.VDBBENCH_VIEWER_RUNTIME_SA` | override the container identity |
 
-## What gets published
+## What the page shows
 
-Results are the `result_*.json` files committed under `vectordb_bench/results/`
-in the deployed ref of [`infino-ai/VectorDBBench`](https://github.com/infino-ai/VectorDBBench),
-one directory per backend. Merging there is the publish gate — the URL is
-public, so nothing appears on it until it is in the fork's history.
+| Source | Contents |
+|---|---|
+| results bucket, synced at deploy | Infino's numbers, overlaid onto the tree |
+| `vectordb_bench/results/` in the fork | every peer backend, as upstream ships them |
 
-Bench runs write results as CI artifacts, which expire. Getting numbers onto the
-page means opening a PR against the fork.
+Our results live in a private bucket rather than the public fork, so raw numbers
+stay private until the page renders them, and the fork stays clean for upstream
+merges. `results/` in this repo is a sync target — its JSON is git-ignored and
+never committed.
+
+Nine read-only pages. The two upstream pages that *start* benchmark runs are
+removed from the image — see [Image internals](#image-internals).
 
 ## Local development
 
@@ -47,7 +84,19 @@ docker run --rm -p 8501:8501 vdbbench-viewer
 
 Serves on <http://localhost:8501>. `src/` is git-ignored.
 
-To preview results before they are committed, mount them over the baked-in copy:
+To see what the deployed page would show, sync the bucket and rebuild — that
+overlay is the last image layer, so the rebuild takes under a second:
+
+```sh
+gcloud storage rsync gs://vdbbench-results-887234897611/Infino results/Infino \
+  --project=infino-ai-engine
+docker build -t vdbbench-viewer . && docker run --rm -p 8501:8501 vdbbench-viewer
+```
+
+Dropping unpublished JSON into `results/Infino/` works the same way.
+
+A local `init_bench` run writes to `src/vectordb_bench/results/` instead; mount
+that over the baked-in tree to view it without copying:
 
 ```sh
 docker run --rm -p 8501:8501 \
@@ -55,58 +104,25 @@ docker run --rm -p 8501:8501 \
   vdbbench-viewer
 ```
 
-`src/vectordb_bench/results/` is where a local `init_bench` run writes. For
-results from CI, note that `results/Infino/` is empty upstream, so git does not
-carry it and a fresh clone needs it created:
+## Running costs
 
-```sh
-gh run download <run-id> --repo infino-ai/retrievalbench \
-  -n vectordbbench-results-vector -n vectordbbench-results-fts -D /tmp/vdb
-mkdir -p src/vectordb_bench/results/Infino
-find /tmp/vdb -name 'result_*.json' -exec cp {} src/vectordb_bench/results/Infino/ \;
-```
+Idle is free: `--min-instances=0` means no container runs when nobody is
+looking. The only standing charge is image storage, five images at ~1.8 GB —
+under a dollar a month.
 
-## How the image is built
+An open browser tab holds a Streamlit websocket, which Cloud Run bills as an
+in-flight request for as long as it lives. `--timeout=900` drops abandoned tabs
+after fifteen minutes and `--max-instances=2` caps a scraper.
 
-Dependencies resolve from the fork's `pyproject`, so no second requirements file
-can drift from it. The package is then uninstalled and the app runs from the
-source tree, which keeps `results/` and Streamlit's `pages/` layout intact.
+Cold start is the 1.8 GB image pull; the app itself imports in 0.6 s. Setting
+`--min-instances=1` removes the pull but makes an idle service always-billed.
 
-`strip_run_mode.py` removes two pages during the build:
+## Taking it down
 
-| Page | Why it cannot ship |
-|---|---|
-| `pages/run_test.py` | starts a benchmark run — on a public URL, anyone could make the container pull multi-gigabyte datasets and drive load at an endpoint they choose, billed to us |
-| `pages/custom.py` | writes caller-supplied dataset config into the container |
+Teardown saves under a dollar a month, so do it to take the page offline, not to
+stop compute charges that are not accruing.
 
-Each edit is anchored to exact upstream text and the build fails on a miss, so
-merging `upstream/main` into the fork can break this build. Re-anchor
-`strip_run_mode.py` against the new source rather than loosening the match.
-
-Two deploy-time checks guard the result: one asserts the removed pages are
-absent from the image, the other renders all nine pages through Streamlit's
-`AppTest`. Both run before the image is pushed.
-
-## Cost
-
-Idle costs nothing — `--min-instances=0`, so no container runs when no one is
-looking. An open browser tab holds a Streamlit websocket, which Cloud Run bills
-as an in-flight request for its whole lifetime; `--timeout=900` drops abandoned
-tabs after fifteen minutes. `--max-instances=2` caps the damage from a scraper.
-Images are pruned to the five most recent.
-
-Cold start is dominated by pulling the 1.8 GB image; the app itself imports in
-0.6 s. Raising `--min-instances` to 1 removes the pull but converts an idle
-service from free to always-billed.
-
-## Shutting it down
-
-An idle service already costs nothing to run, so leaving it up is not what you
-pay for. The standing cost is image storage in Artifact Registry — five images
-at roughly 1.8 GB, under a dollar a month. Tear down for that, or to take the
-page offline; not to stop compute charges that are not accruing.
-
-Take it private, keeping the service and URL:
+Offline, keeping the service and URL:
 
 ```sh
 gcloud run services remove-iam-policy-binding vdbbench-viewer \
@@ -121,47 +137,71 @@ gcloud run services delete vdbbench-viewer \
   --region=us-central1 --project=infino-ai-engine --quiet
 ```
 
-Redeploying afterwards normally returns the same URL, since it derives from
-project, region and service name — but treat that as likely rather than
-guaranteed, and prefer the private route above if the link is published
-anywhere.
+A later redeploy normally returns the same URL — it derives from project, region
+and service name — but treat that as likely, not guaranteed. If the link is
+published anywhere, prefer taking it offline.
 
-Remove everything, including the images and both identities:
+<details>
+<summary>Remove everything, including images and identities</summary>
 
 ```sh
 PROJECT=infino-ai-engine
 gcloud run services delete vdbbench-viewer --region=us-central1 --project="$PROJECT" --quiet
 gcloud artifacts repositories delete vdbbench-viewer --location=us-central1 --project="$PROJECT" --quiet
+# The bucket holds the only copy of every published result.
+gcloud storage rm -r "gs://vdbbench-results-887234897611" --project="$PROJECT"
 gcloud iam service-accounts delete "vdbbench-ci@$PROJECT.iam.gserviceaccount.com" --project="$PROJECT" --quiet
 gcloud iam service-accounts delete "vdbbench-viewer-runtime@$PROJECT.iam.gserviceaccount.com" --project="$PROJECT" --quiet
 
-for V in GCP_PROJECT_ID VDBBENCH_VIEWER_DEPLOY_SA VDBBENCH_VIEWER_RUNTIME_SA; do
+for V in GCP_PROJECT_ID VDBBENCH_RESULTS_BUCKET VDBBENCH_VIEWER_DEPLOY_SA VDBBENCH_VIEWER_RUNTIME_SA; do
   gh variable delete "$V" --env ci --repo infino-ai/retrievalbench
 done
 ```
 
-Deleting the accounts drops their role bindings with them. Leave
-`run.googleapis.com` and `artifactregistry.googleapis.com` enabled — disabling
-shared APIs affects anything else in the project that uses them.
+Deleting the accounts drops their role bindings. Leave `run.googleapis.com` and
+`artifactregistry.googleapis.com` enabled — they are shared with the rest of the
+project.
+
+</details>
+
+## Image internals
+
+Dependencies resolve from the fork's `pyproject`, so no second requirements file
+can drift from it. The package is then uninstalled and the app runs from the
+source tree, preserving `results/` and Streamlit's `pages/` layout.
+
+`strip_run_mode.py` removes two pages, because the URL is unauthenticated:
+
+| Page | Why it cannot ship |
+|---|---|
+| `pages/run_test.py` | starts a benchmark run — anyone could make the container pull multi-gigabyte datasets and drive load at an endpoint they choose, billed to us |
+| `pages/custom.py` | writes caller-supplied dataset config into the container |
+
+Each edit is anchored to exact upstream text and the build fails on a miss, so
+merging `upstream/main` into the fork can break this build. Re-anchor
+`strip_run_mode.py` against the new source rather than loosening the match.
+
+Two checks run before the image is pushed: one asserts the removed pages are
+absent, the other renders all nine pages through Streamlit's `AppTest`.
 
 ## Infrastructure
 
-Deployed to `infino-ai-engine` by GitHub Actions over Workload Identity
-Federation. No service account keys exist.
+Deployed to `infino-ai-engine` over Workload Identity Federation. No service
+account keys exist.
 
 | Resource | Detail |
 |---|---|
 | Cloud Run service | `vdbbench-viewer`, `us-central1`, unauthenticated |
 | Artifact Registry | `vdbbench-viewer`, Docker, tagged by fork commit |
-| Deploy account | `vdbbench-ci` — `run.admin` on the project, `artifactregistry.writer` on the one registry, `iam.serviceAccountUser` on the runtime account |
+| Results bucket | `vdbbench-results-887234897611`, `us-central1`, public access prevented |
+| Deploy account | `vdbbench-ci` — `run.admin` on the project, `artifactregistry.writer` on the one registry, `storage.objectAdmin` on the results bucket, `iam.serviceAccountUser` on the runtime account |
 | Runtime account | `vdbbench-viewer-runtime` — no roles |
-| Config | `GCP_PROJECT_ID`, `VDBBENCH_VIEWER_DEPLOY_SA`, `VDBBENCH_VIEWER_RUNTIME_SA` on the `ci` environment |
+| Config | `GCP_PROJECT_ID`, `VDBBENCH_RESULTS_BUCKET`, `VDBBENCH_VIEWER_DEPLOY_SA`, `VDBBENCH_VIEWER_RUNTIME_SA` on the `ci` environment |
 
 The runtime account holds no roles because the container only reads files baked
-into its own image; without it Cloud Run would default to the compute account,
-which carries project Editor. The deploy account may only push to the one
-registry, so the registry and its cleanup policy are created here rather than by
-the workflow.
+into its own image; without it Cloud Run defaults to the compute account, which
+carries project Editor. The deploy account may only push to the one registry, so
+the registry and its cleanup policy are created out of band.
 
 <details>
 <summary>Recreating this in another project</summary>
@@ -201,12 +241,19 @@ JSON
 gcloud artifacts repositories set-cleanup-policies vdbbench-viewer \
   --location="$REGION" --project="$PROJECT" --policy=/tmp/cleanup-policy.json --no-dry-run
 
+BUCKET="gs://vdbbench-results-$PNUM"
+gcloud storage buckets create "$BUCKET" --project="$PROJECT" --location="$REGION" \
+  --uniform-bucket-level-access --public-access-prevention
+gcloud storage buckets add-iam-policy-binding "$BUCKET" --project="$PROJECT" \
+  --member="serviceAccount:$DEPLOY_SA" --role=roles/storage.objectAdmin
+
 gcloud projects add-iam-policy-binding "$PROJECT" \
   --member="serviceAccount:$DEPLOY_SA" --role=roles/run.admin --condition=None
 gcloud iam service-accounts add-iam-policy-binding "$RUNTIME_SA" --project="$PROJECT" \
   --member="serviceAccount:$DEPLOY_SA" --role=roles/iam.serviceAccountUser
 
 gh variable set GCP_PROJECT_ID --env ci --body "$PROJECT" --repo infino-ai/retrievalbench
+gh variable set VDBBENCH_RESULTS_BUCKET --env ci --body "$BUCKET" --repo infino-ai/retrievalbench
 gh variable set VDBBENCH_VIEWER_DEPLOY_SA --env ci --body "$DEPLOY_SA" --repo infino-ai/retrievalbench
 gh variable set VDBBENCH_VIEWER_RUNTIME_SA --env ci --body "$RUNTIME_SA" --repo infino-ai/retrievalbench
 ```
@@ -217,8 +264,11 @@ gh variable set VDBBENCH_VIEWER_RUNTIME_SA --env ci --body "$RUNTIME_SA" --repo 
 
 | Failure | Cause |
 |---|---|
-| `... is unset on the ci environment` | a `ci` variable is missing; see Infrastructure above |
+| `... is unset on the ci environment` | a `ci` variable is missing; see [Infrastructure](#infrastructure) |
 | `Artifact Registry 'vdbbench-viewer' missing` | registry deleted, or deploying to a new region |
+| `the run produced no result JSON to publish` | the bench failed before writing results |
+| publish fails on `storage.objects.create` | the deploy account lost `storage.objectAdmin` on the results bucket |
+| page missing recent numbers | the run published but no deploy followed |
 | build fails in `strip_run_mode.py` | upstream moved the code an anchor targets; re-anchor it |
 | `pages raised on render` | a page throws — most often a dependency the fork does not declare |
-| deploy rejected on `--allow-unauthenticated` | the `constraints/iam.allowedPolicyMemberDomains` org policy is blocking `allUsers` |
+| deploy rejected on `--allow-unauthenticated` | `constraints/iam.allowedPolicyMemberDomains` is blocking `allUsers` |
