@@ -17,6 +17,77 @@ This README keeps the headline comparison against the two engines that matter mo
 
 On hot, infino beats DataFusion and ClickHouse-on-Parquet. It trails ClickHouse's native MergeTree, which is a different substrate (ClickHouse ingests into its own format rather than reading Parquet).
 
+## The leaderboard machine (c8g.metal-48xl, 100M rows)
+
+The numbers quoted off the ClickBench homepage come from the largest machine, **c8g.metal-48xl** (Graviton4, 192 vCPU), not the c6a.4xlarge reference above. infino now has a result there too: **hot sum 6.45s, geomean 0.090** ([result file](results/infino/c8g.metal-48xl.json)), the fastest of five clean board-standard three-try sweeps on an idle box. Full detail and the AMD c7a.metal number are in [MACHINE_SCALING.md](MACHINE_SCALING.md).
+
+Full field on this machine, best hot sum per system (60 systems). infino ranks **#17**, ahead of every DataFusion build (including the Vortex-partitioned one) and every ClickHouse-on-Parquet variant; everything ahead is a native-format or in-memory engine, or a DuckDB datalake variant.
+
+| # | System | Hot sum |
+|--:|---|--:|
+| 1 | umbra | 1.61s |
+| 2 | cedardb | 2.80s |
+| 3 | duckdb | 3.01s |
+| 4 | gizmosql | 3.18s |
+| 5 | clickhouse | 3.69s |
+| 6 | duckdb-memory | 3.72s |
+| 7 | clickhouse-web | 3.84s |
+| 8 | pg_clickhouse | 4.00s |
+| 9 | firebolt | 4.48s |
+| 10 | polars-dataframe | 4.73s |
+| 11 | starrocks | 5.31s |
+| 12 | duckdb-parquet-partitioned | 5.42s |
+| 13 | arc | 5.55s |
+| 14 | polars | 5.91s |
+| 15 | duckdb-parquet | 6.19s |
+| 16 | duckdb-datalake | 6.41s |
+| **17** | **infino** | **6.45s** |
+| 18 | duckdb-datalake-partitioned | 6.52s |
+| 19 | datafusion-vortex-partitioned | 6.60s |
+| 20 | duckdb-dataframe | 7.02s |
+| 21 | datafusion-partitioned | 7.27s |
+| 22 | chdb | 8.06s |
+| 23 | datafusion | 8.54s |
+| 24 | clickhouse-datalake-partitioned | 8.73s |
+| 25 | clickhouse-parquet-partitioned | 8.93s |
+| 26 | cedardb-parquet | 9.79s |
+| 27 | clickhouse-parquet | 10.62s |
+| 28 | clickhouse-datalake | 13.35s |
+| 29 | sail | 13.57s |
+| 30 | chdb-parquet-partitioned | 13.99s |
+| 31 | sail-partitioned | 14.15s |
+| 32 | chdb-dataframe | 15.57s |
+| 33 | victorialogs | 18.17s |
+| 34 | firebolt-parquet-partitioned | 18.58s |
+| 35 | pg_duckdb-parquet | 21.70s |
+| 36 | duckdb-vortex | 29.08s |
+| 37 | datafusion-vortex | 29.84s |
+| 38 | daft-parquet | 31.11s |
+| 39 | bemidb | 35.78s |
+| 40 | daft-parquet-partitioned | 44.00s |
+| 41 | glaredb-partitioned | 44.22s |
+| 42 | glaredb | 46.36s |
+| 43 | spark-comet | 61.04s |
+| 44 | gendb | 70.06s |
+| 45 | trino-partitioned | 85.23s |
+| 46 | trino | 90.61s |
+| 47 | trino-datalake-partitioned | 97.42s |
+| 48 | trino-datalake | 105.07s |
+| 49 | firebolt-parquet | 114.44s |
+| 50 | presto-partitioned | 122.40s |
+| 51 | cloudberry | 127.81s |
+| 52 | warehousepg | 134.12s |
+| 53 | presto-datalake-partitioned | 136.56s |
+| 54 | presto | 152.19s |
+| 55 | presto-datalake | 159.73s |
+| 56 | spark | 300.89s |
+| 57 | timescaledb | 495.27s |
+| 58 | cratedb | 693.13s |
+| 59 | greenplum | 738.17s |
+| 60 | bqn | 1447.20s |
+
+Reference rows are best-per-system from upstream ClickBench's `c8g.metal-48xl` results; the infino row is ours. Managed warehouses (Snowflake, Databricks, BigQuery, Redshift) are excluded because they do not run on a fixed instance.
+
 ### How ClickBench measures
 
 Each query is run three times. **Cold** is the first run (`t1`); **hot** is the best of the warm runs (`min(t2, t3)`). **Sum** is the total across all 43 queries; **geomean** is the geometric mean, so no single slow query dominates. Lower is better everywhere.
