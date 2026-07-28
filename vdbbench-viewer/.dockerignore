@@ -1,0 +1,11 @@
+src/.git
+src/.github
+src/tests
+src/docs
+src/logs
+src/.env
+src/target
+**/__pycache__
+**/*.pyc
+**/.mypy_cache
+**/*.egg-info
