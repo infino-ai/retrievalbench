@@ -99,3 +99,22 @@ docker run --rm -p 8501:8501 vdbbench-viewer
 ```
 
 Then open <http://localhost:8501>. `src/` is git-ignored.
+
+### Previewing results that are not committed yet
+
+`RESULTS_LOCAL_DIR` overrides where the app reads results, so a bench run's
+artifacts can be viewed before any PR lands in the fork:
+
+```sh
+gh run download <run-id> --repo infino-ai/retrievalbench \
+  -n vectordbbench-results-vector -n vectordbbench-results-fts -D /tmp/vdb
+cp -R src/vectordb_bench/results /tmp/merged
+find /tmp/vdb -name 'result_*.json' -exec cp {} /tmp/merged/Infino/ \;
+
+docker run --rm -p 8501:8501 \
+  -v /tmp/merged:/results:ro -e RESULTS_LOCAL_DIR=/results \
+  vdbbench-viewer
+```
+
+The deployed service does not use this — it only ever shows what the fork has
+committed.
