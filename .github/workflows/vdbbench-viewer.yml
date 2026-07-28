@@ -152,6 +152,30 @@ jobs:
           print("image carries no run-mode UI")
           PY
 
+      # Executes each page the way Streamlit would. Catches an import the fork
+      # never declared and a strip that removed something still referenced —
+      # both of which look fine until someone opens the page.
+      - name: Assert every page renders
+        run: |
+          docker run --rm -i --entrypoint python "$IMAGE:$TAG" - <<'PY'
+          import pathlib
+          import sys
+
+          from streamlit.testing.v1 import AppTest
+
+          root = pathlib.Path("/app/vectordb_bench/frontend")
+          scripts = [root / "vdbbench.py", *sorted((root / "pages").glob("*.py"))]
+          failed = []
+          for script in scripts:
+              app = AppTest.from_file(str(script), default_timeout=180).run()
+              if app.exception:
+                  failed.append(f"{script.name}: {[e.message for e in app.exception]}")
+
+          if failed:
+              sys.exit("pages raised on render:\n" + "\n".join(failed))
+          print(f"{len(scripts)} pages render clean")
+          PY
+
       - name: Push image
         run: |
           set -euo pipefail
