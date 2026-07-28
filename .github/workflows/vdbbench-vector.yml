@@ -122,10 +122,11 @@ jobs:
       vdbbench_ref: ${{ inputs.vdbbench_ref }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
 
-  # A failed bench publishes nothing.
+  # Every requested leg must pass: a partial run would refresh half the page
+  # and silently leave the rest stale. Skipped legs are not failures.
   publish:
     needs: [vector]
-    if: ${{ inputs.publish_results && !cancelled() && contains(needs.*.result, 'success') }}
+    if: ${{ inputs.publish_results && !cancelled() && !contains(needs.*.result, 'failure') && contains(needs.*.result, 'success') }}
     uses: ./.github/workflows/vdbbench-publish.yml
     secrets: inherit
 

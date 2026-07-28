@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Summarize the VectorDBBench results a publish step uploaded.
+"""Summarize a VectorDBBench run and decide whether it may be published.
 
 Usage: vdbbench_publish_summary.py <results_dir> <summary_path>
 
 Run context comes from the run_meta_<bench>.json files the bench writes beside
 its results, so each leg reports the hardware it actually ran on.
 
-Exits non-zero if no result JSON was found.
+Exits non-zero if no result JSON was found or any case did not pass, which
+keeps a bad run out of the results bucket.
 """
 
 import glob
@@ -71,10 +72,14 @@ def main() -> int:
 
     failed = [r for r in rows["vector"] + rows["fts"] if r["status"] != "✓"]
     if failed:
-        lines += [f"> {len(failed)} case(s) did not pass; check before deploying.", ""]
+        lines += [f"> {len(failed)} case(s) did not pass; nothing was published.", ""]
 
     with open(summary_path, "a") as fh:
         fh.write("\n".join(lines) + "\n")
+
+    if failed:
+        print(f"::error::{len(failed)} case(s) did not pass; refusing to publish.")
+        return 1
     return 0
 
 

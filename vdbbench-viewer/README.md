@@ -29,12 +29,22 @@ toggle defaults to off, so ordinary runs publish nothing.
 
 The run's `result_*.json` is uploaded to the results bucket and the viewer
 redeploys, so the page is current when the run finishes. The run summary lists
-the hardware, dataset, parameters and metrics for each leg. Both legs of a
-combined dispatch upload together; if one leg fails the other still publishes.
+the hardware, dataset, parameters and metrics for each leg.
 
-Nothing reviews a diff, and the deploy is automatic — so a published number is a
-live number. Check the run summary. To pull one back, delete the object and
-redeploy:
+Publishing is all-or-nothing, because the deploy is automatic and the page is
+public. It is skipped entirely unless:
+
+- every requested leg succeeded — a partial run would refresh half the page and
+  leave the rest silently stale; and
+- every case is labelled passing — a failed or out-of-range case aborts the
+  publish before anything reaches the bucket.
+
+Deploys are serialized on one concurrency group, so two runs finishing together
+cannot deploy over each other. A queued deploy that gets superseded loses
+nothing: each deploy syncs the whole bucket, so the one that does run carries
+every published result.
+
+To pull a number back, delete the object and redeploy:
 
 ```sh
 gcloud storage rm gs://vdbbench-results-887234897611/Infino/<file>.json \
@@ -267,6 +277,8 @@ gh variable set VDBBENCH_VIEWER_RUNTIME_SA --env ci --body "$RUNTIME_SA" --repo 
 | `... is unset on the ci environment` | a `ci` variable is missing; see [Infrastructure](#infrastructure) |
 | `Artifact Registry 'vdbbench-viewer' missing` | registry deleted, or deploying to a new region |
 | `the run produced no result JSON to publish` | the bench failed before writing results |
+| `N case(s) did not pass; refusing to publish` | the run had a failed or out-of-range case; nothing was uploaded |
+| publish skipped despite `publish_results=true` | a requested leg failed, or none succeeded |
 | publish fails on `storage.objects.create` | the deploy account lost `storage.objectAdmin` on the results bucket |
 | page missing recent numbers | the run published but no deploy followed |
 | build fails in `strip_run_mode.py` | upstream moved the code an anchor targets; re-anchor it |

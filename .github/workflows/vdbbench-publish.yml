@@ -57,6 +57,14 @@ jobs:
           done
           { echo "PROJECT=$PROJECT"; echo "BUCKET=$BUCKET"; } >> "$GITHUB_ENV"
 
+      # Runs before the upload: the deploy that follows is automatic and the
+      # page is public, so a run with a failed case must not reach the bucket.
+      - name: Summarize and gate the run
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/vdbbench_publish_summary.py \
+            /tmp/vdb_results "$GITHUB_STEP_SUMMARY"
+
       # The bench may have run on any cloud; publishing always targets GCP.
       - name: GCP login
         uses: ./.github/actions/cloud-login
@@ -75,10 +83,3 @@ jobs:
           fi
           gcloud storage cp "${files[@]}" "$BUCKET/Infino/" --project="$PROJECT"
 
-      # No pull request reviews these numbers, so surface them here instead.
-      - name: Summarize what was published
-        run: |
-          set -euo pipefail
-          python3 .github/scripts/vdbbench_publish_summary.py \
-            /tmp/vdb_results "$GITHUB_STEP_SUMMARY"
-          echo "Deploy the viewer to put these on the page." >> "$GITHUB_STEP_SUMMARY"
