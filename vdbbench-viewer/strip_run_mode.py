@@ -9,7 +9,7 @@ Every edit is anchored to exact upstream text, and a missing anchor aborts the
 build. An upstream change that moves this code fails loudly instead of quietly
 restoring a public trigger.
 
-Usage: harden.py <path-to-vectordb_bench-package>
+Usage: strip_run_mode.py <path-to-vectordb_bench-package>
 """
 
 from __future__ import annotations
@@ -102,7 +102,7 @@ WELCOME_CLOSING_DIV = '''    html_content += """
     """
 '''
 
-# Survives hardening: a comment in config/styles.py naming the removed page.
+# Survives the strip: a comment in config/styles.py naming the removed page.
 ALLOWED_RESIDUE = {"config/styles.py"}
 
 
@@ -133,7 +133,7 @@ def excise(source: Path, anchor: str) -> None:
     substitute(source, anchor, "")
 
 
-def harden(frontend: Path) -> None:
+def strip_run_mode(frontend: Path) -> None:
     for relative in DELETED:
         remove(frontend / relative)
 
@@ -153,7 +153,7 @@ def verify(frontend: Path) -> None:
     """Fail if any run-mode path or reference survived the edits."""
     for relative in DELETED:
         if (frontend / relative).exists():
-            raise AnchorMissing(f"{relative} still present after hardening")
+            raise AnchorMissing(f"{relative} still present after the strip")
 
     residue = []
     for source in sorted(frontend.rglob("*.py")):
@@ -168,7 +168,7 @@ def verify(frontend: Path) -> None:
 
     if residue:
         joined = "\n".join(residue)
-        raise AnchorMissing(f"run-mode references survived hardening:\n{joined}")
+        raise AnchorMissing(f"run-mode references survived the strip:\n{joined}")
 
 
 def main(argv: list[str]) -> int:
@@ -182,13 +182,13 @@ def main(argv: list[str]) -> int:
         return 2
 
     try:
-        harden(frontend)
+        strip_run_mode(frontend)
         verify(frontend)
     except AnchorMissing as error:
-        sys.stderr.write(f"harden: {error}\n")
+        sys.stderr.write(f"strip_run_mode: {error}\n")
         return 1
 
-    sys.stdout.write(f"harden: run-mode UI removed from {frontend}\n")
+    sys.stdout.write(f"strip_run_mode: run-mode UI removed from {frontend}\n")
     return 0
 
 

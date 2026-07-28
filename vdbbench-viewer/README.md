@@ -5,7 +5,7 @@ Run at a stable public URL. Deployed on demand by
 [`vdbbench-viewer.yml`](../.github/workflows/vdbbench-viewer.yml).
 
 The app is upstream's, unchanged, minus the two write-mode pages — see
-[Hardening](#hardening). Results come from whatever is committed under
+[Run-mode removal](#run-mode-removal). Results come from whatever is committed under
 `vectordb_bench/results/` in the deployed ref of
 [`infino-ai/VectorDBBench`](https://github.com/infino-ai/VectorDBBench), so a
 merged PR there is the publish gate: nothing reaches the public URL until it is
@@ -21,10 +21,10 @@ gh workflow run vdbbench-viewer.yml --repo infino-ai/retrievalbench \
 The run prints the service URL in its step summary. The URL is stable across
 deploys — bookmark it once.
 
-## Hardening
+## Run-mode removal
 
-The URL is unauthenticated, so `harden.py` deletes upstream's two write-mode
-pages during the image build:
+The URL is unauthenticated, so `strip_run_mode.py` deletes upstream's two
+write-mode pages during the image build:
 
 - `pages/run_test.py` submits a benchmark run. On a public URL a stranger could
   make the container pull multi-gigabyte datasets and drive load at an endpoint
@@ -33,8 +33,8 @@ pages during the image build:
 
 Every edit is anchored to exact upstream text and the build aborts on a miss, so
 merging `upstream/main` into the fork can break this build. That is the intended
-failure: re-anchor `harden.py` against the new source rather than loosening the
-match.
+failure: re-anchor `strip_run_mode.py` against the new source rather than
+loosening the match.
 
 ## Cost
 

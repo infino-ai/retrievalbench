@@ -17,10 +17,10 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 COPY src/ /src/
-COPY harden.py /harden.py
+COPY strip_run_mode.py /strip_run_mode.py
 
 # Aborts the build if the run-mode UI cannot be located and removed.
-RUN python /harden.py /src/vectordb_bench
+RUN python /strip_run_mode.py /src/vectordb_bench
 
 # Installing resolves the dependency set from pyproject, so this image and a
 # bench run agree on versions without a second requirements file to drift.
