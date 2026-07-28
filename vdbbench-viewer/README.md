@@ -75,11 +75,12 @@ first run. Three things it cannot create for itself:
    | `roles/artifactregistry.admin` | create the repo, push images, set the cleanup policy |
    | `roles/iam.serviceAccountUser` on the runtime SA | run the service as that identity |
 
-3. **Repository variables** on `infino-ai/retrievalbench`:
+3. **Variables on the `ci` environment**, where the cloud secrets already live:
 
    ```sh
-   gh variable set GCP_PROJECT_ID --body "$PROJECT" --repo infino-ai/retrievalbench
-   gh variable set VDBBENCH_VIEWER_RUNTIME_SA \
+   gh variable set GCP_PROJECT_ID --env ci --body "$PROJECT" \
+     --repo infino-ai/retrievalbench
+   gh variable set VDBBENCH_VIEWER_RUNTIME_SA --env ci \
      --body "vdbbench-viewer-runtime@$PROJECT.iam.gserviceaccount.com" \
      --repo infino-ai/retrievalbench
    ```
