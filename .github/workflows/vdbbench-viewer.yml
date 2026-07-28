@@ -66,22 +66,21 @@ jobs:
           INPUT_RUNTIME_SA: ${{ inputs.runtime_service_account }}
           INPUT_REGION: ${{ inputs.region }}
           VAR_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          VAR_DEPLOY_SA: ${{ vars.VDBBENCH_VIEWER_DEPLOY_SA }}
           VAR_RUNTIME_SA: ${{ vars.VDBBENCH_VIEWER_RUNTIME_SA }}
         run: |
           set -euo pipefail
           PROJECT="${INPUT_PROJECT:-}"; PROJECT="${PROJECT:-$VAR_PROJECT}"
           RUNTIME_SA="${INPUT_RUNTIME_SA:-}"; RUNTIME_SA="${RUNTIME_SA:-$VAR_RUNTIME_SA}"
 
-          if [ -z "$PROJECT" ]; then
-            echo "::error::No GCP project. Set repo variable GCP_PROJECT_ID or pass gcp_project."
-            exit 1
-          fi
-          # The default compute service account carries project Editor, which is
-          # never acceptable for an unauthenticated container. Refuse instead.
-          if [ -z "$RUNTIME_SA" ]; then
-            echo "::error::No runtime service account. See vdbbench-viewer/README.md."
-            exit 1
-          fi
+          for pair in "GCP_PROJECT_ID=$PROJECT" \
+                      "VDBBENCH_VIEWER_DEPLOY_SA=$VAR_DEPLOY_SA" \
+                      "VDBBENCH_VIEWER_RUNTIME_SA=$RUNTIME_SA"; do
+            if [ -z "${pair#*=}" ]; then
+              echo "::error::${pair%%=*} is unset on the ci environment. See vdbbench-viewer/README.md."
+              exit 1
+            fi
+          done
 
           SHA="$(git -C vdbbench-viewer/src rev-parse --short HEAD)"
           {
@@ -97,18 +96,17 @@ jobs:
         with:
           cloud: gcp
           gcp_wif_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          gcp_service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          gcp_service_account: ${{ vars.VDBBENCH_VIEWER_DEPLOY_SA }}
 
-      # Idempotent: first run creates the registry, later runs only refresh the
-      # policy that stops images accumulating forever.
-      - name: Ensure Artifact Registry
+      # The deploy account is scoped to this registry and cannot create one.
+      - name: Check Artifact Registry
         run: |
           set -euo pipefail
           gcloud artifacts repositories describe "$AR_REPO" \
-            --location="$REGION" --project="$PROJECT" >/dev/null 2>&1 \
-            || gcloud artifacts repositories create "$AR_REPO" \
-                 --repository-format=docker --location="$REGION" --project="$PROJECT" \
-                 --description="VDBBench results viewer images"
+            --location="$REGION" --project="$PROJECT" >/dev/null 2>&1 || {
+              echo "::error::Artifact Registry '$AR_REPO' missing in $REGION. See vdbbench-viewer/README.md."
+              exit 1
+            }
 
           cat > /tmp/cleanup-policy.json <<'JSON'
           [
