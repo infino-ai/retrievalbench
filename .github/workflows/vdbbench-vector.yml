@@ -17,19 +17,19 @@ on:
         default: "100"
         type: string
       n_cent:
-        description: "Fine IVF clusters per (superfile, cell) fragment."
+        description: "IVF centroid count for the index spec (empty = client default)."
         required: false
-        default: "64"
+        default: ""
         type: string
       nprobe:
-        description: "Coarse grid cells probed per query."
+        description: "Cells probed per query (empty = engine's calibrated default)."
         required: false
-        default: "64"
+        default: ""
         type: string
       rerank_mult:
-        description: "Coarse candidates re-scored exactly (k * rerank_mult)."
+        description: "Exact-rerank multiplier (empty = engine default)."
         required: false
-        default: "256"
+        default: ""
         type: string
       num_concurrency:
         description: "Concurrency levels for the QPS sweep (comma-separated)."

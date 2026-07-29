@@ -65,15 +65,15 @@ on:
         type: string
       n_cent:
         required: false
-        default: "64"
+        default: ""
         type: string
       nprobe:
         required: false
-        default: "64"
+        default: ""
         type: string
       rerank_mult:
         required: false
-        default: "256"
+        default: ""
         type: string
       fts_dataset:
         required: false
