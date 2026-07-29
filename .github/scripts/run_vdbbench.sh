@@ -84,13 +84,17 @@ mkdir -p "$RESULTS_LOCAL_DIR"
 
 if [ "$BENCH" = "vector" ]; then
   echo "----- VECTOR: $VECTOR_CASE n_cent=$N_CENT nprobe=$NPROBE rerank_mult=$RERANK_MULT -----"
+  # Search/index knobs ride only when explicitly set: unset means the
+  # engine's manifest-calibrated defaults (the recall-validated path).
+  TUNING=()
+  [ -n "$N_CENT" ] && TUNING+=(--n-cent "$N_CENT")
+  [ -n "$NPROBE" ] && TUNING+=(--nprobe "$NPROBE")
+  [ -n "$RERANK_MULT" ] && TUNING+=(--rerank-mult "$RERANK_MULT")
   vectordbbench infino \
     --case-type "$VECTOR_CASE" \
     --k "$VECTOR_K" \
     --num-concurrency "$NUM_CONC" \
-    --n-cent "$N_CENT" \
-    --nprobe "$NPROBE" \
-    --rerank-mult "$RERANK_MULT" \
+    "${TUNING[@]}" \
     --cache-budget-bytes "$CACHE_BUDGET_BYTES" \
     --drop-old
 else
