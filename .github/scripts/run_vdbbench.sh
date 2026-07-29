@@ -37,12 +37,47 @@ fi
 python3 -c "import infino; print('infino binding:', getattr(infino, '__version__', 'unknown'))"
 
 echo "===== RUN ($BENCH) ====="
+# Engine tuning must go through YAML: infino reads config exclusively from
+# files and IGNORES environment variables (its `env_vars_do_not_override_config`
+# test pins that). Exporting INFINO_* was therefore a silent no-op — every
+# tuning knob passed this way was discarded. Translate the same
+# `INFINO_<SECTION>__<KEY>=value` pairs into the user config file that the
+# engine does load: $XDG_CONFIG_HOME/infino/config.yaml, falling back to
+# $HOME/.config/infino/config.yaml.
 if [ -n "$INFINO_ENV" ]; then
-  # Space-separated INFINO_...=value tuning knobs; word-split into multiple
-  # exports is intentional.
-  # shellcheck disable=SC2086,SC2163
-  export $INFINO_ENV
-  echo "infino env:"; env | grep '^INFINO_' | sort
+  INFINO_CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/infino"
+  mkdir -p "$INFINO_CFG_DIR"
+  INFINO_ENV="$INFINO_ENV" python3 - "$INFINO_CFG_DIR/config.yaml" <<'PYCFG'
+import os, sys, collections
+
+# Valid top-level sections of infino's config.yaml. A pair naming anything
+# else is a typo we must fail on, not silently drop (the whole point of this
+# change is that discarded tuning is invisible).
+SECTIONS = {"supertable", "storage", "compaction", "vector", "diagnostics", "memory"}
+
+tree = collections.defaultdict(dict)
+for pair in os.environ["INFINO_ENV"].split():
+    if "=" not in pair:
+        sys.exit(f"INFINO_ENV: expected KEY=value, got {pair!r}")
+    key, value = pair.split("=", 1)
+    if not key.startswith("INFINO_") or "__" not in key:
+        sys.exit(f"INFINO_ENV: expected INFINO_<SECTION>__<KEY>=value, got {key!r}")
+    section, _, field = key[len("INFINO_"):].partition("__")
+    section, field = section.lower(), field.lower()
+    if section not in SECTIONS:
+        sys.exit(f"INFINO_ENV: unknown config section {section!r} in {key!r}; "
+                 f"valid sections: {sorted(SECTIONS)}")
+    tree[section][field] = value
+
+with open(sys.argv[1], "w") as fh:
+    for section in sorted(tree):
+        fh.write(f"{section}:\n")
+        for field, value in sorted(tree[section].items()):
+            # Values are emitted bare so ints/floats/bools/enums parse as
+            # themselves rather than as strings.
+            fh.write(f"  {field}: {value}\n")
+PYCFG
+  echo "infino config ($INFINO_CFG_DIR/config.yaml):"; cat "$INFINO_CFG_DIR/config.yaml"
 fi
 export RESULTS_LOCAL_DIR=/tmp/vdb_results
 mkdir -p "$RESULTS_LOCAL_DIR"
