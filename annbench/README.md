@@ -40,6 +40,15 @@ Datasets auto-download from `ann-benchmarks.com` (the harness sends a browser
 User-Agent — the host 403s the default urllib one). Each dataset reports
 recall@10 at the stamped default and at `rerank_mult=256`.
 
+**Latency requires a disk cache.** After building each table the harness reopens
+it with a disk cache sized to `index + 10%` headroom (matching the engine's own
+`fresh_supertable_search_cache`) and warms it before timing. This is not optional
+for latency: with no cache attached, `connect()` falls back to a whole-object
+open — every query re-reads the *entire* superfile from storage (catastrophic on
+object storage, since it becomes a full-segment remote GET per query), inflating
+p95 by orders of magnitude. Recall is unaffected either way, but any latency
+number measured without a right-sized cache is meaningless.
+
 ## Findings snapshot (latest infino main)
 
 Full results in infino#490. Across 11 datasets / 3 metrics the stamped default
