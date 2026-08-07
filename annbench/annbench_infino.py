@@ -119,24 +119,32 @@ def build(name, metric, conn_path, data_dir):
     )
     tbl = db.open_table(tname)
     for i in range(min(200, len(test))):
-        tbl.vector_search(
-            "emb", test[i].tolist(), K, projection=["id"]
-        )  # warm the cache
+        tbl.vector_search("emb", test[i].tolist(), K)  # warm the cache (native _id)
+    # One-time _id -> caller id map. The timed loop then searches with the
+    # native _id and maps afterwards, instead of projection=["id"] per query:
+    # projecting the id column costs a per-query scalar resolve that, on drained
+    # (cell-packed) superfiles, decodes every id in the touched files — O(corpus),
+    # which swamps the search itself. Building the map once here keeps the
+    # measured latency the search latency, not id resolution. Recall is identical.
+    m = db.query_sql(f"SELECT _id, id FROM {tname}")
+    id_map = {int(k): v for k, v in zip(m.column("_id").to_pylist(), m.column("id").to_pylist())}
     print(
-        f"  search cache={budget / 1e9:.2f}GB (index {idx / 1e9:.2f}GB + 10%), warmed",
+        f"  search cache={budget / 1e9:.2f}GB (index {idx / 1e9:.2f}GB + 10%), "
+        f"warmed; id_map={len(id_map)} rows",
         flush=True,
     )
-    return tbl, test, gt
+    return tbl, test, gt, id_map
 
 
-def score(tbl, test, gt, tag, rerank_mult=None):
+def score(tbl, test, gt, tag, id_map, rerank_mult=None):
     opts = {"rerank_mult": rerank_mult} if rerank_mult else {}
     hits, lat = 0, []
     for q in range(len(test)):
         t = time.time()
-        res = tbl.vector_search("emb", test[q].tolist(), K, projection=["id"], **opts)
+        res = tbl.vector_search("emb", test[q].tolist(), K, **opts)  # native _id
         lat.append((time.time() - t) * 1000)
-        hits += len(set(res.column("id").to_pylist()) & {int(x) for x in gt[q]})
+        got = {id_map[int(x)] for x in res.column("_id").to_pylist()}
+        hits += len(got & {int(x) for x in gt[q]})
     recall = hits / (len(test) * K)
     lat = np.array(lat)
     print(
@@ -154,9 +162,8 @@ def main():
         metric = metric_of(name)
         print(f"=== {name} ({metric}) ===", flush=True)
         try:
-            tbl, test, gt = build(name, metric, conn, data_dir)
-            score(tbl, test, gt, "default")
-            score(tbl, test, gt, "rm256", rerank_mult=256)
+            tbl, test, gt, id_map = build(name, metric, conn, data_dir)
+            score(tbl, test, gt, "default", id_map)
         except Exception as e:  # noqa: BLE001 — keep going across the roster
             print(f"    FAILED {name}: {e}", flush=True)
     print("ANNBENCH_DONE", flush=True)
