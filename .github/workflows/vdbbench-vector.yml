@@ -2,6 +2,24 @@ name: VectorDBBench — Vector
 
 # Vector ANN bench (Cohere, cosine) on one ephemeral VM. Machinery lives in
 # vdbbench-run.yml; this file is the dispatch form.
+#
+# Recall/QPS curve — one bench run per hnsw_ivf serve-time beam, all under one
+# task label so the viewer plots a single curve. From the GitHub UI:
+#   Actions -> "VectorDBBench — Vector" -> Run workflow -> in "Use workflow
+#   from" pick the branch that carries this file (the ef_sweep field only shows
+#   on a branch that has it), then set:
+#     ef_sweep        = 128 192 256 384 512 768 1024 1536 2048
+#     infino_ref      = main            # engine build; needs vector.hnsw_ef_search
+#     vdbbench_ref    = infino-backend  # client with --ef
+#     search_mode     = hnsw_ivf        # or leave empty (client default)
+#     publish_results = true            # update the results viewer
+# Equivalent gh invocation (--ref selects the branch whose workflow file runs):
+#   gh workflow run vdbbench-vector.yml --repo infino-ai/retrievalbench \
+#     --ref <branch-with-this-file> \
+#     -f ef_sweep="128 192 256 384 512 768 1024 1536 2048" \
+#     -f infino_ref=main -f vdbbench_ref=infino-backend \
+#     -f search_mode=hnsw_ivf -f publish_results=true
+# Omit ef_sweep for a single run at the graph's stamped k->ef curve.
 
 on:
   workflow_dispatch:
