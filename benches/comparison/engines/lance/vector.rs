@@ -4,27 +4,23 @@
 //! LanceDB peer implementation of [`VectorEngine`].
 //!
 //! Builds a Lance dataset with an `IVF_PQ` index and queries it via
-//! `nearest_to`. Vector parity with Infino: `num_partitions = n_cent`,
-//! searched with `nprobes` / `refine_factor`.
+//! `nearest_to`. The index is built at LanceDB's own defaults (it
+//! auto-sizes `num_partitions`); only the distance metric is set.
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use arrow_array::{
-    Array, FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator, RecordBatchReader,
-    UInt64Array,
-};
+use arrow_array::{Array, FixedSizeListArray, Float32Array, RecordBatch, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
 use futures::TryStreamExt;
 use lancedb::index::Index;
 use lancedb::index::vector::IvfPqIndexBuilder;
-use lancedb::query::{ExecutableQuery, QueryBase};
+use lancedb::query::{ExecutableQuery, QueryBase, Select};
 use lancedb::{DistanceType, Table};
-use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
-use infino_bench_utils::corpus;
-use infino_bench_utils::executors::vector::VectorRead;
+use super::location::{LanceLocation, LanceStorage, lance_peer_label};
+
+use infino_bench_utils::executors::vector::{ENGINE_DEFAULT, VectorRead};
 use infino_bench_utils::harness::{
     Capabilities, VectorEngine, VectorHit, VectorMetric, VectorSearch,
 };
@@ -32,56 +28,11 @@ use infino_bench_utils::harness::{
 const ID_COL: &str = "id";
 const VEC_COL: &str = "vector";
 const VEC_TABLE: &str = "vectors";
-
-enum LanceStorage {
-    Local { _dir: TempDir },
-    S3,
-}
-
-struct LanceLocation {
-    uri: String,
-    storage_options: Vec<(String, String)>,
-    storage: LanceStorage,
-}
-
-impl LanceLocation {
-    fn local() -> Self {
-        let dir = tempfile::tempdir().expect("lance tempdir");
-        let uri = dir.path().to_str().expect("utf8 temp path").to_string();
-        Self {
-            uri,
-            storage_options: Vec::new(),
-            storage: LanceStorage::Local { _dir: dir },
-        }
-    }
-
-    fn s3(prefix: &str) -> Self {
-        let bucket = infino_bench_utils::tiers::real_s3_bucket_env()
-            .expect("INFINO_REAL_S3_BUCKET required for LanceDB S3 tier");
-        let root = infino_bench_utils::tiers::real_s3_prefix_root("retrievalbench-lance");
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock before UNIX_EPOCH")
-            .as_nanos();
-        let uri = format!(
-            "s3://{}/{}/{prefix}-{}-{unique}",
-            bucket,
-            root.trim_matches('/'),
-            std::process::id(),
-        );
-        let mut storage_options = Vec::new();
-        if let Ok(region) =
-            std::env::var("AWS_REGION").or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
-        {
-            storage_options.push(("aws_region".to_string(), region));
-        }
-        Self {
-            uri,
-            storage_options,
-            storage: LanceStorage::S3,
-        }
-    }
-}
+/// Rows per appended Arrow batch. One batch covers the whole 1M-doc
+/// superfile tier (identical to the original single-batch build); larger
+/// corpora append in chunks so the build never materializes the full
+/// fp32 corpus a second time (10M × dim=1024 would be a 41 GB copy).
+const LANCE_VEC_BATCH_ROWS: usize = 1_000_000;
 
 fn map_metric(metric: VectorMetric) -> DistanceType {
     match metric {
@@ -125,7 +76,6 @@ async fn build_table(
     vectors: &[f32],
     dim: usize,
     metric: VectorMetric,
-    num_partitions: u32,
 ) -> Table {
     let n_docs = vectors.len() / dim;
     let item = Arc::new(Field::new("item", DataType::Float32, true));
@@ -138,38 +88,35 @@ async fn build_table(
         ),
     ]));
 
-    let ids = UInt64Array::from((0..n_docs as u64).collect::<Vec<_>>());
-    let flat = Float32Array::from(vectors.to_vec());
-    let fsl = FixedSizeListArray::try_new(item, dim as i32, Arc::new(flat), None)
-        .expect("build FixedSizeListArray");
-    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(ids), Arc::new(fsl)])
-        .expect("build RecordBatch");
-    let reader: Box<dyn RecordBatchReader + Send> =
-        Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema.clone()));
-
     let db = connect(uri, storage_options).await;
     let table = db
-        .create_table(VEC_TABLE, reader)
+        .create_empty_table(VEC_TABLE, schema.clone())
         .execute()
         .await
         .expect("create lance table");
+    for start in (0..n_docs).step_by(LANCE_VEC_BATCH_ROWS) {
+        let len = LANCE_VEC_BATCH_ROWS.min(n_docs - start);
+        let ids = UInt64Array::from((start as u64..(start + len) as u64).collect::<Vec<_>>());
+        let flat = Float32Array::from(vectors[start * dim..(start + len) * dim].to_vec());
+        let fsl = FixedSizeListArray::try_new(item.clone(), dim as i32, Arc::new(flat), None)
+            .expect("build FixedSizeListArray");
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(ids), Arc::new(fsl)])
+            .expect("build RecordBatch");
+        table
+            .add(vec![batch])
+            .execute()
+            .await
+            .expect("add lance vector batch");
+    }
     table
         .create_index(
             &[VEC_COL],
-            Index::IvfPq(
-                IvfPqIndexBuilder::default()
-                    .num_partitions(num_partitions)
-                    .distance_type(map_metric(metric)),
-            ),
+            Index::IvfPq(IvfPqIndexBuilder::default().distance_type(map_metric(metric))),
         )
         .execute()
         .await
         .expect("create IVF-PQ index");
     table
-}
-
-fn partitions_for(n_cent: usize, n_docs: usize) -> u32 {
-    n_cent.max(1).min(n_docs.max(1)) as u32
 }
 
 pub struct LanceVectorEngine;
@@ -182,7 +129,6 @@ pub struct LanceVectorIndex {
     column: String,
     dim: usize,
     metric: VectorMetric,
-    n_cent: usize,
     table: Option<Table>,
 }
 
@@ -219,13 +165,20 @@ impl VectorRead for LanceVectorIndex {
         .map(|h| (h.doc_id as u32, h.distance))
         .collect()
     }
+
+    fn search_params(&self, nprobe: usize, rerank: usize) -> String {
+        if nprobe == ENGINE_DEFAULT && rerank == ENGINE_DEFAULT {
+            "engine defaults".into()
+        } else {
+            format!("p={nprobe}, r={rerank}")
+        }
+    }
 }
 
 fn create_index(
     column: &str,
     dim: usize,
     metric: VectorMetric,
-    n_cent: usize,
     location: LanceLocation,
 ) -> LanceVectorIndex {
     LanceVectorIndex {
@@ -234,14 +187,11 @@ fn create_index(
         column: column.to_string(),
         dim,
         metric,
-        n_cent,
         table: None,
     }
 }
 
 fn write_index(index: &mut LanceVectorIndex, vectors: &[f32]) {
-    let n_docs = vectors.len() / index.dim;
-    let num_partitions = partitions_for(index.n_cent, n_docs);
     let uri = index.location.uri.clone();
     let storage_options = index.location.storage_options.clone();
     let (dim, metric) = (index.dim, index.metric);
@@ -251,7 +201,6 @@ fn write_index(index: &mut LanceVectorIndex, vectors: &[f32]) {
         vectors,
         dim,
         metric,
-        num_partitions,
     ));
     index.table = Some(table);
 }
@@ -262,24 +211,21 @@ fn parallel_write_index(
     dim: usize,
     metric: VectorMetric,
     writers: usize,
-    s3: bool,
+    remote: bool,
 ) {
     if writers <= 1 {
         let rt = new_runtime();
-        let location = if s3 {
-            LanceLocation::s3("vector")
+        let location = if remote {
+            LanceLocation::object_store("vector")
         } else {
             LanceLocation::local()
         };
-        let n_docs = vectors.len() / dim;
-        let num_partitions = partitions_for(corpus::n_cent(n_docs), n_docs);
         let table = rt.block_on(build_table(
             &location.uri,
             &location.storage_options,
             vectors,
             dim,
             metric,
-            num_partitions,
         ));
         std::hint::black_box(&table);
         return;
@@ -299,19 +245,17 @@ fn parallel_write_index(
                 let slice = &vectors[start_doc * dim..(start_doc + len_docs) * dim];
                 Some(scope.spawn(move || {
                     let rt = new_runtime();
-                    let location = if s3 {
-                        LanceLocation::s3(&format!("vector-shard-{shard}"))
+                    let location = if remote {
+                        LanceLocation::object_store(&format!("vector-shard-{shard}"))
                     } else {
                         LanceLocation::local()
                     };
-                    let num_partitions = partitions_for(corpus::n_cent(len_docs), len_docs);
                     let table = rt.block_on(build_table(
                         &location.uri,
                         &location.storage_options,
                         slice,
                         dim,
                         metric,
-                        num_partitions,
                     ));
                     std::hint::black_box(&table);
                     drop(table);
@@ -332,12 +276,23 @@ fn read_table(
     search: VectorSearch,
 ) -> Vec<VectorHit> {
     rt.block_on(async {
+        // Project the id column only (`_distance` is system-added):
+        // infino's measured path returns `_id` + score without decoding
+        // row data, so the peer must not be billed for materializing its
+        // 4 KB vector per hit either.
         let mut q = table
             .query()
             .nearest_to(query.to_vec())
             .expect("nearest_to")
-            .limit(k.max(1))
-            .nprobes(search.nprobe.max(1));
+            .select(Select::Columns(vec![ID_COL.to_string()]))
+            .limit(k.max(1));
+        // ENGINE_DEFAULT leaves LanceDB's own shipped search defaults in
+        // place — the peer's `default` row must measure its serving
+        // defaults, not a harness constant (mirror of infino's law-served
+        // default path, where absent options select the default routing).
+        if search.nprobe != ENGINE_DEFAULT {
+            q = q.nprobes(search.nprobe);
+        }
         if search.rerank_mult > 1 {
             q = q.refine_factor(search.rerank_mult as u32);
         }
@@ -379,7 +334,7 @@ fn read_index(
 }
 
 impl LanceVectorIndex {
-    /// Reopen the same S3 artifact and run one vector query. Used by the
+    /// Reopen the same object-store artifact and run one vector query. Used by the
     /// comparison cold tier so cold does not include rebuild time.
     pub fn cold_read(&self, query: &[f32], k: usize, search: VectorSearch) -> Vec<VectorHit> {
         let uri = self.location.uri.clone();
@@ -388,7 +343,7 @@ impl LanceVectorIndex {
         read_table(&self.rt, &table, query, k, search)
     }
 
-    /// Open the cold S3 artifact without querying. The cold tier times only
+    /// Open the cold object-store artifact without querying. The cold tier times only
     /// the search, so the open is excluded — matching the Infino cold path.
     pub fn cold_open(&self) -> Table {
         let uri = self.location.uri.clone();
@@ -402,8 +357,58 @@ impl LanceVectorIndex {
     }
 }
 
+/// Cold-tier guard: one fresh connection + table open per instance, so
+/// the shared `measure_cold` driver times the open and the first search
+/// separately (mirror of the infino cold guards).
+pub struct LanceVecColdGuard<'a> {
+    index: &'a LanceVectorIndex,
+    table: Table,
+}
+
+impl<'a> LanceVecColdGuard<'a> {
+    pub fn open(index: &'a LanceVectorIndex) -> Self {
+        Self {
+            table: index.cold_open(),
+            index,
+        }
+    }
+}
+
+impl VectorRead for LanceVecColdGuard<'_> {
+    fn topk_global(
+        &self,
+        _column: &str,
+        query: &[f32],
+        k: usize,
+        nprobe: usize,
+        rerank: usize,
+    ) -> Vec<(u32, f32)> {
+        self.index
+            .cold_search(
+                &self.table,
+                query,
+                k,
+                VectorSearch {
+                    nprobe,
+                    rerank_mult: rerank,
+                },
+            )
+            .into_iter()
+            .map(|h| (h.doc_id as u32, h.distance))
+            .collect()
+    }
+
+    fn search_params(&self, nprobe: usize, rerank: usize) -> String {
+        if nprobe == ENGINE_DEFAULT && rerank == ENGINE_DEFAULT {
+            "engine defaults".into()
+        } else {
+            format!("p={nprobe}, r={rerank}")
+        }
+    }
+}
+
 fn delete_index(index: LanceVectorIndex) {
-    if matches!(index.location.storage, LanceStorage::S3) {
+    if matches!(index.location.storage, LanceStorage::Remote) {
         let uri = index.location.uri.clone();
         let storage_options = index.location.storage_options.clone();
         index.rt.block_on(async move {
@@ -429,8 +434,8 @@ impl VectorEngine for LanceVectorEngine {
         }
     }
 
-    fn create(column: &str, dim: usize, metric: VectorMetric, n_cent: usize) -> Self::Index {
-        create_index(column, dim, metric, n_cent, LanceLocation::local())
+    fn create(column: &str, dim: usize, metric: VectorMetric) -> Self::Index {
+        create_index(column, dim, metric, LanceLocation::local())
     }
 
     fn write(index: &mut Self::Index, vectors: &[f32]) {
@@ -464,15 +469,15 @@ impl VectorEngine for LanceS3VectorEngine {
     type Index = LanceVectorIndex;
 
     fn name() -> &'static str {
-        "lancedb-s3"
+        lance_peer_label()
     }
 
     fn capabilities() -> Capabilities {
         LanceVectorEngine::capabilities()
     }
 
-    fn create(column: &str, dim: usize, metric: VectorMetric, n_cent: usize) -> Self::Index {
-        create_index(column, dim, metric, n_cent, LanceLocation::s3("vector"))
+    fn create(column: &str, dim: usize, metric: VectorMetric) -> Self::Index {
+        create_index(column, dim, metric, LanceLocation::object_store("vector"))
     }
 
     fn write(index: &mut Self::Index, vectors: &[f32]) {

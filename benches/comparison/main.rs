@@ -30,6 +30,32 @@
 //! Scale (`INFINO_BENCH_SUPERFILE_DOCS`, `INFINO_BENCH_SUPERTABLE_DOCS`)
 //! and object-store backend (`INFINO_BENCH_STORE`) are env knobs.
 
+use infino_bench_utils::corpus;
+
+/// Corpus spec / staging dir carried to the isolated ingest children.
+///
+/// `build_shape_isolated` re-execs this binary with only `SHAPE_ENV`
+/// set — it forwards no argv — so a corpus named on the command line
+/// alone would reach the parent and not the child, and the child (which
+/// performs the measured ingest) would silently build the synthetic
+/// generator while the parent grades against the real dataset. The
+/// child does inherit our environment, so the spec travels there.
+const CORPUS_ENV: &str = "INFINO_BENCH_COMPARISON_CORPUS";
+const CORPUS_DIR_ENV: &str = "INFINO_BENCH_COMPARISON_CORPUS_DIR";
+
+/// Install the corpus source recorded in the environment, if any.
+/// Must run before ANY corpus read (the source resolves once per
+/// process) and before the shape-child intercept below.
+fn install_corpus_from_env() {
+    if let Ok(spec) = std::env::var(CORPUS_ENV) {
+        let dir = std::env::var(CORPUS_DIR_ENV).ok();
+        if let Err(err) = corpus::set_source(&spec, dir.as_deref()) {
+            eprintln!("[comparison] {err}");
+            std::process::exit(2);
+        }
+    }
+}
+
 #[path = "superfile.rs"]
 mod superfile;
 #[path = "supertable.rs"]
@@ -98,6 +124,8 @@ fn print_usage_and_exit(code: i32) -> ! {
          Modality  : fts | vector | sql            (omitted => all three)\n\
          Phase     : build | warm | cold | search  (search = warm+cold; omitted => all)\n\
          all       : every tier x modality x phase (the default for a bare `cargo bench`)\n\
+         corpus=<spec>     : synthetic (default) | annb:<slug> | hf:<owner/repo> | parquet:<dir>\n\
+         corpus-dir=<path> : where downloadable corpora are staged\n\
          \n\
          Examples:\n\
          \x20 cargo bench\n\
@@ -122,6 +150,8 @@ fn parse_args() -> (Vec<Tier>, Vec<Modality>, Phases) {
 
     let mut tiers: Vec<Tier> = Vec::new();
     let mut modalities: Vec<Modality> = Vec::new();
+    let mut corpus_spec: Option<String> = None;
+    let mut corpus_dir: Option<String> = None;
     let mut build = false;
     let mut warm = false;
     let mut cold = false;
@@ -162,12 +192,36 @@ fn parse_args() -> (Vec<Tier>, Vec<Modality>, Phases) {
                 warm = true;
                 cold = true;
             }
-            other => unknown.push(other.to_string()),
+            other => match other.split_once('=') {
+                Some(("corpus", spec)) => corpus_spec = Some(spec.to_string()),
+                Some(("corpus-dir", dir)) => corpus_dir = Some(dir.to_string()),
+                _ => unknown.push(other.to_string()),
+            },
         }
     }
 
     if !unknown.is_empty() {
         eprintln!("[comparison] unknown selector(s): {}", unknown.join(", "));
+        print_usage_and_exit(2);
+    }
+
+    // Publish before installing: the ingest children inherit this env,
+    // which is the only channel that reaches them (see CORPUS_ENV).
+    if let Some(spec) = corpus_spec.as_deref() {
+        // SAFETY: single-threaded startup, before any child is spawned.
+        unsafe {
+            std::env::set_var(CORPUS_ENV, spec);
+            if let Some(dir) = corpus_dir.as_deref() {
+                std::env::set_var(CORPUS_DIR_ENV, dir);
+            }
+        }
+        if let Err(err) = corpus::set_source(spec, corpus_dir.as_deref()) {
+            eprintln!("[comparison] {err}");
+            print_usage_and_exit(2);
+        }
+        eprintln!("[comparison] corpus = {}", corpus::corpus_label());
+    } else if corpus_dir.is_some() {
+        eprintln!("[comparison] corpus-dir= given without corpus=; nothing would read it");
         print_usage_and_exit(2);
     }
 
@@ -190,6 +244,10 @@ fn parse_args() -> (Vec<Tier>, Vec<Modality>, Phases) {
 }
 
 fn main() {
+    // The corpus must be installed before the shape-child intercept: a
+    // child returns from that branch without ever reaching parse_args,
+    // so the env is its only source for the dataset it ingests.
+    install_corpus_from_env();
     // Isolated per-shape supertable ingest child (the supertable runner
     // re-execs this binary with `INFINO_BENCH_SUPERTABLE_SHAPE` set).
     // Without this intercept the child ignores the shape protocol and
