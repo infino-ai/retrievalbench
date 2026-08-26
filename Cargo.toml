@@ -40,6 +40,9 @@ lancedb = { version = "0.37.1", features = ["aws", "azure"] }
 # TurboQuant compressed flat index — pinned to the 1.0.0 release SHA the
 # plan-078 audit read, so measured numbers are attributable to exact code.
 turbovec = { git = "https://github.com/RyanCodrai/turbovec.git", rev = "ccab9f325e6ce2a270a87daf01ae4e443bcf2d49" }
+# FAISS PQ / PQFastScan peer. Requires a system FAISS C++ build (via
+# faiss-sys's cmake-driven build script) — not vendored, not pure-Rust.
+faiss = "0.13.0"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 # Arrow at the exact version lancedb 0.37 resolves to (== infino's 58.3.0),
 # used to build the RecordBatches handed to LanceDB. futures drives the

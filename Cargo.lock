@@ -2651,6 +2651,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "faiss"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3618cbbe48ebdc63b461cd1bf52f64c27a40e4d294beceedbf2fd4898571e204"
+dependencies = [
+ "faiss-sys",
+]
+
+[[package]]
+name = "faiss-sys"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4a8fa67f7070bb81f41dc71c98813b3e40a66bedab12d6c2ac2af50f0837a7e"
+
+[[package]]
 name = "fast-float2"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6589,6 +6604,7 @@ dependencies = [
  "arrow-array",
  "arrow-schema",
  "datafusion",
+ "faiss",
  "futures",
  "infino",
  "infino-bench-utils",
