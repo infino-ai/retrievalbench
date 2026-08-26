@@ -541,6 +541,7 @@ impl FtsEngine for LanceFtsEngine {
             vector: true,
             sql: true,
             hybrid: true,
+            ..Default::default()
         }
     }
 

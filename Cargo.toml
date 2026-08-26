@@ -22,16 +22,18 @@ publish = false
 # of which exist on infino `main` yet.
 #
 # Pinned at `infino-ai/infino` (canonical repo), not a personal fork — the
-# commit is fetchable by SHA as PR #651's head even pre-merge, so no fork is
-# needed. `a375901e` is `e525e465` (the 4-bit walk plane + AVX-512 nibble
-# kernels + test_helpers::sq4_flat) plus a follow-up fix: benches/utils no
-# longer pins ndarray independently of hdf5-metno, which was splitting the
-# build graph into two incompatible ndarray versions once lancedb's
-# lance-index also touched ndarray (surfaced when this crate first tried
-# building against lancedb 0.37.1). Repoint at a `main` SHA once that work
-# merges.
-infino-bench-utils = { git = "https://github.com/infino-ai/infino.git", rev = "a375901e46d1d627a862cdc905978834da1ae22c" }
-infino = { git = "https://github.com/infino-ai/infino.git", rev = "a375901e46d1d627a862cdc905978834da1ae22c", features = ["test-helpers"] }
+# commit is fetchable by SHA as a real branch (`vector/sq4-plane-cell-families`)
+# even pre-merge, so no fork is needed. `23bb9cca` is `e525e465` (the 4-bit
+# walk plane + AVX-512 nibble kernels + test_helpers::sq4_flat) plus two
+# follow-up fixes: benches/utils no longer pins ndarray independently of
+# hdf5-metno (was splitting the build graph into two incompatible ndarray
+# versions once lancedb's lance-index also touched ndarray, surfaced when
+# this crate first tried building against lancedb 0.37.1), and
+# insert/remove/save-load added to VectorEngine (plan 084 item 3) with an
+# InfinoVectorEngine reference implementation. Repoint at a `main` SHA once
+# that work merges.
+infino-bench-utils = { git = "https://github.com/infino-ai/infino.git", rev = "23bb9cca9a383fd616bfdc8c9e3a5935e0cf4bfb" }
+infino = { git = "https://github.com/infino-ai/infino.git", rev = "23bb9cca9a383fd616bfdc8c9e3a5935e0cf4bfb", features = ["test-helpers"] }
 tantivy = "0.26"
 # Async — driven through a
 # small tokio runtime inside the adapter. Brings its own arrow; the
@@ -41,8 +43,14 @@ lancedb = { version = "0.37.1", features = ["aws", "azure"] }
 # plan-078 audit read, so measured numbers are attributable to exact code.
 turbovec = { git = "https://github.com/RyanCodrai/turbovec.git", rev = "ccab9f325e6ce2a270a87daf01ae4e443bcf2d49" }
 # FAISS PQ / PQFastScan peer. Requires a system FAISS C++ build (via
-# faiss-sys's cmake-driven build script) — not vendored, not pure-Rust.
-faiss = "0.13.0"
+# faiss-sys's cmake-driven build script) — not vendored, not pure-Rust,
+# and it will not link on a host without that library installed. Optional
+# for exactly that reason: every other peer in this harness builds from
+# source with no system prerequisite, so gating the whole binary on FAISS
+# would make the common case (run the Lance/Tantivy/turbovec cells)
+# unbuildable on any machine that happens to lack a FAISS build. Enable
+# with `--features faiss` once `libfaiss` is present.
+faiss = { version = "0.13.0", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 # Arrow at the exact version lancedb 0.37 resolves to (== infino's 58.3.0),
 # used to build the RecordBatches handed to LanceDB. futures drives the
@@ -58,6 +66,13 @@ tempfile = "3"
 # so LanceDB is measured through a real Lance scan — the apples-to-apples
 # peer for Infino's supertable + DataFusion path.
 datafusion = "54.0"
+
+[features]
+# Off by default: see the `faiss` dependency comment above. CI and any
+# published run that includes the FAISS columns must pass `--features
+# faiss` explicitly, so a missing system library surfaces as "the FAISS
+# cells did not run" rather than silently absent numbers.
+faiss = ["dep:faiss"]
 
 # The peer-engine adapters. A library crate so their unit tests run under
 # `cargo test`. Each adapter implements an `infino-bench-utils` engine

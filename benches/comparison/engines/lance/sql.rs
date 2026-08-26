@@ -341,6 +341,7 @@ impl SqlEngine for LanceSqlEngine {
             vector: true,
             sql: true,
             hybrid: true,
+            ..Default::default()
         }
     }
 

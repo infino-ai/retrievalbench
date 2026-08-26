@@ -431,6 +431,7 @@ impl VectorEngine for LanceVectorEngine {
             vector: true,
             sql: true,
             hybrid: true,
+            ..Default::default()
         }
     }
 
