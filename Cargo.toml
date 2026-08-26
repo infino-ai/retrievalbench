@@ -21,10 +21,17 @@ publish = false
 # and `test_helpers::sq4_flat` (the measurement seam `sq4flat.rs` drives), none
 # of which exist on infino `main` yet.
 #
-# The fork is public, so this resolves with no credentials. Repoint at
-# `infino-ai/infino` once the plane lands there.
-infino-bench-utils = { git = "https://github.com/ekechinwokah/infino.git", rev = "e525e465cbce2b79ce3c08cc97ac26f16bb5ce7a" }
-infino = { git = "https://github.com/ekechinwokah/infino.git", rev = "e525e465cbce2b79ce3c08cc97ac26f16bb5ce7a", features = ["test-helpers"] }
+# Pinned at `infino-ai/infino` (canonical repo), not a personal fork — the
+# commit is fetchable by SHA as PR #651's head even pre-merge, so no fork is
+# needed. `a375901e` is `e525e465` (the 4-bit walk plane + AVX-512 nibble
+# kernels + test_helpers::sq4_flat) plus a follow-up fix: benches/utils no
+# longer pins ndarray independently of hdf5-metno, which was splitting the
+# build graph into two incompatible ndarray versions once lancedb's
+# lance-index also touched ndarray (surfaced when this crate first tried
+# building against lancedb 0.37.1). Repoint at a `main` SHA once that work
+# merges.
+infino-bench-utils = { git = "https://github.com/infino-ai/infino.git", rev = "a375901e46d1d627a862cdc905978834da1ae22c" }
+infino = { git = "https://github.com/infino-ai/infino.git", rev = "a375901e46d1d627a862cdc905978834da1ae22c", features = ["test-helpers"] }
 tantivy = "0.26"
 # Async — driven through a
 # small tokio runtime inside the adapter. Brings its own arrow; the
