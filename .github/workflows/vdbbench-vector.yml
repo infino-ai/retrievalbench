@@ -31,6 +31,16 @@ on:
         required: false
         default: ""
         type: string
+      search_mode:
+        description: "Vector serving path (ivf | hnsw_ivf). Empty = client default (hnsw_ivf)."
+        required: false
+        default: ""
+        type: string
+      ef_sweep:
+        description: "Space-separated hnsw_ivf serve-time beams (e.g. '128 192 256 384 512 768 1024 1536 2048'). One bench run per value under a shared task label → the viewer plots them as one recall/QPS curve. Empty = a single run at the stamped k->ef curve."
+        required: false
+        default: ""
+        type: string
       num_concurrency:
         description: "Concurrency levels for the QPS sweep (comma-separated)."
         required: false
@@ -110,6 +120,8 @@ jobs:
       n_cent: ${{ inputs.n_cent }}
       nprobe: ${{ inputs.nprobe }}
       rerank_mult: ${{ inputs.rerank_mult }}
+      search_mode: ${{ inputs.search_mode }}
+      ef_sweep: ${{ inputs.ef_sweep }}
       num_concurrency: ${{ inputs.num_concurrency }}
       num_per_batch: ${{ inputs.num_per_batch }}
       infino_env: ${{ inputs.infino_env }}
