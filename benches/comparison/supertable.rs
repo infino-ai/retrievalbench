@@ -21,9 +21,9 @@ use infino_bench_utils::corpus::{self, MmapTextCorpus};
 use infino_bench_utils::executors::fts::FTS_BATTERY;
 use infino_bench_utils::executors::sql::SQL_BATTERY;
 use infino_bench_utils::harness::{
-    FtsQuery, SqlQuery, SqlRunConfig, VectorEngine, VectorMetric, VectorQuery, VectorRunConfig,
-    VectorSearch, run_fts, run_fts_with_index, run_sql, run_sql_with_index, run_vector,
-    run_vector_with_index,
+    FtsQuery, SqlQuery, SqlRunConfig, VectorBuildStat, VectorEngine, VectorMetric, VectorQuery,
+    VectorRunConfig, VectorSearch, run_fts, run_fts_with_index, run_sql, run_sql_with_index,
+    run_vector, run_vector_with_index,
 };
 use infino_bench_utils::ingest::supertable::{self, TEXT_COLUMN, VEC_COLUMN};
 use infino_bench_utils::markdown::{fmt_count, fmt_throughput, fmt_time};
@@ -654,11 +654,18 @@ pub mod vector {
         )
         .unwrap_or_else(|| corpus::ground_truth(vslice, n_docs, &q_corr, RECALL_KS_DEEPEST));
         let mut curve_rows = Vec::new();
-        let (_tv4_build, mut tv4) =
+        // Build stats the shared driver measures for EVERY engine
+        // (wall + on-CPU seconds + peak RSS). Previously bound to
+        // throwaway names here, so the codec table published search
+        // rows while the already-measured build costs died in a local.
+        let mut build_rows: Vec<(&'static str, Vec<VectorBuildStat>)> = Vec::new();
+        let (tv4_res, mut tv4) =
             run_vector_with_index::<Turbovec4VectorEngine>(cfg, vslice, EMPTY_VECTOR_QUERIES);
+        build_rows.push(("turbovec-4bit", tv4_res.builds));
         let tv4_rows = per_k_rows(&tv4, &q_corr, &gt_deep, tv4.index_bytes());
-        let (_tv2_build, mut tv2) =
+        let (tv2_res, mut tv2) =
             run_vector_with_index::<Turbovec2VectorEngine>(cfg, vslice, EMPTY_VECTOR_QUERIES);
+        build_rows.push(("turbovec-2bit", tv2_res.builds));
         #[allow(unused_mut)] // mutated only when the `faiss` feature is on
         let mut curve_engines: Vec<(&str, Vec<CodecKRow>)> = vec![
             ("turbovec-4bit", tv4_rows),
@@ -671,27 +678,30 @@ pub mod vector {
             // recall bounded by quantization error alone, and no
             // adjacency in the byte count.
             ("infino-sq4-flat", {
-                let (_b, idx) =
+                let (res, idx) =
                     run_vector_with_index::<Sq4FlatVectorEngine>(cfg, vslice, EMPTY_VECTOR_QUERIES);
+                build_rows.push(("infino-sq4-flat", res.builds));
                 per_k_rows(&idx, &q_corr, &gt_deep, idx.resident_bytes())
             }),
             ("infino-sq4res-flat", {
-                let (_b, idx) = run_vector_with_index::<Sq4ResidualFlatVectorEngine>(
+                let (res, idx) = run_vector_with_index::<Sq4ResidualFlatVectorEngine>(
                     cfg,
                     vslice,
                     EMPTY_VECTOR_QUERIES,
                 );
+                build_rows.push(("infino-sq4res-flat", res.builds));
                 per_k_rows(&idx, &q_corr, &gt_deep, idx.resident_bytes())
             }),
         ];
         #[cfg(feature = "faiss")]
         {
             use retrievalbench::{FaissPqFastScanVectorEngine, FaissPqVectorEngine};
-            let (_b, mut idx) = run_vector_with_index::<FaissPqFastScanVectorEngine>(
+            let (res, mut idx) = run_vector_with_index::<FaissPqFastScanVectorEngine>(
                 cfg,
                 vslice,
                 EMPTY_VECTOR_QUERIES,
             );
+            build_rows.push(("faiss-pq-fastscan", res.builds));
             curve_engines.push((
                 "faiss-pq-fastscan",
                 per_k_rows(&idx, &q_corr, &gt_deep, idx.serialized_bytes()),
@@ -709,8 +719,9 @@ pub mod vector {
             }
             FaissPqFastScanVectorEngine::close(&mut idx);
             FaissPqFastScanVectorEngine::delete(idx);
-            let (_b, mut idx) =
+            let (res, mut idx) =
                 run_vector_with_index::<FaissPqVectorEngine>(cfg, vslice, EMPTY_VECTOR_QUERIES);
+            build_rows.push(("faiss-pq", res.builds));
             curve_engines.push((
                 "faiss-pq",
                 per_k_rows(&idx, &q_corr, &gt_deep, idx.serialized_bytes()),
@@ -752,6 +763,61 @@ pub mod vector {
                 ]);
             }
         }
+        let mut codec_build_rows = Vec::new();
+        for (name, builds) in &build_rows {
+            for b in builds {
+                let wall_ns = b.wall.as_nanos() as f64;
+                eprintln!(
+                    "[codec-build] {name} writers={} wall = {}  cpu = {}  peak rss = {}",
+                    b.writers,
+                    fmt_time(wall_ns),
+                    b.cpu_s
+                        .map(|c| format!("{c:.2}s"))
+                        .unwrap_or_else(|| "not sampled".into()),
+                    rss::fmt_bytes(b.rss.peak_rss_bytes),
+                );
+                codec_build_rows.push(vec![
+                    text(format!("{name} ({} writer)", b.writers)),
+                    metric(wall_ns, fmt_time(wall_ns), Better::Lower),
+                    metric(
+                        b.cpu_s.unwrap_or(0.0),
+                        b.cpu_s
+                            .map(|c| format!("{c:.2} s"))
+                            .unwrap_or_else(|| "—".into()),
+                        Better::Lower,
+                    ),
+                    metric(
+                        b.rss.peak_rss_bytes as f64,
+                        rss::fmt_bytes(b.rss.peak_rss_bytes),
+                        Better::Lower,
+                    ),
+                ]);
+            }
+        }
+        report.emit(&Section {
+            anchor: "comparison/supertable/vector/codec-build".into(),
+            title: format!(
+                "Compressed flat codec build — {} ({} docs × dim={})",
+                thread_mode,
+                fmt_count(n_docs),
+                corpus::dim()
+            ),
+            note: "Build cost of each compressed flat index over the same corpus \
+                   slice, measured by the shared `run_vector` driver (wall, \
+                   all-thread on-CPU seconds, peak RSS). The infino table arm's \
+                   build is the ingest cell's job and reports there, not here."
+                .into(),
+            blocks: vec![Block {
+                subtitle: format!("Build — {thread_mode}"),
+                headers: vec![
+                    "Engine".into(),
+                    "Build wall".into(),
+                    "Build CPU".into(),
+                    "Peak RSS".into(),
+                ],
+                rows: codec_build_rows,
+            }],
+        });
         report.emit(&Section {
             anchor: "comparison/supertable/vector/codec-curve".into(),
             title: format!(

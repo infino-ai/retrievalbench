@@ -13,10 +13,10 @@
 //! The FAISS peer is behind the `faiss` feature because it links against
 //! a system `libfaiss` C++ build; see `Cargo.toml`.
 
-#[cfg(feature = "faiss")]
-pub mod faiss;
 #[path = "../cohere.rs"]
 pub mod cohere;
+#[cfg(feature = "faiss")]
+pub mod faiss;
 pub mod lance;
 pub mod sq4flat;
 pub mod tantivy;

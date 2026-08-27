@@ -11,14 +11,13 @@ use std::sync::Arc;
 
 use arrow_array::{Float32Array, RecordBatch, StringArray, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
+use datafusion::prelude::SessionContext;
 use futures::TryStreamExt;
 use lancedb::Table;
 use lancedb::index::Index;
 use lancedb::index::scalar::{
-    BooleanQuery, FtsIndexBuilder, FtsQuery, FullTextSearchQuery, MatchQuery, Operator,
-    PhraseQuery,
+    BooleanQuery, FtsIndexBuilder, FtsQuery, FullTextSearchQuery, MatchQuery, Operator, PhraseQuery,
 };
-use datafusion::prelude::SessionContext;
 use lancedb::query::{ExecutableQuery, QueryBase, Select};
 use lancedb::table::datafusion::BaseTableAdapter;
 use tokio::runtime::Runtime;
@@ -322,7 +321,6 @@ fn read_table(
         false,
     );
     {
-
         let mut out = Vec::with_capacity(k);
         for b in &batches {
             let ids = b
