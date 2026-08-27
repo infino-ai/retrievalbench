@@ -374,10 +374,7 @@ pub mod vector {
     // Compressed-flat peers, kept separate from table-level search.
     use infino_bench_utils::cpu;
     use infino_bench_utils::rss::PeakSampler;
-    use retrievalbench::{
-        Sq4FlatVectorEngine, Sq4ResidualFlatVectorEngine, Turbovec2VectorEngine,
-        Turbovec4VectorEngine,
-    };
+    use retrievalbench::{Turbovec2VectorEngine, Turbovec4VectorEngine};
 
     const INPLACE_SINGLE: usize = 1;
     const INPLACE_BATCH: usize = 100;
@@ -673,25 +670,12 @@ pub mod vector {
                 "turbovec-2bit",
                 per_k_rows(&tv2, &q_corr, &gt_deep, tv2.index_bytes()),
             ),
-            // Our own codec ranking terminally, which is the only
-            // configuration comparable to a compressed flat index:
-            // recall bounded by quantization error alone, and no
-            // adjacency in the byte count.
-            ("infino-sq4-flat", {
-                let (res, idx) =
-                    run_vector_with_index::<Sq4FlatVectorEngine>(cfg, vslice, EMPTY_VECTOR_QUERIES);
-                build_rows.push(("infino-sq4-flat", res.builds));
-                per_k_rows(&idx, &q_corr, &gt_deep, idx.resident_bytes())
-            }),
-            ("infino-sq4res-flat", {
-                let (res, idx) = run_vector_with_index::<Sq4ResidualFlatVectorEngine>(
-                    cfg,
-                    vslice,
-                    EMPTY_VECTOR_QUERIES,
-                );
-                build_rows.push(("infino-sq4res-flat", res.builds));
-                per_k_rows(&idx, &q_corr, &gt_deep, idx.resident_bytes())
-            }),
+            // NO infino seam rows here: the raw-plane flat scan is a
+            // feature-gated engine diagnostic (`test_helpers::sq4_flat`),
+            // not a path a user can reach, and published comparison rows
+            // must be reproducible through the product. Infino's rows in
+            // this suite are the served table (below) and the superfile
+            // tier — production paths only.
         ];
         #[cfg(feature = "faiss")]
         {

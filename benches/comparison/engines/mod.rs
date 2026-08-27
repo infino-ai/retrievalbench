@@ -18,7 +18,6 @@ pub mod cohere;
 #[cfg(feature = "faiss")]
 pub mod faiss;
 pub mod lance;
-pub mod sq4flat;
 pub mod tantivy;
 pub mod turboquant;
 
@@ -28,6 +27,5 @@ pub use lance::fts::{LanceFtsEngine, LanceS3FtsEngine};
 pub use lance::location::lance_peer_label;
 pub use lance::sql::{LanceS3SqlEngine, LanceSqlEngine};
 pub use lance::vector::{LanceS3VectorEngine, LanceVectorEngine};
-pub use sq4flat::{Sq4FlatVectorEngine, Sq4ResidualFlatVectorEngine};
 pub use tantivy::fts::TantivyFtsEngine;
 pub use turboquant::vector::{Turbovec2VectorEngine, Turbovec4VectorEngine};
