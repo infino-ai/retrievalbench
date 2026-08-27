@@ -12,10 +12,7 @@
 //! engine-generic drivers, and searched at its own shipped defaults via
 //! the shared `exec_vec` primitives (recall reported, not floor-gated).
 
-use std::{
-    env,
-    time::{Duration, Instant},
-};
+use std::{env, time::Duration};
 
 use infino_bench_utils::corpus::{self, MmapTextCorpus};
 use infino_bench_utils::executors::fts::FTS_BATTERY;
@@ -392,41 +389,26 @@ pub mod vector {
         gt_deep: &[Vec<u32>],
         resident_bytes: usize,
     ) -> Vec<CodecKRow> {
-        RECALL_KS
-            .iter()
-            .map(|&k| {
-                let truths: Vec<Vec<u32>> = gt_deep
-                    .iter()
-                    .map(|t| t[..k.min(t.len())].to_vec())
-                    .collect();
-                let mut recall_sum = 0.0_f32;
-                let mut latencies = Vec::with_capacity(queries.len());
-                for (query, truth) in queries.iter().zip(&truths) {
-                    let started = Instant::now();
-                    let hits = reader.topk_global(
-                        VEC_COLUMN,
-                        query,
-                        k,
-                        exec_vec::ENGINE_DEFAULT,
-                        exec_vec::ENGINE_DEFAULT,
-                    );
-                    latencies.push(started.elapsed());
-                    recall_sum += corpus::recall_at_k(&hits, truth);
-                }
-                latencies.sort_unstable();
-                let percentile = |pct: usize| {
-                    let rank = (pct * latencies.len()).div_ceil(100);
-                    latencies[rank.saturating_sub(1).min(latencies.len() - 1)]
-                };
-                (
-                    k,
-                    recall_sum / queries.len() as f32,
-                    percentile(50).as_secs_f64() * 1e9,
-                    percentile(95).as_secs_f64() * 1e9,
-                    resident_bytes,
-                )
-            })
-            .collect()
+        exec_vec::per_k_sweep(queries, gt_deep, RECALL_KS, |query, k| {
+            reader.topk_global(
+                VEC_COLUMN,
+                query,
+                k,
+                exec_vec::ENGINE_DEFAULT,
+                exec_vec::ENGINE_DEFAULT,
+            )
+        })
+        .into_iter()
+        .map(|cell| {
+            (
+                cell.k,
+                cell.recall,
+                cell.p50_ns,
+                cell.p95_ns,
+                resident_bytes,
+            )
+        })
+        .collect()
     }
 
     /// Native add / remove / save / load on an already-built peer index.
