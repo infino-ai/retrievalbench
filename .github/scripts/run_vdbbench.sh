@@ -89,22 +89,37 @@ DB_LABEL="${VM_SIZE:-unspecified}"
 echo "task label: $TASK_LABEL | db label: $DB_LABEL"
 
 if [ "$BENCH" = "vector" ]; then
-  echo "----- VECTOR: $VECTOR_CASE n_cent=$N_CENT nprobe=$NPROBE rerank_mult=$RERANK_MULT -----"
+  echo "----- VECTOR: $VECTOR_CASE n_cent=$N_CENT nprobe=$NPROBE rerank_mult=$RERANK_MULT" \
+       "search_mode=${SEARCH_MODE:-client-default} ef_sweep=${EF_SWEEP:-none} -----"
   # Search/index knobs ride only when explicitly set: unset means the
   # engine's manifest-calibrated defaults (the recall-validated path).
   TUNING=()
   [ -n "$N_CENT" ] && TUNING+=(--n-cent "$N_CENT")
   [ -n "$NPROBE" ] && TUNING+=(--nprobe "$NPROBE")
   [ -n "$RERANK_MULT" ] && TUNING+=(--rerank-mult "$RERANK_MULT")
-  vectordbbench infino \
-    --case-type "$VECTOR_CASE" \
-    --k "$VECTOR_K" \
-    --num-concurrency "$NUM_CONC" \
-    "${TUNING[@]}" \
-    --cache-budget-bytes "$CACHE_BUDGET_BYTES" \
-    --task-label "$TASK_LABEL" \
-    --db-label "$DB_LABEL" \
-    --drop-old
+  [ -n "${SEARCH_MODE:-}" ] && TUNING+=(--search-mode "$SEARCH_MODE")
+  # ef sweep: one bench run per serve-time beam, all sharing the task label so
+  # the viewer plots them as a single recall/QPS curve. The beam varies via the
+  # client's --ef (engine vector.hnsw_ef_search); each run is a fresh
+  # --drop-old build. Unset EF_SWEEP = one run at the graph's stamped k->ef
+  # curve (today's behavior).
+  EF_VALUES=(${EF_SWEEP:-})
+  [ ${#EF_VALUES[@]} -eq 0 ] && EF_VALUES=("")
+  for EFV in "${EF_VALUES[@]}"; do
+    EF_FLAG=()
+    [ -n "$EFV" ] && EF_FLAG=(--ef "$EFV")
+    echo "----- vector run: ef=${EFV:-stamped-curve} -----"
+    vectordbbench infino \
+      --case-type "$VECTOR_CASE" \
+      --k "$VECTOR_K" \
+      --num-concurrency "$NUM_CONC" \
+      "${TUNING[@]}" \
+      "${EF_FLAG[@]}" \
+      --cache-budget-bytes "$CACHE_BUDGET_BYTES" \
+      --task-label "$TASK_LABEL" \
+      --db-label "$DB_LABEL" \
+      --drop-old
+  done
 else
   echo "----- FTS: $FTS_CASE / $FTS_DATASET -----"
   vectordbbench infinofts \

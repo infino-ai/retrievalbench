@@ -75,6 +75,16 @@ on:
         required: false
         default: ""
         type: string
+      search_mode:
+        required: false
+        default: ""
+        description: "Infino vector serving path (ivf | hnsw_ivf). Empty = client default (hnsw_ivf)."
+        type: string
+      ef_sweep:
+        required: false
+        default: ""
+        description: "Space-separated hnsw_ivf serve-time beams (e.g. '128 256 512'). Each value is one bench run under a shared task label, so the viewer plots them as one recall/QPS curve. Empty = a single run at the stamped k->ef curve."
+        type: string
       fts_dataset:
         required: false
         default: "MS MARCO Medium (1M documents)"
@@ -221,6 +231,8 @@ jobs:
              N_CENT='${{ inputs.n_cent }}' \
              NPROBE='${{ inputs.nprobe }}' \
              RERANK_MULT='${{ inputs.rerank_mult }}' \
+             SEARCH_MODE='${{ inputs.search_mode }}' \
+             EF_SWEEP='${{ inputs.ef_sweep }}' \
              bash -s" < .github/scripts/run_vdbbench.sh 2>&1 | tee /tmp/vdbbench.log
 
       - name: Copy results back
