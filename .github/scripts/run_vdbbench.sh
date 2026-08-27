@@ -100,15 +100,24 @@ if [ "$BENCH" = "vector" ]; then
   [ -n "${SEARCH_MODE:-}" ] && TUNING+=(--search-mode "$SEARCH_MODE")
   # ef sweep: one bench run per serve-time beam, all sharing the task label so
   # the viewer plots them as a single recall/QPS curve. The beam varies via the
-  # client's --ef (engine vector.hnsw_ef_search); each run is a fresh
-  # --drop-old build. Unset EF_SWEEP = one run at the graph's stamped k->ef
-  # curve (today's behavior).
+  # client's --ef (engine vector.hnsw_ef_search), which is a SERVE-time knob — so
+  # BUILD ONCE: the first beam ingests+builds (--drop-old); every later beam
+  # reuses that build and only re-searches (--skip-drop-old --skip-load). That's
+  # the whole point of the serve-time ef (vs a build-time target_recall that
+  # would re-ingest per point). Unset EF_SWEEP = one run at the stamped k->ef curve.
   EF_VALUES=(${EF_SWEEP:-})
   [ ${#EF_VALUES[@]} -eq 0 ] && EF_VALUES=("")
+  first=1
   for EFV in "${EF_VALUES[@]}"; do
     EF_FLAG=()
     [ -n "$EFV" ] && EF_FLAG=(--ef "$EFV")
-    echo "----- vector run: ef=${EFV:-stamped-curve} -----"
+    if [ "$first" = "1" ]; then
+      LOAD_FLAGS=(--drop-old)
+      first=0
+    else
+      LOAD_FLAGS=(--skip-drop-old --skip-load)
+    fi
+    echo "----- vector run: ef=${EFV:-stamped-curve} (${LOAD_FLAGS[*]}) -----"
     vectordbbench infino \
       --case-type "$VECTOR_CASE" \
       --k "$VECTOR_K" \
@@ -118,7 +127,7 @@ if [ "$BENCH" = "vector" ]; then
       --cache-budget-bytes "$CACHE_BUDGET_BYTES" \
       --task-label "$TASK_LABEL" \
       --db-label "$DB_LABEL" \
-      --drop-old
+      "${LOAD_FLAGS[@]}"
   done
 else
   echo "----- FTS: $FTS_CASE / $FTS_DATASET -----"
