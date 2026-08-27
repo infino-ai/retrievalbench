@@ -36,22 +36,21 @@
 //! `sq4flat.rs` / `turboquant/vector.rs`, which both express bit width
 //! as *bits per dimension* (one code per coordinate: `Sq4FlatIndex` at
 //! 4 bits/dim, `turbovec-4bit`/`turbovec-2bit` at 4 and 2 bits/dim).
-//! FAISS PQ has no bits-per-dimension mode; the closest equivalent is
-//! `M = d` (one sub-quantizer per coordinate, sub-vector length 1),
-//! which this adapter uses for both variants so the comparison sits at
-//! the same density as its siblings: `PQ<d>x4fs` is 4 bits/dim (matching
-//! `Sq4FlatIndex` and `turbovec-4bit` exactly), and `PQ<d>x8` is 8
-//! bits/dim = 1 byte/dim (matching `Sq4FlatIndex`'s residual variant and
-//! one step past `turbovec-4bit`). `d % M == 0` holds trivially since
-//! `M == d`.
+//! FAISS PQ has no bits-per-dimension mode, so `M` is derived from the
+//! target four-bit density: `M = d * 4 / nbits`. `PQ<d>x4fs` and
+//! `PQ<d/2>x8` therefore both store four code bits per input dimension,
+//! matching `Sq4FlatIndex` and `turbovec-4bit`. Both indexes are wrapped
+//! in `IDMap` so `add_with_ids` and remove-by-id use stable ids rather
+//! than FAISS's shifting positions.
 //!
 //! ## Metric support
 //!
 //! FAISS's `MetricType` has exactly two variants, `InnerProduct` and
-//! `L2` — there is no native `Cosine`. `Cosine` is supported here by
-//! L2-normalizing every row (query and corpus alike) before handing it
-//! to an `InnerProduct` index, the standard FAISS idiom for cosine
-//! ranking; `L2Sq` maps to FAISS `L2`, and `NegDot` maps to
+//! `L2` — there is no native `Cosine`. The shared harness materializes
+//! cosine corpora unit-normalized; this adapter normalizes queries and
+//! inserted rows before handing them to an `InnerProduct` index, the
+//! standard FAISS idiom for cosine ranking. `L2Sq` maps to FAISS `L2`,
+//! and `NegDot` maps to
 //! `InnerProduct` with the returned distance negated to match the
 //! trait's smaller-is-better contract (mirroring the negation
 //! `turboquant/vector.rs` already does for its own inner-product-native
@@ -68,20 +67,23 @@
 //! `SuperfileReader` makes, just without needing a `RefCell` because its
 //! search methods already take `&self`).
 //!
-//! ## No resident-byte accounting
+//! ## Serialized bytes
 //!
-//! Unlike `Sq4FlatIndex`/`TurboQuantIndex`, `faiss-rs`'s `IndexImpl`
-//! exposes no serialized-size or code-size accessor, so this adapter
-//! cannot report an exact measured byte count the way the sibling
-//! adapters do. It instead logs an *analytically computed* estimate
-//! (`M * ceil(nbits / 8)` code bytes per row, the standard PQ code-size
-//! formula, plus a `256 * dim` fp32 codebook) and says so in the log
-//! line rather than presenting it as a measured figure.
+//! `faiss-rs` exposes file-based `write_index` / `read_index`. The
+//! adapter writes the canonical built index to a temporary file and
+//! reports that exact byte length, matching turbovec's serialized-index
+//! accounting and also exercising the save/load boundary.
 
 use std::cell::RefCell;
+use std::fs;
+use std::io::Write;
 
 use faiss::index::{IndexImpl, index_factory};
-use faiss::{Idx, Index, MetricType};
+use faiss::selector::IdSelector;
+use faiss::{
+    Idx, Index, MetricType, read_index as read_faiss_index, write_index as write_faiss_index,
+};
+use tempfile::NamedTempFile;
 
 use infino_bench_utils::executors::vector::{ENGINE_DEFAULT, VectorRead};
 use infino_bench_utils::harness::{
@@ -96,14 +98,8 @@ const FAST_SCAN_NBITS: u32 = 4;
 /// Bits per sub-quantizer code for the plain (LUT256) variant, per the
 /// task's recall-cell requirement.
 const PLAIN_PQ_NBITS: u32 = 8;
-/// Bytes per fp32 coordinate, used to size the analytical codebook
-/// estimate in [`estimate_resident_bytes`].
-const F32_BYTES: usize = 4;
-/// PQ codebook size: 256 centroids per sub-quantizer, the maximum
-/// addressable by an 8-bit code and the value FAISS uses whenever
-/// `nbits <= 8` (both variants here).
-const CODEBOOK_CENTROIDS: usize = 256;
-
+/// Code density shared with Infino Sq4 and turbovec-4bit.
+const TARGET_BITS_PER_DIM: usize = 4;
 /// Maps the harness's engine-agnostic metric to FAISS's `MetricType`.
 /// FAISS has no native `Cosine`; callers normalize rows to unit length
 /// before indexing/querying under `InnerProduct` instead (see
@@ -138,29 +134,35 @@ fn normalize_one(row: &mut [f32]) {
     }
 }
 
-/// Sub-quantizer count for both variants: one code per dimension. See
+/// Sub-quantizer count for the requested code density. See
 /// the module doc-comment's "Sizing `M`" section.
-fn sub_quantizer_count(dim: usize) -> usize {
-    dim
+fn sub_quantizer_count(dim: usize, nbits: u32) -> usize {
+    let bits = nbits as usize;
+    assert!(
+        (dim * TARGET_BITS_PER_DIM).is_multiple_of(bits),
+        "FAISS dimension must divide the target code density"
+    );
+    dim * TARGET_BITS_PER_DIM / bits
 }
 
 /// Factory description string for the fast-scan variant: `PQ<M>x4fs`.
 fn fast_scan_description(dim: usize) -> String {
-    format!("PQ{}x{FAST_SCAN_NBITS}fs", sub_quantizer_count(dim))
+    format!(
+        "IDMap,PQ{}x{FAST_SCAN_NBITS}fs",
+        sub_quantizer_count(dim, FAST_SCAN_NBITS)
+    )
 }
 
-/// Factory description string for the plain LUT256 variant: `PQ<M>x8`.
+/// Factory description string for the plain LUT256 variant:
+/// `PQ<M>x8np`. The `np` suffix skips training the Polysemous
+/// permutation, which FAISS only uses for Hamming pre-filtering — a
+/// mode this cell never queries — and whose training cost dominates
+/// everything else at these sub-quantizer counts.
 fn plain_pq_description(dim: usize) -> String {
-    format!("PQ{}x{PLAIN_PQ_NBITS}", sub_quantizer_count(dim))
-}
-
-/// Analytically estimated resident bytes — see the module doc-comment's
-/// "No resident-byte accounting" section for why this is computed
-/// rather than measured.
-fn estimate_resident_bytes(dim: usize, nbits: u32, n_docs: usize) -> usize {
-    let code_bytes_per_row = sub_quantizer_count(dim) * (nbits as usize).div_ceil(8);
-    let codebook_bytes = CODEBOOK_CENTROIDS * dim * F32_BYTES;
-    code_bytes_per_row * n_docs + codebook_bytes
+    format!(
+        "IDMap,PQ{}x{PLAIN_PQ_NBITS}np",
+        sub_quantizer_count(dim, PLAIN_PQ_NBITS)
+    )
 }
 
 pub struct FaissPqFastScanVectorEngine;
@@ -175,6 +177,14 @@ pub struct FaissPqVectorIndex {
     metric: VectorMetric,
     /// `PQ<M>x4fs` for the fast-scan engine, `PQ<M>x8` for the plain one.
     description: String,
+    /// Exact serialized artifact size after the canonical build.
+    serialized_bytes: usize,
+}
+
+impl FaissPqVectorIndex {
+    pub fn serialized_bytes(&self) -> usize {
+        self.serialized_bytes
+    }
 }
 
 /// Shared recall-calibration hook, mirroring the Lance/TurboQuant
@@ -212,6 +222,7 @@ fn create_index(dim: usize, metric: VectorMetric, description: String) -> FaissP
         dim,
         metric,
         description,
+        serialized_bytes: 0,
     }
 }
 
@@ -219,7 +230,12 @@ fn create_index(dim: usize, metric: VectorMetric, description: String) -> FaissP
 /// metric is `Cosine`; returns the input slice unchanged otherwise. The
 /// `Vec` is threaded back out through `owned` so the borrow the caller
 /// takes (`owned.as_slice()`) outlives this call.
-fn maybe_normalize<'a>(metric: VectorMetric, vectors: &'a [f32], dim: usize, owned: &'a mut Vec<f32>) -> &'a [f32] {
+fn maybe_normalize<'a>(
+    metric: VectorMetric,
+    vectors: &'a [f32],
+    dim: usize,
+    owned: &'a mut Vec<f32>,
+) -> &'a [f32] {
     if matches!(metric, VectorMetric::Cosine) {
         *owned = vectors.to_vec();
         normalize_rows(owned, dim);
@@ -230,8 +246,16 @@ fn maybe_normalize<'a>(metric: VectorMetric, vectors: &'a [f32], dim: usize, own
 }
 
 fn build_index(description: &str, vectors: &[f32], dim: usize, metric: VectorMetric) -> IndexImpl {
-    let mut owned = Vec::new();
-    let training_vectors = maybe_normalize(metric, vectors, dim, &mut owned);
+    // Every cosine corpus source in the shared harness is normalized while
+    // it is materialized. Copying 10M × 768 fp32 values here solely to
+    // normalize them again would add a second 30 GiB corpus allocation.
+    if matches!(metric, VectorMetric::Cosine) {
+        debug_assert!(vectors.chunks_exact(dim).take(16).all(|row| {
+            let norm_sq = row.iter().map(|x| x * x).sum::<f32>();
+            (norm_sq - 1.0).abs() < 0.01
+        }));
+    }
+    let training_vectors = vectors;
     let n_docs = training_vectors.len() / dim;
 
     let mut built =
@@ -244,26 +268,39 @@ fn build_index(description: &str, vectors: &[f32], dim: usize, metric: VectorMet
     built
 }
 
-fn nbits_for(description: &str) -> u32 {
-    if description.ends_with("fs") {
-        FAST_SCAN_NBITS
-    } else {
-        PLAIN_PQ_NBITS
-    }
+fn save_native(index: &IndexImpl) -> Vec<u8> {
+    let file = NamedTempFile::new().expect("create temporary FAISS index file");
+    let path = file
+        .path()
+        .to_str()
+        .expect("temporary FAISS path is valid UTF-8");
+    write_faiss_index(index, path).expect("write FAISS index");
+    fs::read(file.path()).expect("read serialized FAISS index")
+}
+
+fn load_native(bytes: &[u8]) -> IndexImpl {
+    let mut file = NamedTempFile::new().expect("create temporary FAISS index file");
+    file.write_all(bytes)
+        .expect("write serialized FAISS index bytes");
+    file.flush().expect("flush serialized FAISS index bytes");
+    let path = file
+        .path()
+        .to_str()
+        .expect("temporary FAISS path is valid UTF-8");
+    read_faiss_index(path).expect("read FAISS index")
 }
 
 fn write_index(index: &mut FaissPqVectorIndex, vectors: &[f32]) {
     let n_docs = (vectors.len() / index.dim).max(1);
     let built = build_index(&index.description, vectors, index.dim, index.metric);
-    let nbits = nbits_for(&index.description);
-    let estimated = estimate_resident_bytes(index.dim, nbits, n_docs);
+    let serialized_bytes = save_native(&built).len();
     eprintln!(
-        "[comparison-vector/faiss-{}] estimated resident = {} ({} B/vec, {nbits}-bit codes; \
-         analytical estimate, not measured — see module docs)",
+        "[comparison-vector/faiss-{}] serialized = {} ({} B/vec)",
         index.description,
-        fmt_bytes(estimated as u64),
-        estimated / n_docs,
+        fmt_bytes(serialized_bytes as u64),
+        serialized_bytes / n_docs,
     );
+    index.serialized_bytes = serialized_bytes;
     *index.index.borrow_mut() = Some(built);
 }
 
@@ -294,7 +331,6 @@ fn read_index(index: &FaissPqVectorIndex, query: &[f32], k: usize) -> Vec<Vector
     let faiss_index = guard.as_mut().expect("index requested before write");
     let result = faiss_index.search(query, k).expect("faiss search");
 
-    let negate = matches!(index.metric, VectorMetric::NegDot);
     result
         .labels
         .into_iter()
@@ -302,20 +338,67 @@ fn read_index(index: &FaissPqVectorIndex, query: &[f32], k: usize) -> Vec<Vector
         .filter_map(|(id, distance)| {
             id.get().map(|doc_id| VectorHit {
                 doc_id,
-                // Inner-product metrics are higher-is-better in FAISS;
-                // negate to match the trait's smaller-is-better contract
-                // (the same NegDot normalization `turboquant/vector.rs`
-                // applies for its own inner-product-native library).
-                // Cosine also runs on `InnerProduct` under the hood (see
-                // the module doc-comment's "Metric support" section)
-                // but the trait's `Cosine` is smaller-is-better by
-                // convention among the *other* adapters here (Lance
-                // reports `_distance` directly for its `Cosine`
-                // `DistanceType`), so only `NegDot` is negated.
-                distance: if negate { -distance } else { distance },
+                distance: match index.metric {
+                    VectorMetric::L2Sq => distance,
+                    VectorMetric::Cosine => 1.0 - distance,
+                    VectorMetric::NegDot => -distance,
+                },
             })
         })
         .collect()
+}
+
+fn insert_index(index: &mut FaissPqVectorIndex, vectors: &[f32], next_id: u64) -> bool {
+    let mut owned = Vec::new();
+    let vectors = maybe_normalize(index.metric, vectors, index.dim, &mut owned);
+    let n_docs = vectors.len() / index.dim;
+    let ids: Vec<Idx> = (next_id..next_id + n_docs as u64).map(Idx::new).collect();
+    index
+        .index
+        .borrow_mut()
+        .as_mut()
+        .expect("FAISS insert before write")
+        .add_with_ids(vectors, &ids)
+        .expect("FAISS add_with_ids");
+    true
+}
+
+fn remove_index(index: &mut FaissPqVectorIndex, ids: &[u64]) -> bool {
+    let ids: Vec<Idx> = ids.iter().copied().map(Idx::new).collect();
+    let selector = IdSelector::batch(&ids).expect("FAISS ID selector");
+    let removed = index
+        .index
+        .borrow_mut()
+        .as_mut()
+        .expect("FAISS remove before write")
+        .remove_ids(&selector)
+        .expect("FAISS remove_ids");
+    assert_eq!(removed, ids.len(), "FAISS removed every requested id");
+    true
+}
+
+fn save_index(index: &FaissPqVectorIndex) -> Option<Vec<u8>> {
+    let guard = index.index.borrow();
+    Some(save_native(
+        guard.as_ref().expect("FAISS save before write"),
+    ))
+}
+
+fn load_index(
+    dim: usize,
+    metric: VectorMetric,
+    bytes: &[u8],
+    description: String,
+) -> Option<FaissPqVectorIndex> {
+    let native = load_native(bytes);
+    assert_eq!(native.d() as usize, dim, "loaded FAISS dimension");
+    Some(FaissPqVectorIndex {
+        index: RefCell::new(Some(native)),
+        dim,
+        metric,
+        description,
+        serialized_bytes: bytes.len(),
+    })
 }
 
 const CAPABILITIES: Capabilities = Capabilities {
@@ -323,6 +406,9 @@ const CAPABILITIES: Capabilities = Capabilities {
     vector: true,
     sql: false,
     hybrid: false,
+    vector_insert: true,
+    vector_remove: true,
+    vector_save_load: true,
 };
 
 impl VectorEngine for FaissPqFastScanVectorEngine {
@@ -365,6 +451,22 @@ impl VectorEngine for FaissPqFastScanVectorEngine {
     fn delete(index: Self::Index) {
         drop(index);
     }
+
+    fn insert(index: &mut Self::Index, vectors: &[f32], next_id: u64) -> bool {
+        insert_index(index, vectors, next_id)
+    }
+
+    fn remove(index: &mut Self::Index, ids: &[u64]) -> bool {
+        remove_index(index, ids)
+    }
+
+    fn save(index: &Self::Index) -> Option<Vec<u8>> {
+        save_index(index)
+    }
+
+    fn load(_column: &str, dim: usize, metric: VectorMetric, bytes: &[u8]) -> Option<Self::Index> {
+        load_index(dim, metric, bytes, fast_scan_description(dim))
+    }
 }
 
 impl VectorEngine for FaissPqVectorEngine {
@@ -406,5 +508,81 @@ impl VectorEngine for FaissPqVectorEngine {
 
     fn delete(index: Self::Index) {
         drop(index);
+    }
+
+    fn insert(index: &mut Self::Index, vectors: &[f32], next_id: u64) -> bool {
+        insert_index(index, vectors, next_id)
+    }
+
+    fn remove(index: &mut Self::Index, ids: &[u64]) -> bool {
+        remove_index(index, ids)
+    }
+
+    fn save(index: &Self::Index) -> Option<Vec<u8>> {
+        save_index(index)
+    }
+
+    fn load(_column: &str, dim: usize, metric: VectorMetric, bytes: &[u8]) -> Option<Self::Index> {
+        load_index(dim, metric, bytes, plain_pq_description(dim))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_DIM: usize = 4;
+    const TEST_ROWS: usize = 512;
+    const INSERT_ID: u64 = 10_000;
+
+    fn test_vectors() -> Vec<f32> {
+        let mut vectors = (0..TEST_ROWS * TEST_DIM)
+            .map(|i| ((i * 17 % 101) as f32 - 50.0) / 50.0)
+            .collect::<Vec<_>>();
+        normalize_rows(&mut vectors, TEST_DIM);
+        vectors
+    }
+
+    fn total(index: &FaissPqVectorIndex) -> u64 {
+        index.index.borrow().as_ref().expect("test index").ntotal()
+    }
+
+    fn lifecycle(description: String) {
+        let mut index = create_index(TEST_DIM, VectorMetric::Cosine, description.clone());
+        write_index(&mut index, &test_vectors());
+        assert_eq!(total(&index), TEST_ROWS as u64);
+
+        let extra = [1.0, 0.0, 0.0, 0.0];
+        assert!(insert_index(&mut index, &extra, INSERT_ID));
+        assert_eq!(total(&index), TEST_ROWS as u64 + 1);
+        assert!(remove_index(&mut index, &[INSERT_ID]));
+        assert_eq!(total(&index), TEST_ROWS as u64);
+
+        let bytes = save_index(&index).expect("save test FAISS index");
+        let loaded = load_index(TEST_DIM, VectorMetric::Cosine, &bytes, description)
+            .expect("load test FAISS index");
+        assert_eq!(total(&loaded), TEST_ROWS as u64);
+    }
+
+    #[test]
+    fn pq_fastscan_supports_the_published_lifecycle() {
+        lifecycle(fast_scan_description(TEST_DIM));
+    }
+
+    #[test]
+    fn pq_lut256_supports_the_published_lifecycle() {
+        lifecycle(plain_pq_description(TEST_DIM));
+    }
+
+    #[test]
+    fn full_dimension_factories_match_four_bits_per_dimension() {
+        assert_eq!(fast_scan_description(1024), "IDMap,PQ1024x4fs");
+        assert_eq!(plain_pq_description(1024), "IDMap,PQ512x8np");
+        let fast = index_factory(1024, fast_scan_description(1024), MetricType::InnerProduct)
+            .expect("full-dimension PQFastScan factory");
+        let plain = index_factory(1024, plain_pq_description(1024), MetricType::InnerProduct)
+            .expect("full-dimension PQ factory");
+        assert_eq!(fast.d(), 1024);
+        assert_eq!(plain.d(), 1024);
     }
 }

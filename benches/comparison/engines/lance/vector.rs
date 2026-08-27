@@ -49,6 +49,34 @@ fn new_runtime() -> Runtime {
         .expect("tokio runtime")
 }
 
+fn vector_schema(dim: usize) -> (Arc<Schema>, Arc<Field>) {
+    let item = Arc::new(Field::new("item", DataType::Float32, true));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(ID_COL, DataType::UInt64, false),
+        Field::new(
+            VEC_COL,
+            DataType::FixedSizeList(item.clone(), dim as i32),
+            false,
+        ),
+    ]));
+    (schema, item)
+}
+
+fn vector_batch(
+    schema: Arc<Schema>,
+    item: Arc<Field>,
+    vectors: &[f32],
+    dim: usize,
+    start_id: u64,
+) -> RecordBatch {
+    let n_docs = vectors.len() / dim;
+    let ids = UInt64Array::from((start_id..start_id + n_docs as u64).collect::<Vec<_>>());
+    let flat = Float32Array::from(vectors.to_vec());
+    let fsl = FixedSizeListArray::try_new(item, dim as i32, Arc::new(flat), None)
+        .expect("build FixedSizeListArray");
+    RecordBatch::try_new(schema, vec![Arc::new(ids), Arc::new(fsl)]).expect("build RecordBatch")
+}
+
 async fn connect(uri: &str, storage_options: &[(String, String)]) -> lancedb::Connection {
     lancedb::connect(uri)
         .storage_options(
@@ -78,15 +106,7 @@ async fn build_table(
     metric: VectorMetric,
 ) -> Table {
     let n_docs = vectors.len() / dim;
-    let item = Arc::new(Field::new("item", DataType::Float32, true));
-    let schema = Arc::new(Schema::new(vec![
-        Field::new(ID_COL, DataType::UInt64, false),
-        Field::new(
-            VEC_COL,
-            DataType::FixedSizeList(item.clone(), dim as i32),
-            false,
-        ),
-    ]));
+    let (schema, item) = vector_schema(dim);
 
     let db = connect(uri, storage_options).await;
     let table = db
@@ -96,12 +116,13 @@ async fn build_table(
         .expect("create lance table");
     for start in (0..n_docs).step_by(LANCE_VEC_BATCH_ROWS) {
         let len = LANCE_VEC_BATCH_ROWS.min(n_docs - start);
-        let ids = UInt64Array::from((start as u64..(start + len) as u64).collect::<Vec<_>>());
-        let flat = Float32Array::from(vectors[start * dim..(start + len) * dim].to_vec());
-        let fsl = FixedSizeListArray::try_new(item.clone(), dim as i32, Arc::new(flat), None)
-            .expect("build FixedSizeListArray");
-        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(ids), Arc::new(fsl)])
-            .expect("build RecordBatch");
+        let batch = vector_batch(
+            schema.clone(),
+            item.clone(),
+            &vectors[start * dim..(start + len) * dim],
+            dim,
+            start as u64,
+        );
         table
             .add(vec![batch])
             .execute()
@@ -136,6 +157,40 @@ impl LanceVectorIndex {
     /// Table opened on the measured 1-writer artifact.
     pub fn table(&self) -> &Table {
         self.table.as_ref().expect("table requested before write")
+    }
+
+    /// Native table append: `Table::add` of `vectors.len() / dim` rows
+    /// with ids `[start_id, start_id + n)`. Does not rebuild IVF_PQ —
+    /// new rows stay searchable via Lance's unindexed fallback.
+    pub fn add_vectors(&self, vectors: &[f32], start_id: u64) {
+        let dim = self.dim;
+        let (schema, item) = vector_schema(dim);
+        let batch = vector_batch(schema, item, vectors, dim, start_id);
+        self.rt.block_on(async {
+            self.table()
+                .add(vec![batch])
+                .execute()
+                .await
+                .expect("lance Table::add");
+        });
+    }
+
+    /// Native table delete: SQL predicate on the `id` column.
+    pub fn delete_ids(&self, ids: &[u64]) {
+        if ids.is_empty() {
+            return;
+        }
+        let predicate = ids
+            .iter()
+            .map(|id| format!("{ID_COL} = {id}"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        self.rt.block_on(async {
+            self.table()
+                .delete(&predicate)
+                .await
+                .expect("lance Table::delete");
+        });
     }
 }
 
@@ -195,13 +250,9 @@ fn write_index(index: &mut LanceVectorIndex, vectors: &[f32]) {
     let uri = index.location.uri.clone();
     let storage_options = index.location.storage_options.clone();
     let (dim, metric) = (index.dim, index.metric);
-    let table = index.rt.block_on(build_table(
-        &uri,
-        &storage_options,
-        vectors,
-        dim,
-        metric,
-    ));
+    let table = index
+        .rt
+        .block_on(build_table(&uri, &storage_options, vectors, dim, metric));
     index.table = Some(table);
 }
 
@@ -352,7 +403,13 @@ impl LanceVectorIndex {
     }
 
     /// Run one vector query against an already-opened cold table (search only).
-    pub fn cold_search(&self, table: &Table, query: &[f32], k: usize, search: VectorSearch) -> Vec<VectorHit> {
+    pub fn cold_search(
+        &self,
+        table: &Table,
+        query: &[f32],
+        k: usize,
+        search: VectorSearch,
+    ) -> Vec<VectorHit> {
         read_table(&self.rt, table, query, k, search)
     }
 }

@@ -285,17 +285,19 @@ pub mod vector {
     //! [`RUN_CALIBRATION_GRID`].
 
     use std::collections::HashMap;
+    use std::time::Duration;
 
     use infino::superfile::reader::VectorSearchOptions;
     use infino_bench_utils::corpus::{self, parallel_writers};
+    use infino_bench_utils::cpu;
     use infino_bench_utils::executors::vector as exec_vec;
     use infino_bench_utils::harness::{
-        EngineVectorResult, InfinoVectorEngine, VectorEngine, VectorMetric, VectorQuery,
-        VectorRunConfig, run_vector_with_index,
+        EngineVectorResult, InfinoVectorEngine, InfinoVectorIndex, VectorEngine, VectorMetric,
+        VectorQuery, VectorRunConfig, VectorSearch, run_vector_with_index,
     };
     use infino_bench_utils::markdown::{fmt_bandwidth, fmt_count, fmt_throughput, fmt_time};
     use infino_bench_utils::report::{Better, Block, Report, Section, metric, text};
-    use infino_bench_utils::rss;
+    use infino_bench_utils::rss::{self, PeakSampler};
     use infino_bench_utils::superfile::vector::{
         ground_truth_calibration, ground_truth_correctness, queries_calibration,
         queries_correctness, vectors,
@@ -472,11 +474,7 @@ pub mod vector {
                 } else {
                     format!("{name} ({})", r.target)
                 };
-                let mut row = vec![
-                    text(label),
-                    text(r.params.clone()),
-                    text(r.recall.clone()),
-                ];
+                let mut row = vec![text(label), text(r.params.clone()), text(r.recall.clone())];
                 if include_warm {
                     match &r.warm {
                         Some(t) => {
@@ -539,6 +537,75 @@ pub mod vector {
                 subtitle: "Search — default serving".into(),
                 headers,
                 rows,
+            }],
+        });
+    }
+
+    /// Superfile save/load is real (`finish()` bytes / `SuperfileReader::open`).
+    /// Insert/remove is not — a sealed superfile is never mutated.
+    fn emit_superfile_save_load(
+        report: &mut Report,
+        index: &InfinoVectorIndex,
+        query: &[f32],
+        cfg: VectorRunConfig<'_>,
+        n_docs: usize,
+    ) {
+        const NS_PER_SEC: f64 = 1e9;
+        fn timed(f: impl FnOnce()) -> (Duration, u64) {
+            let sampler = PeakSampler::start_default();
+            let ((), wall, _) = cpu::timed(f);
+            (wall, sampler.stop_stats().peak_rss_bytes)
+        }
+        let search = VectorSearch {
+            nprobe: exec_vec::ENGINE_DEFAULT,
+            rerank_mult: exec_vec::ENGINE_DEFAULT,
+        };
+
+        let (save_wall, save_rss) = timed(|| {
+            let bytes = InfinoVectorEngine::save(index).expect("infino superfile save");
+            std::hint::black_box(bytes.len());
+        });
+        let saved = InfinoVectorEngine::save(index).expect("infino superfile save bytes");
+        let (load_wall, load_rss) = timed(|| {
+            let loaded =
+                InfinoVectorEngine::load(cfg.column, cfg.dim, cfg.metric, &saved).expect("load");
+            std::hint::black_box(loaded.bytes().len());
+        });
+        let loaded = InfinoVectorEngine::load(cfg.column, cfg.dim, cfg.metric, &saved)
+            .expect("load for search");
+        let (first_wall, first_rss) = timed(|| {
+            let hits = InfinoVectorEngine::read(&loaded, query, cfg.k, search);
+            std::hint::black_box(hits);
+        });
+
+        let row = |label: &str, wall: Duration, peak: u64| {
+            let ns = wall.as_secs_f64() * NS_PER_SEC;
+            vec![
+                text(label),
+                metric(ns, fmt_time(ns), Better::Lower),
+                metric(peak as f64, rss::fmt_bytes(peak), Better::Lower),
+            ]
+        };
+
+        report.emit(&Section {
+            anchor: "comparison/superfile/vector/save-load".into(),
+            title: format!(
+                "Superfile save/load — infino ({} docs × dim={})",
+                fmt_count(n_docs),
+                cfg.dim
+            ),
+            note: "`finish()` already returns final bytes; `SuperfileReader::open` reopens \
+                   them. There is no superfile insert/remove cell — new rows are table \
+                   `append`, measured separately."
+                .into(),
+            blocks: vec![Block {
+                subtitle: "infino superfile".into(),
+                headers: vec!["Op".into(), "Wall".into(), "Peak RSS".into()],
+                rows: vec![
+                    row("save", save_wall, save_rss),
+                    row("load", load_wall, load_rss),
+                    row("load → first search", first_wall, first_rss),
+                ],
             }],
         });
     }
@@ -837,6 +904,7 @@ pub mod vector {
             true,
             false,
         );
+
         emit_default_comparison(
             &mut report,
             "comparison/superfile/vector",
@@ -849,6 +917,11 @@ pub mod vector {
             true,
             false,
         );
+
+        let q0 = qcorr
+            .first()
+            .expect("superfile vector cells need at least one query");
+        emit_superfile_save_load(&mut report, &infino_idx, q0, cfg, n_docs);
 
         report.save();
 

@@ -12,14 +12,18 @@
 //! engine-generic drivers, and searched at its own shipped defaults via
 //! the shared `exec_vec` primitives (recall reported, not floor-gated).
 
-use std::time::Duration;
+use std::{
+    env,
+    time::{Duration, Instant},
+};
 
 use infino_bench_utils::corpus::{self, MmapTextCorpus};
 use infino_bench_utils::executors::fts::FTS_BATTERY;
 use infino_bench_utils::executors::sql::SQL_BATTERY;
 use infino_bench_utils::harness::{
-    FtsQuery, SqlQuery, SqlRunConfig, VectorMetric, VectorQuery, VectorRunConfig, run_fts,
-    run_fts_with_index, run_sql, run_sql_with_index, run_vector, run_vector_with_index,
+    FtsQuery, SqlQuery, SqlRunConfig, VectorEngine, VectorMetric, VectorQuery, VectorRunConfig,
+    VectorSearch, run_fts, run_fts_with_index, run_sql, run_sql_with_index, run_vector,
+    run_vector_with_index,
 };
 use infino_bench_utils::ingest::supertable::{self, TEXT_COLUMN, VEC_COLUMN};
 use infino_bench_utils::markdown::{fmt_count, fmt_throughput, fmt_time};
@@ -36,7 +40,8 @@ const EMPTY_SQL_QUERIES: &[SqlQuery] = &[];
 const WARM_ITERS: usize = 20;
 const COLD_ITERS: usize = 5;
 const TOP_K: usize = 10;
-/// The `k` knots plan 078 §7 reports a rung at. A coarse codec loses the
+const THREAD_MODE_ENV: &str = "INFINO_BENCH_THREAD_MODE";
+/// The `k` knots reported for each codec rung. A coarse codec loses the
 /// tail of the neighbourhood long before it loses the top-1, so a single
 /// `k` cannot say whether a rung is usable — these are also three of the
 /// four knots the drain already stamps laws for (`WIDTH_LAW_KS`).
@@ -366,14 +371,20 @@ pub mod vector {
     use crate::superfile::vector::peer_default_rows;
     use infino_bench_utils::executors::vector as exec_vec;
     use retrievalbench::lance::vector::LanceVecColdGuard;
-    // TurboQuant peers — the embedded competitor plan 078 targets. Added
-    // beside the existing peers; nothing above is altered.
+    // Compressed-flat peers, kept separate from table-level search.
+    use infino_bench_utils::cpu;
+    use infino_bench_utils::rss::PeakSampler;
     use retrievalbench::{
         Sq4FlatVectorEngine, Sq4ResidualFlatVectorEngine, Turbovec2VectorEngine,
         Turbovec4VectorEngine,
     };
 
-    /// One `(k, k-recall, p50_ns, resident_bytes)` row per knot in
+    const INPLACE_SINGLE: usize = 1;
+    const INPLACE_BATCH: usize = 100;
+    const NS_PER_SEC: f64 = 1e9;
+    type CodecKRow = (usize, f32, f64, f64, usize);
+
+    /// One `(k, k-recall, p50_ns, p95_ns, resident_bytes)` row per knot in
     /// [`RECALL_KS`], all from a single exact oracle computed at
     /// [`RECALL_KS_DEEPEST`] and truncated per knot (`recall_at_k`
     /// divides by the truth row's length, so the truth must carry
@@ -383,7 +394,7 @@ pub mod vector {
         queries: &[Vec<f32>],
         gt_deep: &[Vec<u32>],
         resident_bytes: usize,
-    ) -> Vec<(usize, f32, f64, usize)> {
+    ) -> Vec<CodecKRow> {
         RECALL_KS
             .iter()
             .map(|&k| {
@@ -391,20 +402,160 @@ pub mod vector {
                     .iter()
                     .map(|t| t[..k.min(t.len())].to_vec())
                     .collect();
-                let (recall, p50) = exec_vec::mean_recall_timed(
-                    reader,
-                    VEC_COLUMN,
-                    queries,
-                    &truths,
+                let mut recall_sum = 0.0_f32;
+                let mut latencies = Vec::with_capacity(queries.len());
+                for (query, truth) in queries.iter().zip(&truths) {
+                    let started = Instant::now();
+                    let hits = reader.topk_global(
+                        VEC_COLUMN,
+                        query,
+                        k,
+                        exec_vec::ENGINE_DEFAULT,
+                        exec_vec::ENGINE_DEFAULT,
+                    );
+                    latencies.push(started.elapsed());
+                    recall_sum += corpus::recall_at_k(&hits, truth);
+                }
+                latencies.sort_unstable();
+                let percentile = |pct: usize| {
+                    let rank = (pct * latencies.len()).div_ceil(100);
+                    latencies[rank.saturating_sub(1).min(latencies.len() - 1)]
+                };
+                (
                     k,
-                    exec_vec::ENGINE_DEFAULT,
-                    exec_vec::ENGINE_DEFAULT,
-                );
-                (k, recall, p50.as_secs_f64() * 1e9, resident_bytes)
+                    recall_sum / queries.len() as f32,
+                    percentile(50).as_secs_f64() * 1e9,
+                    percentile(95).as_secs_f64() * 1e9,
+                    resident_bytes,
+                )
             })
             .collect()
     }
 
+    /// Native add / remove / save / load on an already-built peer index.
+    /// Infino superfile has no equivalent in-place path.
+    fn timed_op(f: impl FnOnce()) -> (Duration, u64) {
+        let sampler = PeakSampler::start_default();
+        let ((), wall, _) = cpu::timed(f);
+        (wall, sampler.stop_stats().peak_rss_bytes)
+    }
+
+    fn codec_lifecycle<E: VectorEngine>(
+        report: &mut Report,
+        index: &mut E::Index,
+        extra_vectors: &[f32],
+        dim: usize,
+        query: &[f32],
+        k: usize,
+        n_docs: usize,
+    ) {
+        assert!(
+            extra_vectors.len() >= INPLACE_BATCH * dim,
+            "codec lifecycle needs at least {INPLACE_BATCH} held-out rows"
+        );
+        let capabilities = E::capabilities();
+        assert!(
+            capabilities.vector_insert
+                && capabilities.vector_remove
+                && capabilities.vector_save_load,
+            "{} must support native add/remove/save/load",
+            E::name()
+        );
+        let search = VectorSearch {
+            nprobe: exec_vec::ENGINE_DEFAULT,
+            rerank_mult: exec_vec::ENGINE_DEFAULT,
+        };
+        let extra_1 = &extra_vectors[..INPLACE_SINGLE * dim];
+        let extra_100 = &extra_vectors[..INPLACE_BATCH * dim];
+
+        let (save_wall, save_rss) = timed_op(|| {
+            let bytes = E::save(index).expect("codec save");
+            std::hint::black_box(bytes.len());
+        });
+        let saved = E::save(index).expect("codec save bytes");
+        let (load_wall, load_rss) = timed_op(|| {
+            let loaded =
+                E::load(VEC_COLUMN, dim, VectorMetric::Cosine, &saved).expect("codec load");
+            std::hint::black_box(loaded);
+        });
+        let loaded =
+            E::load(VEC_COLUMN, dim, VectorMetric::Cosine, &saved).expect("load for first search");
+        let (first_wall, first_rss) = timed_op(|| {
+            let hits = E::read(&loaded, query, k, search);
+            std::hint::black_box(hits);
+        });
+
+        let mut next_id = n_docs as u64;
+        let (ins1_wall, ins1_rss) = timed_op(|| {
+            assert!(E::insert(index, extra_1, next_id));
+        });
+        next_id += INPLACE_SINGLE as u64;
+        let (ins100_wall, ins100_rss) = timed_op(|| {
+            assert!(E::insert(index, extra_100, next_id));
+        });
+        next_id += INPLACE_BATCH as u64;
+
+        let last = next_id - 1;
+        let (rem1_wall, rem1_rss) = timed_op(|| {
+            assert!(E::remove(index, &[last]));
+        });
+        next_id -= 1;
+        let rem100: Vec<u64> = (next_id - INPLACE_BATCH as u64..next_id).collect();
+        let (rem100_wall, rem100_rss) = timed_op(|| {
+            assert!(E::remove(index, &rem100));
+        });
+
+        // mutate → save → reopen → first query
+        assert!(E::insert(index, extra_1, n_docs as u64));
+        let mutated = E::save(index).expect("codec save after insert");
+        let (reopen_wall, reopen_rss) = timed_op(|| {
+            let reopened = E::load(VEC_COLUMN, dim, VectorMetric::Cosine, &mutated)
+                .expect("codec load after mutate");
+            let hits = E::read(&reopened, query, k, search);
+            std::hint::black_box(hits);
+        });
+
+        fn row(label: &str, wall: Duration, rss: u64) -> Vec<Cell> {
+            let ns = wall.as_secs_f64() * NS_PER_SEC;
+            vec![
+                text(label),
+                metric(ns, fmt_time(ns), Better::Lower),
+                metric(rss as f64, rss::fmt_bytes(rss), Better::Lower),
+            ]
+        }
+
+        report.emit(&Section {
+            anchor: format!("comparison/supertable/vector/codec-lifecycle/{}", E::name()),
+            title: format!(
+                "Codec lifecycle — {} add/remove/save/load ({} docs × dim={})",
+                E::name(),
+                fmt_count(n_docs),
+                dim
+            ),
+            note: "Native in-place add/remove and native save/load on the same index the \
+                   recall curve just built. Infino superfile has no equivalent mutable \
+                   path — table `append`/`delete` is a separate cell."
+                .into(),
+            blocks: vec![Block {
+                subtitle: E::name().into(),
+                headers: vec!["Op".into(), "Wall".into(), "Peak RSS".into()],
+                rows: vec![
+                    row("save", save_wall, save_rss),
+                    row("load", load_wall, load_rss),
+                    row("load → first search", first_wall, first_rss),
+                    row("add n=1", ins1_wall, ins1_rss),
+                    row("add n=100", ins100_wall, ins100_rss),
+                    row("remove n=1", rem1_wall, rem1_rss),
+                    row("remove n=100", rem100_wall, rem100_rss),
+                    row(
+                        "mutate → save → reopen → first query",
+                        reopen_wall,
+                        reopen_rss,
+                    ),
+                ],
+            }],
+        });
+    }
 
     /// The codec comparison: our terminal-ranking rungs beside the peer's,
     /// on the corpus infino ingests in this same run.
@@ -415,7 +566,9 @@ pub mod vector {
     /// (filtered-recall floors, cold-read ceilings) can no longer take the
     /// comparison rows down with it — which is exactly what cost the
     /// glove-200 peer rows on the first run.
-    fn codec_curve() {
+    pub(crate) fn codec_curve() {
+        let thread_mode =
+            env::var(THREAD_MODE_ENV).unwrap_or_else(|_| "unspecified-threads".into());
         let n_docs = supertable::n_docs();
         let prepared = supertable::prepare_corpus(supertable::Modality::Vector);
         let vectors = prepared
@@ -440,21 +593,48 @@ pub mod vector {
         // invites exactly the false attribution it should settle. At
         // [`CURVE_QUERIES`] the k=1 quantum is 0.005 and the k=10 quantum
         // 0.0005, which is finer than the differences being compared.
-        let q_corr = corpus::bench_queries(
-            vslice,
-            n_docs,
-            CURVE_QUERIES,
-            exec_vec::QUERY_CORRECTNESS_SEED,
-            true,
-            exec_vec::QUERY_SIGMA,
-        );
+        let q_corr = if vectors.n_docs() > n_docs {
+            corpus::bench_queries(
+                vslice,
+                n_docs,
+                CURVE_QUERIES,
+                exec_vec::QUERY_CORRECTNESS_SEED,
+                true,
+                exec_vec::QUERY_SIGMA,
+            )
+        } else {
+            // A corpus may end exactly at the advertised rung (DBpedia has
+            // exactly 1M rows). Deterministic perturbed members remain
+            // out-of-index queries without relabelling a 999.9K run as 1M.
+            corpus::generate_realistic_queries(
+                vslice,
+                n_docs,
+                CURVE_QUERIES,
+                exec_vec::QUERY_CORRECTNESS_SEED,
+                true,
+                exec_vec::QUERY_SIGMA,
+            )
+        };
+        let tail = &vectors.as_slice()[n_docs * corpus::dim()..];
+        let generated_extra;
+        let extra_vectors = if tail.len() >= INPLACE_BATCH * corpus::dim() {
+            tail
+        } else {
+            generated_extra = q_corr
+                .iter()
+                .take(INPLACE_BATCH)
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>();
+            generated_extra.as_slice()
+        };
+        let q0 = q_corr
+            .first()
+            .expect("codec curve needs at least one query");
         let mut report = Report::load("comparison-supertable-vector-codec");
-        // ── plan 078 §7: the per-`k` curve, with turbovec as a row ──────
-        //
-        // The §7 deliverable is recall at @1, @10 AND @100 — "the whole
-        // point of §4 is that the answer differs by `k`", because a coarse
+        // Recall at @1, @10 AND @100 differs materially because a coarse
         // codec loses the tail of the neighbourhood long before it loses
-        // the top-1. Measured over the SAME `vslice` infino ingested, the
+        // the top-1. Measured over the same `vslice` Infino ingested, the
         // SAME held-out queries, and the SAME exact oracle, in this one
         // process, so these rows sit directly beside the infino arm's.
         //
@@ -464,88 +644,167 @@ pub mod vector {
         //
         // No cold column: a compressed flat index is resident by
         // construction, so "cold" would time a file load, not the
-        // object-store fetch infino's cold column reports. §10 asks for
-        // nq = 1 warm p50, k-recall, and resident bytes — which is what
-        // these rows carry.
-        if true {
-            let gt_deep = corpus::ground_truth(vslice, n_docs, &q_corr, RECALL_KS_DEEPEST);
-            let mut curve_rows = Vec::new();
-            for (name, engine_rows) in [
-                ("turbovec-4bit", {
-                    let (_b, idx) =
-                        run_vector_with_index::<Turbovec4VectorEngine>(cfg, vslice, EMPTY_VECTOR_QUERIES);
-                    per_k_rows(&idx, &q_corr, &gt_deep, idx.index_bytes())
-                }),
-                ("turbovec-2bit", {
-                    let (_b, idx) =
-                        run_vector_with_index::<Turbovec2VectorEngine>(cfg, vslice, EMPTY_VECTOR_QUERIES);
-                    per_k_rows(&idx, &q_corr, &gt_deep, idx.index_bytes())
-                }),
-                // Our own codec ranking terminally, which is the only
-                // configuration comparable to a compressed flat index:
-                // recall bounded by quantization error alone, and no
-                // adjacency in the byte count.
-                ("infino-sq4-flat", {
-                    let (_b, idx) =
-                        run_vector_with_index::<Sq4FlatVectorEngine>(cfg, vslice, EMPTY_VECTOR_QUERIES);
-                    per_k_rows(&idx, &q_corr, &gt_deep, idx.resident_bytes())
-                }),
-                ("infino-sq4res-flat", {
-                    let (_b, idx) = run_vector_with_index::<Sq4ResidualFlatVectorEngine>(
-                        cfg,
-                        vslice,
-                        EMPTY_VECTOR_QUERIES,
-                    );
-                    per_k_rows(&idx, &q_corr, &gt_deep, idx.resident_bytes())
-                }),
-            ] {
-                for (k, recall, p50_ns, bytes) in engine_rows {
-                    eprintln!(
-                        "[078-curve] {name} recall@{k} = {recall:.3}  p50 = {:.3} ms  \
-                         resident = {}  ({} B/vec)",
-                        p50_ns / 1e6,
-                        rss::fmt_bytes(bytes as u64),
-                        bytes / n_docs.max(1),
-                    );
-                    curve_rows.push(vec![
-                        text(name.to_string()),
-                        text(format!("@{k}")),
-                        text(format!("{recall:.3}")),
-                        metric(p50_ns, fmt_time(p50_ns), Better::Lower),
-                        metric(bytes as f64, rss::fmt_bytes(bytes as u64), Better::Lower),
-                        text(format!("{}", bytes / n_docs.max(1))),
-                    ]);
-                }
+        // object-store fetch Infino's cold column reports. These rows carry
+        // nq=1 warm p50, k-recall, and serialized/resident bytes.
+        let gt_deep = retrievalbench::cohere::ground_truth(
+            corpus::corpus_source(),
+            n_docs,
+            q_corr.len(),
+            RECALL_KS_DEEPEST,
+        )
+        .unwrap_or_else(|| corpus::ground_truth(vslice, n_docs, &q_corr, RECALL_KS_DEEPEST));
+        let mut curve_rows = Vec::new();
+        let (_tv4_build, mut tv4) =
+            run_vector_with_index::<Turbovec4VectorEngine>(cfg, vslice, EMPTY_VECTOR_QUERIES);
+        let tv4_rows = per_k_rows(&tv4, &q_corr, &gt_deep, tv4.index_bytes());
+        let (_tv2_build, mut tv2) =
+            run_vector_with_index::<Turbovec2VectorEngine>(cfg, vslice, EMPTY_VECTOR_QUERIES);
+        #[allow(unused_mut)] // mutated only when the `faiss` feature is on
+        let mut curve_engines: Vec<(&str, Vec<CodecKRow>)> = vec![
+            ("turbovec-4bit", tv4_rows),
+            (
+                "turbovec-2bit",
+                per_k_rows(&tv2, &q_corr, &gt_deep, tv2.index_bytes()),
+            ),
+            // Our own codec ranking terminally, which is the only
+            // configuration comparable to a compressed flat index:
+            // recall bounded by quantization error alone, and no
+            // adjacency in the byte count.
+            ("infino-sq4-flat", {
+                let (_b, idx) =
+                    run_vector_with_index::<Sq4FlatVectorEngine>(cfg, vslice, EMPTY_VECTOR_QUERIES);
+                per_k_rows(&idx, &q_corr, &gt_deep, idx.resident_bytes())
+            }),
+            ("infino-sq4res-flat", {
+                let (_b, idx) = run_vector_with_index::<Sq4ResidualFlatVectorEngine>(
+                    cfg,
+                    vslice,
+                    EMPTY_VECTOR_QUERIES,
+                );
+                per_k_rows(&idx, &q_corr, &gt_deep, idx.resident_bytes())
+            }),
+        ];
+        #[cfg(feature = "faiss")]
+        {
+            use retrievalbench::{FaissPqFastScanVectorEngine, FaissPqVectorEngine};
+            let (_b, mut idx) = run_vector_with_index::<FaissPqFastScanVectorEngine>(
+                cfg,
+                vslice,
+                EMPTY_VECTOR_QUERIES,
+            );
+            curve_engines.push((
+                "faiss-pq-fastscan",
+                per_k_rows(&idx, &q_corr, &gt_deep, idx.serialized_bytes()),
+            ));
+            if thread_mode == "single-thread" {
+                codec_lifecycle::<FaissPqFastScanVectorEngine>(
+                    &mut report,
+                    &mut idx,
+                    extra_vectors,
+                    corpus::dim(),
+                    q0,
+                    TOP_K,
+                    n_docs,
+                );
             }
-            report.emit(&Section {
-                anchor: "comparison/supertable/vector/078-curve".into(),
-                title: format!(
-                    "Plan 078 §7 — turbovec rungs, per-k ({} docs × dim={})",
-                    fmt_count(n_docs),
-                    corpus::dim()
-                ),
-                note: "k-recall (|top-k ∩ exact top-k| / k) on the same exact oracle and \
+            FaissPqFastScanVectorEngine::close(&mut idx);
+            FaissPqFastScanVectorEngine::delete(idx);
+            let (_b, mut idx) =
+                run_vector_with_index::<FaissPqVectorEngine>(cfg, vslice, EMPTY_VECTOR_QUERIES);
+            curve_engines.push((
+                "faiss-pq",
+                per_k_rows(&idx, &q_corr, &gt_deep, idx.serialized_bytes()),
+            ));
+            if thread_mode == "single-thread" {
+                codec_lifecycle::<FaissPqVectorEngine>(
+                    &mut report,
+                    &mut idx,
+                    extra_vectors,
+                    corpus::dim(),
+                    q0,
+                    TOP_K,
+                    n_docs,
+                );
+            }
+            FaissPqVectorEngine::close(&mut idx);
+            FaissPqVectorEngine::delete(idx);
+        }
+        for (name, engine_rows) in curve_engines {
+            for (k, recall, p50_ns, p95_ns, bytes) in engine_rows {
+                eprintln!(
+                    "[codec-curve] {name} recall@{k} = {recall:.3}  p50 = {:.3} ms  \
+                         resident = {}  ({} B/vec)",
+                    p50_ns / 1e6,
+                    rss::fmt_bytes(bytes as u64),
+                    bytes / n_docs.max(1),
+                );
+                curve_rows.push(vec![
+                    text(format!("{name} @{k}")),
+                    metric(recall as f64, format!("{recall:.3}"), Better::Higher),
+                    metric(p50_ns, fmt_time(p50_ns), Better::Lower),
+                    metric(p95_ns, fmt_time(p95_ns), Better::Lower),
+                    metric(bytes as f64, rss::fmt_bytes(bytes as u64), Better::Lower),
+                    metric(
+                        (bytes / n_docs.max(1)) as f64,
+                        format!("{}", bytes / n_docs.max(1)),
+                        Better::Lower,
+                    ),
+                ]);
+            }
+        }
+        report.emit(&Section {
+            anchor: "comparison/supertable/vector/codec-curve".into(),
+            title: format!(
+                "Compressed flat codec curve — {} ({} docs × dim={})",
+                thread_mode,
+                fmt_count(n_docs),
+                corpus::dim()
+            ),
+            note: "k-recall (|top-k ∩ exact top-k| / k) on the same exact oracle and \
                        the same held-out queries as the infino rows in this run — the \
                        first neighbourhood-recall measurement for TurboQuant, whose own \
                        published figure is 1-recall@k (does the true #1 appear in the \
                        top-k), which saturates by k=4. Latency is true single-query \
                        (nq = 1), not their batch-amortized number. Resident is the \
                        exact serialized index."
-                    .into(),
-                blocks: vec![Block {
-                    subtitle: "Rung × k".into(),
-                    headers: vec![
-                        "Engine".into(),
-                        "k".into(),
-                        "k-recall".into(),
-                        "warm p50 (nq=1)".into(),
-                        "resident".into(),
-                        "B/vec".into(),
-                    ],
-                    rows: curve_rows,
-                }],
-            });
+                .into(),
+            blocks: vec![Block {
+                subtitle: format!("Rung × k — {thread_mode}"),
+                headers: vec![
+                    "Engine / k".into(),
+                    "k-recall".into(),
+                    "warm p50 (nq=1)".into(),
+                    "warm p95 (nq=1)".into(),
+                    "resident".into(),
+                    "B/vec".into(),
+                ],
+                rows: curve_rows,
+            }],
+        });
+        if thread_mode == "single-thread" {
+            codec_lifecycle::<Turbovec4VectorEngine>(
+                &mut report,
+                &mut tv4,
+                extra_vectors,
+                corpus::dim(),
+                q0,
+                TOP_K,
+                n_docs,
+            );
+            codec_lifecycle::<Turbovec2VectorEngine>(
+                &mut report,
+                &mut tv2,
+                extra_vectors,
+                corpus::dim(),
+                q0,
+                TOP_K,
+                n_docs,
+            );
         }
+        Turbovec4VectorEngine::close(&mut tv4);
+        Turbovec4VectorEngine::delete(tv4);
+        Turbovec2VectorEngine::close(&mut tv2);
+        Turbovec2VectorEngine::delete(tv2);
         report.save();
     }
 
@@ -553,10 +812,6 @@ pub mod vector {
         if let Err(reason) = tiers::supertable_backend_check() {
             eprintln!("[comparison-supertable-vector] skipped: {reason}");
             return;
-        }
-        // Codec comparison first — see `codec_curve`.
-        if warm {
-            codec_curve();
         }
         // Infino: infino's own supertable vector bench cell, verbatim —
         // ingest shapes, default (law-served) search, recall floors, and
@@ -605,7 +860,13 @@ pub mod vector {
             true,
             exec_vec::QUERY_SIGMA,
         );
-        let gt_corr = corpus::ground_truth(vslice, n_docs, &q_corr, TOP_K);
+        let gt_corr = retrievalbench::cohere::ground_truth(
+            corpus::corpus_source(),
+            n_docs,
+            q_corr.len(),
+            TOP_K,
+        )
+        .unwrap_or_else(|| corpus::ground_truth(vslice, n_docs, &q_corr, TOP_K));
 
         let mut report = Report::load("comparison-supertable-vector");
         let lance_rows = peer_default_rows(
@@ -679,9 +940,8 @@ pub mod sql {
             run_sql_with_index::<LanceS3SqlEngine>(cfg, &rows, SQL_BATTERY);
 
         let mut report = Report::load("comparison-supertable-sql");
-        let warm_rows: Option<Vec<(&'static str, Duration)>> = warm.then(|| {
-            lance_warm.queries.iter().map(|q| (q.name, q.p50)).collect()
-        });
+        let warm_rows: Option<Vec<(&'static str, Duration)>> =
+            warm.then(|| lance_warm.queries.iter().map(|q| (q.name, q.p50)).collect());
         let cold_map: Option<HashMap<&'static str, ColdTiming>> = cold.then(|| {
             let battery: Vec<(&'static str, &str)> =
                 SQL_BATTERY.iter().map(|q| (q.name, q.sql)).collect();

@@ -127,6 +127,11 @@ const CAPABILITIES: Capabilities = Capabilities {
     vector: true,
     sql: false,
     hybrid: false,
+    // A flat scan plane is built once from the whole corpus; this
+    // measurement seam exposes no add/remove path.
+    vector_insert: false,
+    vector_remove: false,
+    vector_save_load: false,
 };
 
 impl VectorEngine for Sq4FlatVectorEngine {

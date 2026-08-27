@@ -92,9 +92,7 @@ fn assert_supported_metric(metric: VectorMetric) {
 fn create_index(dim: usize, metric: VectorMetric, bit_width: usize) -> TurbovecVectorIndex {
     assert_supported_metric(metric);
     TurbovecVectorIndex {
-        index: Some(
-            TurboQuantIndex::new(dim, bit_width).expect("construct TurboQuantIndex"),
-        ),
+        index: Some(TurboQuantIndex::new(dim, bit_width).expect("construct TurboQuantIndex")),
         bit_width,
     }
 }
@@ -114,7 +112,13 @@ fn write_index(index: &mut TurbovecVectorIndex, vectors: &[f32]) {
     );
 }
 
-fn parallel_write_index(vectors: &[f32], dim: usize, metric: VectorMetric, writers: usize, bit_width: usize) {
+fn parallel_write_index(
+    vectors: &[f32],
+    dim: usize,
+    metric: VectorMetric,
+    writers: usize,
+    bit_width: usize,
+) {
     assert_supported_metric(metric);
     if writers <= 1 {
         let mut idx = TurboQuantIndex::new(dim, bit_width).expect("construct TurboQuantIndex");
@@ -167,6 +171,59 @@ fn read_index(index: &TurbovecVectorIndex, query: &[f32], k: usize) -> Vec<Vecto
         .collect()
 }
 
+/// Native `TurboQuantIndex::add` / `swap_remove` / `to_bytes` /
+/// `from_bytes`. Ids are insertion positions (`0..len`); `insert` only
+/// appends at `next_id == len`.
+fn insert_index(index: &mut TurbovecVectorIndex, vectors: &[f32], next_id: u64) -> bool {
+    let idx = index.index.as_mut().expect("insert after delete");
+    assert_eq!(
+        next_id,
+        idx.len() as u64,
+        "turbovec insert appends at the current length; ids are insertion positions"
+    );
+    idx.add(vectors);
+    idx.prepare();
+    true
+}
+
+fn remove_index(index: &mut TurbovecVectorIndex, ids: &[u64]) -> bool {
+    let idx = index.index.as_mut().expect("remove after delete");
+    // High-to-low so each `swap_remove` leaves the remaining named slots
+    // valid. Removing the last `n` rows is a pure pop each time.
+    let mut slots: Vec<usize> = ids.iter().map(|&id| id as usize).collect();
+    slots.sort_unstable();
+    slots.reverse();
+    for slot in slots {
+        idx.swap_remove(slot);
+    }
+    idx.prepare();
+    true
+}
+
+fn save_index(index: &TurbovecVectorIndex) -> Option<Vec<u8>> {
+    Some(index.index().to_bytes())
+}
+
+fn load_index(
+    dim: usize,
+    metric: VectorMetric,
+    bytes: &[u8],
+    bit_width: usize,
+) -> Option<TurbovecVectorIndex> {
+    assert_supported_metric(metric);
+    let idx = TurboQuantIndex::from_bytes(bytes).expect("TurboQuantIndex::from_bytes");
+    assert_eq!(
+        idx.dim_opt(),
+        Some(dim),
+        "loaded turbovec dim must match the cell"
+    );
+    idx.prepare();
+    Some(TurbovecVectorIndex {
+        index: Some(idx),
+        bit_width,
+    })
+}
+
 /// Both widths share every code path; only the constructor's bit width
 /// and the display name differ, exactly like the Lance local/S3 pair.
 const CAPABILITIES: Capabilities = Capabilities {
@@ -174,6 +231,9 @@ const CAPABILITIES: Capabilities = Capabilities {
     vector: true,
     sql: false,
     hybrid: false,
+    vector_insert: true,
+    vector_remove: true,
+    vector_save_load: true,
 };
 
 impl VectorEngine for Turbovec4VectorEngine {
@@ -214,6 +274,22 @@ impl VectorEngine for Turbovec4VectorEngine {
     fn delete(index: Self::Index) {
         drop(index);
     }
+
+    fn insert(index: &mut Self::Index, vectors: &[f32], next_id: u64) -> bool {
+        insert_index(index, vectors, next_id)
+    }
+
+    fn remove(index: &mut Self::Index, ids: &[u64]) -> bool {
+        remove_index(index, ids)
+    }
+
+    fn save(index: &Self::Index) -> Option<Vec<u8>> {
+        save_index(index)
+    }
+
+    fn load(_column: &str, dim: usize, metric: VectorMetric, bytes: &[u8]) -> Option<Self::Index> {
+        load_index(dim, metric, bytes, BIT_WIDTH_4)
+    }
 }
 
 impl VectorEngine for Turbovec2VectorEngine {
@@ -253,5 +329,21 @@ impl VectorEngine for Turbovec2VectorEngine {
 
     fn delete(index: Self::Index) {
         drop(index);
+    }
+
+    fn insert(index: &mut Self::Index, vectors: &[f32], next_id: u64) -> bool {
+        insert_index(index, vectors, next_id)
+    }
+
+    fn remove(index: &mut Self::Index, ids: &[u64]) -> bool {
+        remove_index(index, ids)
+    }
+
+    fn save(index: &Self::Index) -> Option<Vec<u8>> {
+        save_index(index)
+    }
+
+    fn load(_column: &str, dim: usize, metric: VectorMetric, bytes: &[u8]) -> Option<Self::Index> {
+        load_index(dim, metric, bytes, BIT_WIDTH_2)
     }
 }

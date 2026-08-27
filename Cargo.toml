@@ -9,8 +9,7 @@ publish = false
 # framework that ships in `infino-bench-utils` (infino `main`): the
 # `FtsEngine`/`VectorEngine`/`SqlEngine` traits, the `run_*` drivers, the
 # shared corpus, RSS sampling, and run-to-run delta reporting. This crate
-# only adds peer-engine adapters and per-modality runners. See
-# `claude-plans/todo/020_comparison_harness.md`.
+# only adds peer-engine adapters and per-modality runners.
 
 [dependencies]
 # The engine under measurement, pinned to a REV rather than a branch or a
@@ -29,27 +28,22 @@ publish = false
 # hdf5-metno (was splitting the build graph into two incompatible ndarray
 # versions once lancedb's lance-index also touched ndarray, surfaced when
 # this crate first tried building against lancedb 0.37.1), and
-# insert/remove/save-load added to VectorEngine (plan 084 item 3) with an
+# insert/remove/save-load added to VectorEngine with an
 # InfinoVectorEngine reference implementation. Repoint at a `main` SHA once
 # that work merges.
 infino-bench-utils = { git = "https://github.com/infino-ai/infino.git", rev = "23bb9cca9a383fd616bfdc8c9e3a5935e0cf4bfb" }
 infino = { git = "https://github.com/infino-ai/infino.git", rev = "23bb9cca9a383fd616bfdc8c9e3a5935e0cf4bfb", features = ["test-helpers"] }
-tantivy = "0.26"
+tantivy = "0.26.1"
 # Async — driven through a
 # small tokio runtime inside the adapter. Brings its own arrow; the
 # harness only bridges plain corpus types across the boundary.
 lancedb = { version = "0.37.1", features = ["aws", "azure"] }
-# TurboQuant compressed flat index — pinned to the 1.0.0 release SHA the
-# plan-078 audit read, so measured numbers are attributable to exact code.
+# TurboQuant compressed flat index — pinned to the 1.0.0 release SHA so
+# measured numbers are attributable to exact code.
 turbovec = { git = "https://github.com/RyanCodrai/turbovec.git", rev = "ccab9f325e6ce2a270a87daf01ae4e443bcf2d49" }
-# FAISS PQ / PQFastScan peer. Requires a system FAISS C++ build (via
-# faiss-sys's cmake-driven build script) — not vendored, not pure-Rust,
-# and it will not link on a host without that library installed. Optional
-# for exactly that reason: every other peer in this harness builds from
-# source with no system prerequisite, so gating the whole binary on FAISS
-# would make the common case (run the Lance/Tantivy/turbovec cells)
-# unbuildable on any machine that happens to lack a FAISS build. Enable
-# with `--features faiss` once `libfaiss` is present.
+# FAISS PQ / PQFastScan peer. `scripts/build_faiss.sh` builds the exact
+# C++ source bundled by faiss-sys 0.7.0 into `target/faiss`; the runner
+# adds that directory to the compile/runtime library path.
 faiss = { version = "0.13.0", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 # Arrow at the exact version lancedb 0.37 resolves to (== infino's 58.3.0),
@@ -57,6 +51,7 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 # async result stream; tempfile backs the local (in-memory tier) dataset.
 arrow-array = "58"
 arrow-schema = "58"
+parquet = "58"
 futures = "0.3"
 tempfile = "3"
 # DataFusion at the exact version lancedb 0.37 resolves to (54, built
@@ -68,10 +63,8 @@ tempfile = "3"
 datafusion = "54.0"
 
 [features]
-# Off by default: see the `faiss` dependency comment above. CI and any
-# published run that includes the FAISS columns must pass `--features
-# faiss` explicitly, so a missing system library surfaces as "the FAISS
-# cells did not run" rather than silently absent numbers.
+# Kept explicit so ordinary non-vector comparison builds avoid compiling
+# the large C++ dependency. Track A always enables it.
 faiss = ["dep:faiss"]
 
 # The peer-engine adapters. A library crate so their unit tests run under

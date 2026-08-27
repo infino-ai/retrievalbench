@@ -4,9 +4,8 @@
 //! The single comparison benchmark binary — same positional grammar as
 //! infino's own bench binary.
 //!
-//! Current engine scope is the adapters already present in this harness:
-//! LanceDB for FTS/vector/SQL and Tantivy for FTS. DuckDB/CoreDB are not
-//! wired here.
+//! Current engine scope: LanceDB for FTS/vector/SQL, Tantivy for FTS,
+//! and FAISS/turbovec for compressed-vector cells.
 //!
 //! ```text
 //! cargo bench                            # everything, all phases
@@ -60,6 +59,8 @@ fn install_corpus_from_env() {
 mod superfile;
 #[path = "supertable.rs"]
 mod supertable;
+#[path = "table_writes.rs"]
+mod table_writes;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tier {
@@ -79,6 +80,12 @@ struct Phases {
     build: bool,
     warm: bool,
     cold: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SpecialCell {
+    TrackACodec,
+    TrackAWrites,
 }
 
 const ALL_PHASES: Phases = Phases {
@@ -124,6 +131,7 @@ fn print_usage_and_exit(code: i32) -> ! {
          Modality  : fts | vector | sql            (omitted => all three)\n\
          Phase     : build | warm | cold | search  (search = warm+cold; omitted => all)\n\
          all       : every tier x modality x phase (the default for a bare `cargo bench`)\n\
+         Special   : track-a-codec | track-a-writes\n\
          corpus=<spec>     : synthetic (default) | annb:<slug> | hf:<owner/repo> | parquet:<dir>\n\
          corpus-dir=<path> : where downloadable corpora are staged\n\
          \n\
@@ -136,7 +144,7 @@ fn print_usage_and_exit(code: i32) -> ! {
     std::process::exit(code);
 }
 
-fn parse_args() -> (Vec<Tier>, Vec<Modality>, Phases) {
+fn parse_args() -> (Vec<Tier>, Vec<Modality>, Phases, Option<SpecialCell>) {
     // Drop harness flags (e.g. a stray `--bench`); only positional tokens
     // are ours.
     let args: Vec<String> = std::env::args()
@@ -155,6 +163,7 @@ fn parse_args() -> (Vec<Tier>, Vec<Modality>, Phases) {
     let mut build = false;
     let mut warm = false;
     let mut cold = false;
+    let mut special = None;
     let mut unknown: Vec<String> = Vec::new();
 
     for arg in &args {
@@ -185,6 +194,8 @@ fn parse_args() -> (Vec<Tier>, Vec<Modality>, Phases) {
                     modalities.push(Modality::Sql);
                 }
             }
+            "track-a-codec" => special = Some(SpecialCell::TrackACodec),
+            "track-a-writes" => special = Some(SpecialCell::TrackAWrites),
             "build" => build = true,
             "warm" => warm = true,
             "cold" => cold = true,
@@ -240,7 +251,7 @@ fn parse_args() -> (Vec<Tier>, Vec<Modality>, Phases) {
     } else {
         ALL_PHASES
     };
-    (tiers, modalities, phases)
+    (tiers, modalities, phases, special)
 }
 
 fn main() {
@@ -257,7 +268,18 @@ fn main() {
         return;
     }
 
-    let (tiers, modalities, phases) = parse_args();
+    let (tiers, modalities, phases, special) = parse_args();
+    match special {
+        Some(SpecialCell::TrackACodec) => {
+            supertable::vector::codec_curve();
+            return;
+        }
+        Some(SpecialCell::TrackAWrites) => {
+            table_writes::run();
+            return;
+        }
+        None => {}
+    }
     for tier in tiers {
         for &modality in &modalities {
             run_cell(tier, modality, phases);

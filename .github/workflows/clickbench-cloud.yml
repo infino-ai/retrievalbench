@@ -336,12 +336,32 @@ jobs:
             exit 1
           fi
 
+      - name: Ingest run log → results JSON
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          MACHINE="${VM_SIZE:-unknown}"
+          python3 scripts/ingest_clickbench_log.py \
+            --log /tmp/clickbench.log \
+            --machine "$MACHINE" \
+            --infino-ref "${{ inputs.infino_ref }}" \
+            --comment "cloud=${{ inputs.cloud }}; opt-level=${{ inputs.opt_level }}; rustflags=${{ inputs.rustflags }}; lto=${{ inputs.lto }}" \
+            --out /tmp/clickbench-result.json
+
       - name: Upload full log
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: clickbench-log
           path: /tmp/clickbench.log
+          if-no-files-found: warn
+
+      - name: Upload ingested result JSON
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: clickbench-result
+          path: /tmp/clickbench-result.json
           if-no-files-found: warn
 
       # --- teardown (always; composite; only the selected cloud runs) ---

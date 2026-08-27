@@ -3515,6 +3515,7 @@ dependencies = [
 [[package]]
 name = "infino"
 version = "0.5.9"
+source = "git+https://github.com/infino-ai/infino.git?rev=23bb9cca9a383fd616bfdc8c9e3a5935e0cf4bfb#23bb9cca9a383fd616bfdc8c9e3a5935e0cf4bfb"
 dependencies = [
  "apache-avro",
  "arc-swap",
@@ -3568,6 +3569,7 @@ dependencies = [
 [[package]]
 name = "infino-bench-utils"
 version = "0.1.0"
+source = "git+https://github.com/infino-ai/infino.git?rev=23bb9cca9a383fd616bfdc8c9e3a5935e0cf4bfb#23bb9cca9a383fd616bfdc8c9e3a5935e0cf4bfb"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -6592,6 +6594,7 @@ dependencies = [
  "infino",
  "infino-bench-utils",
  "lancedb",
+ "parquet",
  "tantivy",
  "tempfile",
  "tokio",

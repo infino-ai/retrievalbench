@@ -1,0 +1,206 @@
+name: Search Benchmark Game (Cloud)
+
+# Track D fold-in: clone infino-ai/search-benchmark-game onto an ephemeral
+# VM (same provision → run → publish → teardown shape as clickbench-cloud)
+# and run the Rust-engine overlap (infino + tantivy). Full engine roster
+# stays on the game's own nightly; this workflow exists so a retrievalbench
+# dispatch produces an artifact we can commit under search-benchmark/.
+
+on:
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: "Cloud to provision on."
+        required: false
+        default: aws
+        type: choice
+        options: [azure, aws, gcp]
+      vm_size:
+        description: "Instance type. The published Track D machine is c7i.2xlarge."
+        required: false
+        default: "c7i.2xlarge"
+        type: string
+      location:
+        description: "Region (Azure/AWS) or zone (GCP); empty = per-cloud default."
+        required: false
+        default: ""
+        type: string
+      game_repo:
+        description: "search-benchmark-game repo."
+        required: false
+        default: "infino-ai/search-benchmark-game"
+        type: string
+      game_ref:
+        description: "search-benchmark-game ref."
+        required: false
+        default: "master"
+        type: string
+      infino_repo:
+        description: "infino git repo the infino-0.1 engine builds against."
+        required: false
+        default: "infino-ai/infino"
+        type: string
+      infino_ref:
+        description: "Infino commit or ref; the resolved SHA is recorded."
+        required: false
+        default: "main"
+        type: string
+      engines:
+        description: "Space-separated engine dirs (Makefile ENGINES)."
+        required: false
+        default: "infino-main tantivy-0.26"
+        type: string
+      timeout_minutes:
+        description: "Hard auto-stop (min); VM torn down when hit."
+        required: false
+        default: "240"
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: searchbenchmark-cloud
+  cancel-in-progress: false
+
+env:
+  SSH_OPTS: "-o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+
+jobs:
+  searchbench:
+    runs-on: ubuntu-latest
+    environment: ci
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
+    steps:
+      - name: Checkout (this repo, for composite actions)
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        if: ${{ inputs.cloud == 'azure' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: AWS login
+        if: ${{ inputs.cloud == 'aws' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.location != '' && inputs.location || 'us-east-1' }}
+      - name: GCP login
+        if: ${{ inputs.cloud == 'gcp' }}
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - name: Setup gcloud
+        if: ${{ inputs.cloud == 'gcp' }}
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Generate SSH key
+        run: |
+          set -euo pipefail
+          ssh-keygen -t ed25519 -f "$HOME/.ssh/bench_key" -N "" -q
+          echo "SSH_KEY=$HOME/.ssh/bench_key" >> "$GITHUB_ENV"
+
+      - name: Provision
+        uses: ./.github/actions/cloud-vm
+        with:
+          op: provision
+          cloud: ${{ inputs.cloud }}
+          vm_size: ${{ inputs.vm_size }}
+          location: ${{ inputs.location }}
+          ssh_pub: ${{ env.SSH_KEY }}.pub
+          name_prefix: searchbench
+
+      - name: Wait for SSH
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if ssh $SSH_OPTS -i "$SSH_KEY" -o ConnectTimeout=5 "${SSH_USER}@${VM_IP}" true 2>/dev/null; then
+              echo "SSH up after ${i} tries"; exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::SSH never came up"; exit 1
+
+      - name: Clone + bench (on VM)
+        run: |
+          set -euo pipefail
+          ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${VM_IP}" \
+            "GAME_REPO='${{ inputs.game_repo }}' GAME_REF='${{ inputs.game_ref }}' \
+             INFINO_REPO='${{ inputs.infino_repo }}' INFINO_REF='${{ inputs.infino_ref }}' \
+             ENGINES='${{ inputs.engines }}' MACHINE='${VM_SIZE}' bash -s" <<'REMOTE' 2>&1 | tee /tmp/searchbench.log
+          set -euo pipefail
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            git wget curl ca-certificates build-essential pkg-config libssl-dev python3 make
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf --retry 5 https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal
+          fi
+          source "$HOME/.cargo/env"
+          rm -rf "$HOME/search-benchmark-game"
+          git clone --depth 1 --branch "$GAME_REF" \
+            "https://github.com/${GAME_REPO}.git" "$HOME/search-benchmark-game"
+          git clone --filter=blob:none "https://github.com/${INFINO_REPO}.git" "$HOME/infino-main"
+          git -C "$HOME/infino-main" fetch --depth 1 origin "$INFINO_REF"
+          git -C "$HOME/infino-main" checkout --detach FETCH_HEAD
+          cd "$HOME/search-benchmark-game"
+          export ENGINES
+          make compile
+          [ -f corpus.json ] || make corpus
+          make index
+          make bench
+          python3 - "$MACHINE" \
+            "$(git rev-parse HEAD)" \
+            "$(git -C "$HOME/infino-main" rev-parse HEAD)" <<'PY'
+          import json
+          import platform
+          import sys
+
+          metadata = {
+              "schema_version": 1,
+              "machine": sys.argv[1],
+              "search_benchmark_commit": sys.argv[2],
+              "infino_commit": sys.argv[3],
+              "os": platform.platform(),
+          }
+          with open("provenance.json", "w") as f:
+              json.dump(metadata, f, indent=2)
+              f.write("\n")
+          PY
+          REMOTE
+
+      - name: Fetch results
+        if: ${{ !cancelled() }}
+        run: |
+          set +e -u -o pipefail
+          mkdir -p search-benchmark
+          scp $SSH_OPTS -i "$SSH_KEY" \
+            "${SSH_USER}@${VM_IP}:search-benchmark-game/results.json" \
+            search-benchmark/results.json || true
+          scp $SSH_OPTS -i "$SSH_KEY" \
+            "${SSH_USER}@${VM_IP}:search-benchmark-game/provenance.json" \
+            search-benchmark/provenance.json || true
+
+      - name: Upload results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: searchbenchmark-results
+          path: |
+            search-benchmark/results.json
+            search-benchmark/provenance.json
+            /tmp/searchbench.log
+          if-no-files-found: warn
+
+      - name: Teardown
+        if: ${{ always() }}
+        uses: ./.github/actions/cloud-vm
+        with:
+          op: teardown
+          cloud: ${{ inputs.cloud }}
+          name_prefix: searchbench

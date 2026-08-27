@@ -15,6 +15,8 @@
 
 #[cfg(feature = "faiss")]
 pub mod faiss;
+#[path = "../cohere.rs"]
+pub mod cohere;
 pub mod lance;
 pub mod sq4flat;
 pub mod tantivy;
