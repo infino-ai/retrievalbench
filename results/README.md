@@ -277,3 +277,354 @@ Corpus: `parquet:/mnt/scratch/corpora/cohere-100000` · docs: `100,000` · retri
 | ingest | 33.3 s |
 | optimize (drain + compact) | 18.6 s |
 
+
+## `dbpedia-1536-100k`
+
+_Host: AMD EPYC 9V74 80-Core Processor · 8 logical cores · 63 GiB RAM · linux/x86_64_
+
+Corpus: `hf:KShivendu/dbpedia-entities-openai-1M` · docs: `100,000` · retrievalbench: `ec752ca97527` · Infino: `0.5.9 (23bb9cca9a38)`
+### `comparison-supertable-vector-codec`
+
+**Rung × k — box-threads**
+
+| Row | warm p50 (nq=1) | resident | warm p95 (nq=1) | k-recall | B/vec |
+| --- | --- | --- | --- | --- | --- |
+| faiss-pq @1 | 45.1 ms | 75.5 MiB | 47.8 ms | 0.9500 | 791 |
+| faiss-pq @10 | 45.1 ms | 75.5 MiB | 45.9 ms | 0.9435 | 791 |
+| faiss-pq @100 | 45.2 ms | 75.5 MiB | 48.3 ms | 0.9625 | 791 |
+| faiss-pq-fastscan @1 | 4.33 ms | 74.1 MiB | 4.51 ms | 0.6150 | 776 |
+| faiss-pq-fastscan @10 | 4.36 ms | 74.1 MiB | 4.46 ms | 0.6725 | 776 |
+| faiss-pq-fastscan @100 | 4.35 ms | 74.1 MiB | 4.48 ms | 0.6904 | 776 |
+| infino-sq4-flat @1 | 1.46 ms | 73.3 MiB | 1.7 ms | 0.9500 | 768 |
+| infino-sq4-flat @10 | 1.45 ms | 73.3 MiB | 1.62 ms | 0.9335 | 768 |
+| infino-sq4-flat @100 | 1.7 ms | 73.3 MiB | 2.34 ms | 0.9543 | 768 |
+| infino-sq4res-flat @1 | 3.51 ms | 146 MiB | 4.05 ms | 0.9950 | 1536 |
+| infino-sq4res-flat @10 | 3.53 ms | 146 MiB | 4 ms | 0.9910 | 1536 |
+| infino-sq4res-flat @100 | 3.63 ms | 146 MiB | 3.98 ms | 0.9925 | 1536 |
+| turbovec-2bit @1 | 403 µs | 37.8 MiB | 536 µs | 0.8350 | 396 |
+| turbovec-2bit @10 | 407 µs | 37.8 MiB | 607 µs | 0.8345 | 396 |
+| turbovec-2bit @100 | 599 µs | 37.8 MiB | 845 µs | 0.8511 | 396 |
+| turbovec-4bit @1 | 1.54 ms | 75.2 MiB | 1.64 ms | 0.9400 | 788 |
+| turbovec-4bit @10 | 1.55 ms | 75.2 MiB | 1.86 ms | 0.9445 | 788 |
+| turbovec-4bit @100 | 1.62 ms | 75.2 MiB | 1.91 ms | 0.9569 | 788 |
+
+**Rung × k — single-thread**
+
+| Row | resident | warm p50 (nq=1) | warm p95 (nq=1) | k-recall | B/vec |
+| --- | --- | --- | --- | --- | --- |
+| faiss-pq @1 | 75.5 MiB | 44.6 ms | 44.9 ms | 0.9500 | 791 |
+| faiss-pq @10 | 75.5 MiB | 44.6 ms | 44.9 ms | 0.9435 | 791 |
+| faiss-pq @100 | 75.5 MiB | 44.7 ms | 45.1 ms | 0.9625 | 791 |
+| faiss-pq-fastscan @1 | 74.1 MiB | 3.94 ms | 4.06 ms | 0.6150 | 776 |
+| faiss-pq-fastscan @10 | 74.1 MiB | 3.97 ms | 4.06 ms | 0.6725 | 776 |
+| faiss-pq-fastscan @100 | 74.1 MiB | 3.99 ms | 4.1 ms | 0.6904 | 776 |
+| infino-sq4-flat @1 | 73.3 MiB | 3.18 ms | 3.34 ms | 0.9500 | 768 |
+| infino-sq4-flat @10 | 73.3 MiB | 3.2 ms | 3.38 ms | 0.9335 | 768 |
+| infino-sq4-flat @100 | 73.3 MiB | 3.32 ms | 3.51 ms | 0.9543 | 768 |
+| infino-sq4res-flat @1 | 146 MiB | 5.73 ms | 5.98 ms | 0.9950 | 1536 |
+| infino-sq4res-flat @10 | 146 MiB | 5.76 ms | 5.87 ms | 0.9910 | 1536 |
+| infino-sq4res-flat @100 | 146 MiB | 5.86 ms | 5.98 ms | 0.9925 | 1536 |
+| turbovec-2bit @1 | 37.8 MiB | 1.55 ms | 1.69 ms | 0.8350 | 396 |
+| turbovec-2bit @10 | 37.8 MiB | 1.61 ms | 1.85 ms | 0.8345 | 396 |
+| turbovec-2bit @100 | 37.8 MiB | 1.67 ms | 1.76 ms | 0.8511 | 396 |
+| turbovec-4bit @1 | 75.2 MiB | 2.1 ms | 2.23 ms | 0.9400 | 788 |
+| turbovec-4bit @10 | 75.2 MiB | 2.15 ms | 2.26 ms | 0.9445 | 788 |
+| turbovec-4bit @100 | 75.2 MiB | 2.26 ms | 2.31 ms | 0.9569 | 788 |
+
+**faiss-pq**
+
+| Row | Peak RSS | Wall |
+| --- | --- | --- |
+| add n=1 | 982 MiB | 7.73 ms |
+| add n=100 | 983 MiB | 5.98 ms |
+| load | 905 MiB | 18.3 ms |
+| load → first search | 980 MiB | 45.2 ms |
+| mutate → save → reopen → first query | 1.11 GiB | 64.2 ms |
+| remove n=1 | 982 MiB | 417 µs |
+| remove n=100 | 982 MiB | 401 µs |
+| save | 905 MiB | 14.6 ms |
+
+**faiss-pq-fastscan**
+
+| Row | Peak RSS | Wall |
+| --- | --- | --- |
+| add n=1 | 978 MiB | 78.7 µs |
+| add n=100 | 979 MiB | 2.48 ms |
+| load | 903 MiB | 13.7 ms |
+| load → first search | 978 MiB | 4.26 ms |
+| mutate → save → reopen → first query | 1.03 GiB | 18.1 ms |
+| remove n=1 | 978 MiB | 443 µs |
+| remove n=100 | 978 MiB | 450 µs |
+| save | 903 MiB | 14.6 ms |
+
+**turbovec-2bit**
+
+| Row | Wall | Peak RSS |
+| --- | --- | --- |
+| add n=1 | 3.84 ms | 868 MiB |
+| add n=100 | 831 µs | 828 MiB |
+| load | 19.2 ms | 828 MiB |
+| load → first search | 1.69 ms | 828 MiB |
+| mutate → save → reopen → first query | 20.7 ms | 904 MiB |
+| remove n=1 | 2.73 µs | 828 MiB |
+| remove n=100 | 106 µs | 828 MiB |
+| save | 16.2 ms | 790 MiB |
+
+**turbovec-4bit**
+
+| Row | Peak RSS | Wall |
+| --- | --- | --- |
+| add n=1 | 979 MiB | 7.2 ms |
+| add n=100 | 904 MiB | 957 µs |
+| load | 905 MiB | 38.8 ms |
+| load → first search | 905 MiB | 2.98 ms |
+| mutate → save → reopen → first query | 1.03 GiB | 41.3 ms |
+| remove n=1 | 903 MiB | 3.94 µs |
+| remove n=100 | 903 MiB | 211 µs |
+| save | 829 MiB | 31.6 ms |
+
+### `comparison-supertable-vector-writes`
+
+**Append / delete**
+
+| Row | Wall/op | Peak RSS |
+| --- | --- | --- |
+| infino append 1 row | 22.4 ms | 1.3 GiB |
+| infino append 100 rows | 273 ms | 2.08 GiB |
+| infino delete 1 row | 8.18 ms | 1.13 GiB |
+| infino delete 100 rows | 15.3 ms | 1.13 GiB |
+| lancedb add 1 row | 1.11 ms | 1.2 GiB |
+| lancedb add 100 rows | 2.74 ms | 1.2 GiB |
+| lancedb delete 1 row | 4.5 ms | 1.22 GiB |
+| lancedb delete 100 rows | 6.73 ms | 1.21 GiB |
+
+### `comparison-supertable-vector`
+
+**comparison/supertable/vector/lancedb**
+
+| Row | Median RSS | Peak RSS | P90 RSS | warm p99 | cold 1st query (median) | warm p90 | cold open (median) | warm p50 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0.99 bar | 1.27 GiB | 1.42 GiB | 1.42 GiB | 332 ms | 4.907e+08 | 160 ms | 71.7 ms | 113 ms |
+| default | 3.12 GiB | 3.12 GiB | 3.12 GiB | 11.8 ms | 2.151e+08 | 11.3 ms | 71.2 ms | 10.8 ms |
+
+### `comparison-supertable`
+
+**Ingest**
+
+| Row | Peak RSS | Time | Median RSS | P90 RSS | Throughput |
+| --- | --- | --- | --- | --- | --- |
+| LanceDB FTS-only | 3.81 GiB | 3.2 s | 3.44 GiB | 3.54 GiB | 31,238/s |
+| LanceDB SQL | 3.67 GiB | 737 ms | 3.58 GiB | 3.67 GiB | 135,672/s |
+| LanceDB vector-only | 5.87 GiB | 64.7 s | 4.3 GiB | 4.49 GiB | 1,547/s |
+
+### `comparison-vector`
+
+**Search — default serving**
+
+| Row | warm Δ | warm p50 |
+| --- | --- | --- |
+| infino | — | 235 µs |
+| lancedb | 5.496e+06 | 5.73 ms |
+| lancedb (0.99 bar) | 6.298e+06 | 6.53 ms |
+
+**comparison/superfile/vector/infino**
+
+| Row | P90 RSS | warm p90 | Peak RSS | Median RSS | warm p99 | warm p50 |
+| --- | --- | --- | --- | --- | --- | --- |
+| default | 1.99 GiB | 262 µs | 1.99 GiB | 1.99 GiB | 349 µs | 235 µs |
+
+**comparison/superfile/vector/lancedb**
+
+| Row | warm p99 | warm p90 | Peak RSS | P90 RSS | Median RSS | warm p50 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0.99 bar | 8.55 ms | 7.06 ms | 2.53 GiB | 2.53 GiB | 2.53 GiB | 6.53 ms |
+| default | 6.21 ms | 5.92 ms | 2.02 GiB | 2.02 GiB | 2.02 GiB | 5.73 ms |
+
+**infino superfile**
+
+| Row | Wall | Peak RSS |
+| --- | --- | --- |
+| load | 92.4 ms | 3.44 GiB |
+| load → first search | 19.6 ms | 3.44 GiB |
+| save | 31.9 ms | 2.82 GiB |
+
+**Build — Bandwidth**
+
+| Row | infino | lancedb Δ | lancedb |
+| --- | --- | --- | --- |
+| 1 writer | 41.7 MiB/s | -31.6 MiB/s | 10.1 MiB/s |
+| 8 writers | 346 MiB/s | -336 MiB/s | 9.99 MiB/s |
+
+**Build — Median RSS**
+
+| Row | lancedb | lancedb Δ | infino |
+| --- | --- | --- | --- |
+| 1 writer | 2.87 GiB | 1.44 GiB | 1.43 GiB |
+| 8 writers | 3.68 GiB | -6.73 MiB | 3.69 GiB |
+
+**Build — P90 RSS**
+
+| Row | infino | lancedb Δ | lancedb |
+| --- | --- | --- | --- |
+| 1 writer | 1.83 GiB | 1.49 GiB | 3.32 GiB |
+| 8 writers | 3.94 GiB | 126 MiB | 4.07 GiB |
+
+**Build — Peak RSS**
+
+| Row | lancedb | infino | lancedb Δ |
+| --- | --- | --- | --- |
+| 1 writer | 4.31 GiB | 2.12 GiB | 2.19 GiB |
+| 8 writers | 4.63 GiB | 3.94 GiB | 700 MiB |
+
+**Build — Throughput**
+
+| Row | lancedb | lancedb Δ | infino |
+| --- | --- | --- | --- |
+| 1 writer | 1,725/s | -5,397/s | 7,123/s |
+| 8 writers | 1,705/s | -57,267/s | 58,972/s |
+
+**Build — Time**
+
+| Row | lancedb | lancedb Δ | infino |
+| --- | --- | --- | --- |
+| 1 writer | 58 s | 43.9 s | 14 s |
+| 8 writers | 58.6 s | 56.9 s | 1.7 s |
+
+### `supertable_vector`
+
+**Compute — actual CPU time and resident RAM; binding determines cost. Total adds the request leg from the same window's I/O ledger row, so each row reconciles with Serving/Monthly without cross-referencing another table.**
+
+| Row | Total |
+| --- | --- |
+| Cold 1st (warmup) — post-compact | 60.3 B |
+| Cold 1st (warmup) — post-delta | 111 B |
+| Cold 1st (warmup) — post-drain | 105 B |
+| Cold 1st (warmup) — pre-drain | 59.2 B |
+| Cold 2nd (steady) — post-compact | 27.8 B |
+| Cold 2nd (steady) — post-delta | 5.88 B |
+| Cold 2nd (steady) — post-drain | 4.06 B |
+| Cold 2nd (steady) — pre-drain | 28.8 B |
+| Delta commit | 0.000552 B |
+| Drain | 0.00112 B |
+| Ingest | 0.00756 B |
+| Open — post-compact | 4.51e-05 B |
+| Open — post-delta | 0.00012 B |
+| Open — post-drain | 0.000118 B |
+| Open — pre-drain | 0.000117 B |
+| Optimize | 0.00811 B |
+| Warm — post-compact | 0.345 B |
+| Warm — post-delta | 0.691 B |
+| Warm — post-drain | 0.675 B |
+| Warm — pre-drain | 0.581 B |
+
+**Monthly cost summary — one open table, 1M queries served + 106.2K docs written per month, steady state.**
+
+| Row | $/month |
+| --- | --- |
+| Egress — 1M queries/mo × 200 B payload (mean of 1 bounded-result shapes) | 0.018 ns |
+| Maintenance — drain + full-corpus optimize, 1×/mo each | 0.00933 ns |
+| Reads — 1M queries/mo, 95% warm / 5% cold blend | 1.72 ns |
+| Storage | 0.0251 ns |
+| Total (storage + blended reads + writes + maintenance + egress) | 1.78 ns |
+| Writes — 106.2K docs/mo (commit compute only; drain/optimize in Maintenance) | 0.00812 ns |
+
+**Object-store I/O — measured requests and transfer bytes.**
+
+| Row | Per-unit | Cost |
+| --- | --- | --- |
+| Cold 1st (+metadata warmup) — post-compact | 102 B | 41.2 B |
+| Cold 1st (+metadata warmup) — post-delta | 190 B | 76.4 B |
+| Cold 1st (+metadata warmup) — post-drain | 180 B | 72.4 B |
+| Cold 1st (+metadata warmup) — pre-drain | 104 B | 41.6 B |
+| Cold 2nd (steady cold) — post-compact | 53 B | 21.2 B |
+| Cold 2nd (steady cold) — post-delta | 10 B | 4 B |
+| Cold 2nd (steady cold) — post-drain | 7 B | 2.8 B |
+| Cold 2nd (steady cold) — pre-drain | 61 B | 24.4 B |
+| Delta commit | — | 6.04e-05 B |
+| Drain | — | 0.000326 B |
+| Fill — post-compact | 0 B | 0 B |
+| Fill — post-delta | 0 B | 0 B |
+| Fill — post-drain | 0 B | 0 B |
+| Fill — pre-drain | 0 B | 0 B |
+| Filtered warm (~10%) | 0 B | 0 B |
+| Ingest (16 commits) | — | 0.00102 B |
+| Open — post-compact | — | 3.32e-05 B |
+| Open — post-delta | — | 3.48e-05 B |
+| Open — post-drain | — | 3.48e-05 B |
+| Open — pre-drain | — | 3.4e-05 B |
+| Optimize | — | 0.00682 B |
+| Repeat — post-compact | 0 B | 0 B |
+| Repeat — post-delta | 0 B | 0 B |
+| Repeat — post-drain | 0 B | 0 B |
+| Repeat — pre-drain | 0 B | 0 B |
+| Warm — post-compact | 0 B | 0 B |
+| Warm — post-delta | 0 B | 0 B |
+| Warm — post-drain | 0 B | 0 B |
+| Warm — pre-drain | 0 B | 0 B |
+
+**Provisioned occupancy — keep-warm framing (informational, NOT in the Total above): what holding this tenant's capacity costs when it is reserved between queries instead of billed per query served. Share of one i3en.2xlarge (8 vCPU / 64 GiB RAM / 5000 GB NVMe at $0.9040/h = $660.37/node-mo) × R=2 replicas (R-way HA, each replica keeps an independent local cache; INFINO_BENCH_COST_REPLICAS overrides). Shares are of raw instance capacity — apply any usable-capacity headroom policy as your own divisor.**
+
+| Row | $/mo — ×2 replicas | Share of node | $/mo — 1 replica |
+| --- | --- | --- | --- |
+| Active occupancy (binding: RAM) | 20.68 | 0.01566 | 10.34 |
+| CPU at assumed load | — | 0.0009958 | — |
+| Idle-retained occupancy (NVMe only) | 0.09332 | 7.066e-05 | 0.04666 |
+| NVMe disk cache | — | 7.066e-05 | — |
+| RAM-resident (while worker live) | — | 0.01566 | — |
+
+**Serving COGS per keep-warm policy — one tenant-month at 1M queries/mo, egress excluded (passed through at cost). Pick the policy you sell; assumptions are knobs: warm-hit rate 95% (INFINO_BENCH_COST_WARM_FRACTION), R=2 (INFINO_BENCH_COST_REPLICAS), instance rates (INFINO_BENCH_COST_*).**
+
+| Row | $/month |
+| --- | --- |
+| Policy A — scale-to-zero (nothing retained between queries) | 1.76 |
+| Policy B — keep-warm NVMe (worker reaped between queries) | 1.853 |
+| Policy C — reserved (worker held live, 100% warm) | 21.07 |
+
+**Serving — query latency and cost by lifecycle state; 1/(s·$) is speed per dollar (1 ÷ (p50 seconds × $/query)), higher is better.**
+
+| Row | Cold steady $/1M | warm p50 | cold steady |
+| --- | --- | --- | --- |
+| post-compact | 27.8 ns | 2.67 ms | 153 ms |
+| post-delta | 5.9 ns | 5.16 ms | 82.2 ms |
+| post-drain | 4.07 ns | 4.24 ms | 40.9 ms |
+| pre-drain | 28.8 ns | 6.81 ms | 109 ms |
+
+**bench/vector/supertable/filtered**
+
+| Row | p50 |
+| --- | --- |
+| filtered (~10%) | 1.02 ms |
+
+**bench/vector/supertable/filtered-predicate**
+
+| Row | p50 |
+| --- | --- |
+| VectorFilter: title = "bucket042" | 12.9 ms |
+
+**bench/vector/supertable/ingest**
+
+| Row | Throughput | P90 RSS | Peak RSS | Peak file | Peak anon | Stored | Time | Bandwidth | Median RSS |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| vector-only | 2,912/s | 2.24 GiB | 2.32 GiB | 3.592e+08 | 2.428e+09 | 4.108e+08 | 34.3 s | 11.4 MiB/s | 2.09 GiB |
+
+**bench/vector/supertable/search/post-drain**
+
+| Row | Median RSS | warm p50 | cold open (median) | P90 RSS | warm p99 | Peak RSS | cold 1st query (median) | warm p90 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| default | 2.28 GiB | 4.18 ms | 669 ms | 2.28 GiB | 6.1 ms | 2.28 GiB | 4.693e+08 | 5.49 ms |
+
+**bench/vector/supertable/search/pre-drain**
+
+| Row | Peak RSS | warm p50 | P90 RSS | warm p90 | cold 1st query (median) | warm p99 | cold open (median) | Median RSS |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| default | 1.77 GiB | 6.72 ms | 1.77 GiB | 7.05 ms | 2.867e+08 | 7.32 ms | 638 ms | 1.77 GiB |
+
+**bench/vector/supertable/transitions**
+
+| Row | Wall |
+| --- | --- |
+| delta commit | 2.57 s |
+| drain | 10.4 s |
+| ingest | 34.3 s |
+| optimize (drain + compact) | 27.2 s |
+

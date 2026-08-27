@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "run_id": "dbpedia-1536-100k",
+  "corpus": "hf:KShivendu/dbpedia-entities-openai-1M",
+  "docs": 100000,
+  "host": "Host: AMD EPYC 9V74 80-Core Processor \u00b7 8 logical cores \u00b7 63 GiB RAM \u00b7 linux/x86_64",
+  "retrievalbench_commit": "ec752ca97527807c4695f39513bd461f1591fee2",
+  "dependencies": {
+    "faiss": "0.13.0",
+    "infino": "0.5.9 (23bb9cca9a38)",
+    "lancedb": "0.37.1",
+    "tantivy": "0.26.1",
+    "turbovec": "1.0.0 (ccab9f325e6c)"
+  },
+  "command": "./scripts/run_track_a.sh dbpedia-1536-100k 100000 hf:KShivendu/dbpedia-entities-openai-1M /mnt/scratch/corpora",
+  "published_at": "2026-08-27T07:20:16.553800+00:00",
+  "dirty": false
+}
