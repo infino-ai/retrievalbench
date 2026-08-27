@@ -29,13 +29,22 @@ case "$DOCS" in
 esac
 
 mkdir -p "$DEST"
+# Skip any file already staged (pre-seeded corpora, resumed runs): curl
+# --continue-at on a complete file fails, and writing through a
+# pre-seeded symlink would corrupt the shared original.
+fetch() {
+  local out="$1" url="$2"
+  if [ -s "$out" ]; then
+    echo "[prepare-cohere] have $(basename "$out"), skipping" >&2
+    return 0
+  fi
+  curl --fail --location --retry 5 --continue-at - --output "$out" "$url"
+}
 for shard in "${SHARDS[@]}"; do
-  curl --fail --location --retry 5 --continue-at - \
-    --output "$DEST/$shard" "$BASE/$DATASET/$shard"
+  fetch "$DEST/$shard" "$BASE/$DATASET/$shard"
 done
 # Keep held-out queries after every train shard in lexical file order.
-curl --fail --location --retry 5 --continue-at - \
-  --output "$DEST/zz-test.parquet" "$BASE/$DATASET/test.parquet"
+fetch "$DEST/zz-test.parquet" "$BASE/$DATASET/test.parquet"
 
 mkdir -p "$DEST/ground-truth"
 case "$DOCS" in
@@ -56,9 +65,7 @@ esac
 for item in "${GT_DATASETS[@]}"; do
   size="${item%%:*}"
   dataset="${item#*:}"
-  curl --fail --location --retry 5 --continue-at - \
-    --output "$DEST/ground-truth/$size.parquet" \
-    "$BASE/$dataset/neighbors.parquet"
+  fetch "$DEST/ground-truth/$size.parquet" "$BASE/$dataset/neighbors.parquet"
 done
 
 echo "$DEST"

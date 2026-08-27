@@ -25,8 +25,15 @@ PY
 
 if [ ! -f "$INSTALL_DIR/lib/libfaiss_c.dylib" ] &&
    [ ! -f "$INSTALL_DIR/lib/libfaiss_c.so" ]; then
+  # -march=native: FAISS's FastScan kernels (simdlib) compile per the
+  # build's CPU flags — a generic build silently falls back to scalar
+  # kernels and PQFastScan measures SLOWER than plain PQ (57 ms vs 19 ms
+  # p50 on a 100K flat scan, where a SIMD build is ~1-3 ms). Publishing a
+  # peer from a crippled build is indefensible; Track A is one stated
+  # host anyway, so a host-tuned peer build is the fair one.
   cmake -S "$FAISS_SRC" -B "$BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CXX_FLAGS="-march=native" \
     -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
     -DBUILD_SHARED_LIBS=ON \
     -DFAISS_ENABLE_C_API=ON \
