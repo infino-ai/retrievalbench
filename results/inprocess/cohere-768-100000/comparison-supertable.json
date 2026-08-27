@@ -1,0 +1,18 @@
+{
+  "__corpus": 1904754353013293.0,
+  "comparison/supertable/ingest|Ingest|LanceDB SQL|Throughput": 124394.92977727628,
+  "comparison/supertable/ingest|Ingest|LanceDB vector-only|P90 RSS": 2826334208.0,
+  "comparison/supertable/ingest|Ingest|LanceDB vector-only|Throughput": 2862.8547087058387,
+  "comparison/supertable/ingest|Ingest|LanceDB SQL|Time": 702182960.0,
+  "comparison/supertable/ingest|Ingest|LanceDB FTS-only|P90 RSS": 2966179840.0,
+  "comparison/supertable/ingest|Ingest|LanceDB vector-only|Time": 30510804385.0,
+  "comparison/supertable/ingest|Ingest|LanceDB SQL|P90 RSS": 2832547840.0,
+  "comparison/supertable/ingest|Ingest|LanceDB vector-only|Peak RSS": 3325644800.0,
+  "comparison/supertable/ingest|Ingest|LanceDB FTS-only|Peak RSS": 3093655552.0,
+  "comparison/supertable/ingest|Ingest|LanceDB FTS-only|Throughput": 32376.910028311868,
+  "comparison/supertable/ingest|Ingest|LanceDB vector-only|Median RSS": 2720645120.0,
+  "comparison/supertable/ingest|Ingest|LanceDB FTS-only|Time": 2697848557.0,
+  "comparison/supertable/ingest|Ingest|LanceDB FTS-only|Median RSS": 2504810496.0,
+  "comparison/supertable/ingest|Ingest|LanceDB SQL|Median RSS": 2785906688.0,
+  "comparison/supertable/ingest|Ingest|LanceDB SQL|Peak RSS": 2834653184.0
+}
