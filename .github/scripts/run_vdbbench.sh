@@ -172,6 +172,10 @@ written = []
 for label in (base_label, f"infino_vector_{run_date}"):
     doc = dict(merged)
     doc["task_label"] = label
+    # Distinct run_id per file: the viewer groups result files by run_id and
+    # MERGES any that share one (keeping only the first file's task_label), so a
+    # shared run_id would collapse these two into one label and hide the other.
+    doc["run_id"] = f"{label}_{run_date}"
     doc["results"] = entries
     out = os.path.join(infino_dir, f"result_{run_date}_{label}_infino.json")
     with open(out, "w") as fh:
