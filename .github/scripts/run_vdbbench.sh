@@ -180,10 +180,12 @@ for label in (base_label, f"infino_vector_{run_date}"):
     out = os.path.join(infino_dir, f"result_{run_date}_{label}_infino.json")
     with open(out, "w") as fh:
         json.dump(doc, fh, indent=2)
-    written.append(os.path.basename(out))
+    written.append(f"{os.path.basename(out)} [run_id={doc['run_id']} task_label={doc['task_label']} n={len(doc['results'])}]")
 for fp in legs:
     os.remove(fp)
-print(f"stitched {len(legs)} beam(s) ({len(entries)} point(s)) -> {', '.join(written)}")
+print(f"stitched {len(legs)} beam(s) ({len(entries)} point(s)):")
+for w in written:
+    print(f"  -> {w}")
 PYMERGE
 else
   echo "----- FTS: $FTS_CASE / $FTS_DATASET -----"
