@@ -110,11 +110,3 @@ numbers into the in-process tables: the measurement model is different.
 | ClickBench | `c6a.4xlarge` (reference) and `c8g.metal-48xl` (leaderboard) |
 | Full-text | AWS `c7i.2xlarge` (matches turbopuffer's published instance) |
 
-## Comparator pins
-
-Recorded in `Cargo.toml` / `Cargo.lock` and copied into each run's
-provenance. No personal forks — every pin is a canonical-repo SHA or a
-crates.io release: Infino `447ff2fc` (main `3aaffb64` plus the benches-only
-commits under review as infino-ai/infino#679; the pin repoints to a main SHA
-when that merges), turbovec `ccab9f32` (the 1.0.0 release), LanceDB 0.37.1,
-faiss-rs 0.13.0.
