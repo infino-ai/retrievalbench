@@ -1,6 +1,6 @@
 # RetrievalBench
 
-[Infino's](https://github.com/ekechinwokah/infino) external benchmark harness. 
+[Infino's](https://github.com/infino-ai/infino) external benchmark harness. 
 
 ## The benchmarks
 
