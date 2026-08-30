@@ -10,7 +10,6 @@ Infino's external benchmark harness.
 | [Vector databases](#vector-databases) | VectorDBBench's bundled peers | 1M / 10M | [live viewer](https://vdbbench-viewer-q6unoyyhua-uc.a.run.app) |
 | [SQL on ClickBench](#sql-on-clickbench) | the public leaderboard | 100M rows | [`clickbench/`](clickbench/README.md) |
 | [Full-text at Wikipedia scale](#full-text-at-wikipedia-scale) | Tantivy, Lucene, … | fixed Wikipedia corpus | [`search-benchmark/`](search-benchmark/README.md) |
-| [Cost and scale](#cost-and-scale) | none — Infino's own $/query | 100K → 10M | in-process harness + committed JSON |
 
 ## Embedded vector libraries
 
