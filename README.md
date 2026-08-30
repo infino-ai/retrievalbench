@@ -1,9 +1,6 @@
 # RetrievalBench
 
-Infino's external benchmark harness. Every number is a measurement against a
-named comparator, from a stated commit, on a stated machine — pins in
-[`Cargo.toml`](Cargo.toml), provenance stamped into every run, results
-committed next to the code that produced them.
+Infino's external benchmark harness. 
 
 ## The benchmarks
 
