@@ -12,12 +12,6 @@ Infino's external benchmark harness.
 | [Full-text at Wikipedia scale](#full-text-at-wikipedia-scale) | Tantivy, Lucene, … | fixed Wikipedia corpus | [`search-benchmark/`](search-benchmark/README.md) |
 | [Cost and scale](#cost-and-scale) | none — Infino's own $/query | 100K → 10M | in-process harness + committed JSON |
 
-Scales are chosen where each comparison is honest. The in-process suite stops
-at 10M because RAM does: a 100M × 768-d corpus is 307 GB as float32 and 38 GB
-even at 4-bit — it does not fit the box. Infino serves that scale from object
-storage, which is what the cost battery measures, and the absence of a
-comparator column there is the finding.
-
 ## Embedded vector libraries
 
 Every engine in one process: same queries, brute-force exact ground truth,
@@ -106,11 +100,6 @@ single-threaded, full-Wikipedia, HTTP-timed. Dispatch
 [`search-benchmark/README.md`](search-benchmark/README.md). Do not fold these
 numbers into the in-process tables: the measurement model is different.
 
-## Cost and scale
-
-Infino-only: GET count, bytes per query, $/month, cold vs warm — the
-object-storage serving economics no in-memory comparator has an equivalent
-of. Lives in the in-process harness; results land with the same provenance.
 
 ## Hardware
 
