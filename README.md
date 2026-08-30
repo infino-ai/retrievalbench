@@ -6,7 +6,7 @@ Infino's external benchmark harness.
 
 | Benchmark | Comparators | Scale | Where |
 |---|---|---|---|
-| [Embedded vector libraries](#embedded-vector-libraries) | turbovec, FAISS, LanceDB | 100K / 1M / 10M | [`benches/comparison/`](benches/comparison/) → [`results/inprocess/`](results/inprocess/) |
+| [Embedded vector libraries](#embedded-vector-libraries) | turbovec, FAISS | 100K / 1M | [`benches/comparison/`](benches/comparison/) → [`results/inprocess/`](results/inprocess/) |
 | [Vector databases](#vector-databases) | VectorDBBench's bundled peers | 1M / 10M | [live viewer](https://vdbbench-viewer-q6unoyyhua-uc.a.run.app) |
 | [SQL on ClickBench](#sql-on-clickbench) | the public leaderboard | 100M rows | [`clickbench/`](clickbench/README.md) |
 | [Full-text at Wikipedia scale](#full-text-at-wikipedia-scale) | Tantivy, Lucene, … | fixed Wikipedia corpus | [`search-benchmark/`](search-benchmark/README.md) |
