@@ -13,7 +13,7 @@ committed next to the code that produced them.
 | [Vector databases](#vector-databases) | VectorDBBench's bundled peers | 1M / 10M | [live viewer](https://vdbbench-viewer-q6unoyyhua-uc.a.run.app) |
 | [SQL on ClickBench](#sql-on-clickbench) | the public leaderboard | 100M rows | [`clickbench/`](clickbench/README.md) |
 | [Full-text at Wikipedia scale](#full-text-at-wikipedia-scale) | Tantivy, Lucene, … | fixed Wikipedia corpus | [`search-benchmark/`](search-benchmark/README.md) |
-| [Cost and scale](#cost-and-scale) | none — Infino's own $/query | 100K → 100M | in-process harness + committed JSON |
+| [Cost and scale](#cost-and-scale) | none — Infino's own $/query | 100K → 10M | in-process harness + committed JSON |
 
 Scales are chosen where each comparison is honest. The in-process suite stops
 at 10M because RAM does: a 100M × 768-d corpus is 307 GB as float32 and 38 GB
