@@ -114,8 +114,6 @@ numbers into the in-process tables: the measurement model is different.
 Infino-only: GET count, bytes per query, $/month, cold vs warm — the
 object-storage serving economics no in-memory comparator has an equivalent
 of. Lives in the in-process harness; results land with the same provenance.
-The 100M object-store cost row is deferred; historical mixed-commit numbers
-are not copied into this battery.
 
 ## Hardware
 
