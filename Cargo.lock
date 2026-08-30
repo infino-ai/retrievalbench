@@ -2424,7 +2424,7 @@ dependencies = [
 [[package]]
 name = "infino"
 version = "0.5.12"
-source = "git+https://github.com/infino-ai/infino.git?rev=447ff2fc83b6308e36eb27ec5218f8bd30261c62#447ff2fc83b6308e36eb27ec5218f8bd30261c62"
+source = "git+https://github.com/infino-ai/infino.git?rev=6eadf7e8c89e90a486ac852f424610717dff1611#6eadf7e8c89e90a486ac852f424610717dff1611"
 dependencies = [
  "apache-avro",
  "arc-swap",
@@ -2478,7 +2478,7 @@ dependencies = [
 [[package]]
 name = "infino-bench-utils"
 version = "0.1.0"
-source = "git+https://github.com/infino-ai/infino.git?rev=447ff2fc83b6308e36eb27ec5218f8bd30261c62#447ff2fc83b6308e36eb27ec5218f8bd30261c62"
+source = "git+https://github.com/infino-ai/infino.git?rev=6eadf7e8c89e90a486ac852f424610717dff1611#6eadf7e8c89e90a486ac852f424610717dff1611"
 dependencies = [
  "arrow-array",
  "arrow-schema",

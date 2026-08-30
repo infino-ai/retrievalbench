@@ -14,15 +14,14 @@ publish = false
 [dependencies]
 # The engine under measurement, pinned to a REV rather than a branch or a
 # local path: published rows are only attributable if the engine they ran
-# against is identifiable. `447ff2fc` is infino main `3aaffb64` (which
-# carries the shipped `flat_ivf` / `hnsw_ivf` modes) plus three benches-only
-# commits on the `bench/per-k-sweep` branch: the shared per-k
-# recall/latency sweep, the VectorEngine insert/remove/save-load surface the
-# lifecycle cells drive, and the local-table-through-`optimize()` builder +
-# resident-blob accounting this harness's infino arm drives. Fetchable by
-# SHA pre-merge; repoint at a main SHA once that branch merges.
-infino-bench-utils = { git = "https://github.com/infino-ai/infino.git", rev = "447ff2fc83b6308e36eb27ec5218f8bd30261c62" }
-infino = { git = "https://github.com/infino-ai/infino.git", rev = "447ff2fc83b6308e36eb27ec5218f8bd30261c62", features = ["test-helpers"] }
+# against is identifiable. `6eadf7e8` is infino `main`: the shipped
+# `flat_ivf` / `hnsw_ivf` modes, the shared per-k recall/latency sweep, the
+# `VectorEngine` insert/remove/save-load surface the lifecycle cells drive,
+# and the local-table-through-`optimize()` builder + resident-blob
+# accounting this harness's infino arm drives. Each committed run's
+# `run.json` records the exact engine SHA it measured.
+infino-bench-utils = { git = "https://github.com/infino-ai/infino.git", rev = "6eadf7e8c89e90a486ac852f424610717dff1611" }
+infino = { git = "https://github.com/infino-ai/infino.git", rev = "6eadf7e8c89e90a486ac852f424610717dff1611", features = ["test-helpers"] }
 tantivy = "0.26.1"
 # TurboQuant compressed flat index — pinned to the 1.0.0 release SHA so
 # measured numbers are attributable to exact code.
