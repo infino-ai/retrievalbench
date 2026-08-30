@@ -13,26 +13,16 @@ publish = false
 
 [dependencies]
 # The engine under measurement, pinned to a REV rather than a branch or a
-# local path: the codec arms in this harness are only attributable if the
-# engine they ran against is identifiable, and a path dep resolves to whatever
-# happens to be in a sibling checkout. `e525e465` is `vector/sq4-plane` with
-# main merged — it carries the 4-bit walk plane, the AVX-512 nibble kernels,
-# and `test_helpers::sq4_flat` (the measurement seam `sq4flat.rs` drives), none
-# of which exist on infino `main` yet.
-#
-# Pinned at `infino-ai/infino` (canonical repo), not a personal fork — the
-# commit is fetchable by SHA as a real branch (`vector/sq4-plane-cell-families`)
-# even pre-merge, so no fork is needed. `23bb9cca` is `e525e465` (the 4-bit
-# walk plane + AVX-512 nibble kernels + test_helpers::sq4_flat) plus two
-# follow-up fixes: benches/utils no longer pins ndarray independently of
-# hdf5-metno (was splitting the build graph into two incompatible ndarray
-# versions once lancedb's lance-index also touched ndarray, surfaced when
-# this crate first tried building against lancedb 0.37.1), and
-# insert/remove/save-load added to VectorEngine with an
-# InfinoVectorEngine reference implementation. Repoint at a `main` SHA once
-# that work merges.
-infino-bench-utils = { git = "https://github.com/infino-ai/infino.git", rev = "d75d14a73c7e5111385af225fd49f7aced0884b5" }
-infino = { git = "https://github.com/infino-ai/infino.git", rev = "d75d14a73c7e5111385af225fd49f7aced0884b5", features = ["test-helpers"] }
+# local path: published rows are only attributable if the engine they ran
+# against is identifiable. `447ff2fc` is infino main `3aaffb64` (which
+# carries the shipped `flat_ivf` / `hnsw_ivf` modes) plus three benches-only
+# commits on the `bench/per-k-sweep` branch: the shared per-k
+# recall/latency sweep, the VectorEngine insert/remove/save-load surface the
+# lifecycle cells drive, and the local-table-through-`optimize()` builder +
+# resident-blob accounting this harness's infino arm drives. Fetchable by
+# SHA pre-merge; repoint at a main SHA once that branch merges.
+infino-bench-utils = { git = "https://github.com/infino-ai/infino.git", rev = "447ff2fc83b6308e36eb27ec5218f8bd30261c62" }
+infino = { git = "https://github.com/infino-ai/infino.git", rev = "447ff2fc83b6308e36eb27ec5218f8bd30261c62", features = ["test-helpers"] }
 tantivy = "0.26.1"
 # Async — driven through a
 # small tokio runtime inside the adapter. Brings its own arrow; the
@@ -46,6 +36,11 @@ turbovec = { git = "https://github.com/RyanCodrai/turbovec.git", rev = "ccab9f32
 # adds that directory to the compile/runtime library path.
 faiss = { version = "0.13.0", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread"] }
+# Engine diagnostics (drain declines, fallback warnings) are tracing
+# events; without a subscriber they are silently dropped, and a run that
+# quietly fell back to a different serving mode is exactly what this
+# harness must never publish. RUST_LOG=infino=warn surfaces them.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Arrow at the exact version lancedb 0.37 resolves to (== infino's 58.3.0),
 # used to build the RecordBatches handed to LanceDB. futures drives the
 # async result stream; tempfile backs the local (in-memory tier) dataset.
@@ -85,3 +80,4 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 debug = 1
+

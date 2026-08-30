@@ -12,8 +12,9 @@
 //! engine-generic drivers, and searched at its own shipped defaults via
 //! the shared `exec_vec` primitives (recall reported, not floor-gated).
 
-use std::{env, time::Duration};
+use std::{env, sync::Arc, time::Duration};
 
+use infino::config::{VectorSearchMode, global as engine_config};
 use infino_bench_utils::corpus::{self, MmapTextCorpus};
 use infino_bench_utils::executors::fts::FTS_BATTERY;
 use infino_bench_utils::executors::sql::SQL_BATTERY;
@@ -645,19 +646,59 @@ pub mod vector {
         let (tv2_res, mut tv2) =
             run_vector_with_index::<Turbovec2VectorEngine>(cfg, vslice, EMPTY_VECTOR_QUERIES);
         build_rows.push(("turbovec-2bit", tv2_res.builds));
+        // Infino through the PUBLIC API: a table built by the standard
+        // lifecycle (append → commit → optimize) serving whatever
+        // `vector.search_mode` the process config selects. The runner
+        // points XDG_CONFIG_HOME at a config with `search_mode: flat_ivf`
+        // for this cell, so the row is the shipped resident-plane mode —
+        // reproducible by any user with one YAML line. The row is labeled
+        // from the config so a default-config invocation can never
+        // mislabel an ivf-served table as flat.
+        let infino_mode = match engine_config().vector.search_mode {
+            VectorSearchMode::FlatIvf => "infino-flat_ivf",
+            VectorSearchMode::HnswIvf => "infino-hnsw_ivf",
+            VectorSearchMode::Ivf => "infino-ivf",
+        };
+        let (infino_table, _infino_storage, _infino_dir) =
+            supertable::build_local_for_serving(&prepared, n_docs);
+        let infino_resident = supertable::served_index_blob_bytes(&infino_table);
+        if infino_mode != "infino-ivf" {
+            // A resident-mode config whose drain declined (register floor,
+            // scale ceiling) silently serves ivf; publishing that as the
+            // resident mode would be the exact mislabeling this arm exists
+            // to avoid. Fail the run instead.
+            assert!(
+                infino_resident.is_some(),
+                "{infino_mode} requested but no resident index was published \
+                 (register floor or scale ceiling declined the build)"
+            );
+        }
+        let infino_id_map = Arc::new(corpus::engine_id_to_dense(&infino_table, n_docs));
+        let infino_read = exec_vec::SupertableVectorRead {
+            table: &infino_table,
+            id_to_dense: infino_id_map,
+        };
+        eprintln!(
+            "[codec-curve] {infino_mode} serving: {}",
+            infino_read.routing_label(exec_vec::ENGINE_DEFAULT, exec_vec::ENGINE_DEFAULT)
+        );
+        let infino_rows = per_k_rows(
+            &infino_read,
+            &q_corr,
+            &gt_deep,
+            infino_resident.unwrap_or(0) as usize,
+        );
+        // No build row for the table arm: its build is a durable ingest +
+        // optimize, priced by the ingest and writes cells — a RAM-object
+        // build number here would compare a commit against a memcpy.
         #[allow(unused_mut)] // mutated only when the `faiss` feature is on
         let mut curve_engines: Vec<(&str, Vec<CodecKRow>)> = vec![
+            (infino_mode, infino_rows),
             ("turbovec-4bit", tv4_rows),
             (
                 "turbovec-2bit",
                 per_k_rows(&tv2, &q_corr, &gt_deep, tv2.index_bytes()),
             ),
-            // NO infino seam rows here: the raw-plane flat scan is a
-            // feature-gated engine diagnostic (`test_helpers::sq4_flat`),
-            // not a path a user can reach, and published comparison rows
-            // must be reproducible through the product. Infino's rows in
-            // this suite are the served table (below) and the superfile
-            // tier — production paths only.
         ];
         #[cfg(feature = "faiss")]
         {

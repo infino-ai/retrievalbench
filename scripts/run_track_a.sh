@@ -33,15 +33,27 @@ run_one() {
 
   echo "[track-a] run=$run_id docs=$docs corpus=$corpus threads=$THREADS"
 
+  # The codec cells compare RAM-resident quantized indexes, so infino's
+  # arm serves the shipped resident-plane mode: one YAML line, applied
+  # through the standard config discovery (XDG_CONFIG_HOME), scoped to
+  # these two invocations. Every other cell runs shipped defaults.
+  FLAT_CFG_HOME="$(mktemp -d)"
+  mkdir -p "$FLAT_CFG_HOME/infino"
+  printf 'vector:\n  search_mode: flat_ivf\n' > "$FLAT_CFG_HOME/infino/config.yaml"
+
   INFINO_BENCH_THREAD_MODE=single-thread \
+    XDG_CONFIG_HOME="$FLAT_CFG_HOME" \
     RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 \
     cargo bench --features faiss --bench bench -- \
       track-a-codec "${corpus_args[@]}"
 
   INFINO_BENCH_THREAD_MODE=box-threads \
+    XDG_CONFIG_HOME="$FLAT_CFG_HOME" \
     RAYON_NUM_THREADS="$THREADS" OMP_NUM_THREADS="$THREADS" \
     cargo bench --features faiss --bench bench -- \
       track-a-codec "${corpus_args[@]}"
+
+  rm -rf "$FLAT_CFG_HOME"
 
   RAYON_NUM_THREADS="$THREADS" OMP_NUM_THREADS="$THREADS" \
     cargo bench --features faiss --bench bench -- \

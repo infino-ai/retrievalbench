@@ -30,6 +30,7 @@
 //! and object-store backend (`INFINO_BENCH_STORE`) are env knobs.
 
 use infino_bench_utils::corpus;
+use tracing_subscriber::EnvFilter;
 
 /// Corpus spec / staging dir carried to the isolated ingest children.
 ///
@@ -45,6 +46,18 @@ const CORPUS_DIR_ENV: &str = "INFINO_BENCH_COMPARISON_CORPUS_DIR";
 /// Install the corpus source recorded in the environment, if any.
 /// Must run before ANY corpus read (the source resolves once per
 /// process) and before the shape-child intercept below.
+/// Surface engine tracing (drain declines, serving-mode fallbacks) on
+/// stderr, honoring `RUST_LOG`. Defaults to `infino=warn`: a warning here
+/// usually means a cell is not measuring what its label claims.
+fn init_engine_logging() {
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("infino=warn"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
+}
+
 fn install_corpus_from_env() {
     if let Ok(spec) = std::env::var(CORPUS_ENV) {
         let dir = std::env::var(CORPUS_DIR_ENV).ok();
@@ -255,6 +268,7 @@ fn parse_args() -> (Vec<Tier>, Vec<Modality>, Phases, Option<SpecialCell>) {
 }
 
 fn main() {
+    init_engine_logging();
     // The corpus must be installed before the shape-child intercept: a
     // child returns from that branch without ever reaching parse_args,
     // so the env is its only source for the dataset it ingests.
