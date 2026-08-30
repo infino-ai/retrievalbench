@@ -1,78 +1,96 @@
-# retrievalbench
+# RetrievalBench
 
-One harness for Infino's external comparisons. Four tracks; each owns the
-scale and corpus where the comparison is honest. These are our measurements,
-from a stated commit, on a stated machine — not a third-party-reproducible
-board until this repo is public.
+Infino's external benchmark harness. Every number is a measurement against a
+named comparator, from a stated commit, on a stated machine — pins in
+[`Cargo.toml`](Cargo.toml), provenance stamped into every run, results
+committed next to the code that produced them.
 
-## Tracks
+## The benchmarks
 
-| Track | What | Comparators | Scale | Where |
-|---|---|---|---|---|
-| **A** | In-memory libraries | FAISS, turbovec, LanceDB | 100K / 1M / 10M | `benches/comparison/` |
-| **B** | Vector databases | Milvus, Qdrant, and VectorDBBench's own bundled peers | 1M / 10M / 100M | [live viewer](https://vdbbench-viewer-q6unoyyhua-uc.a.run.app) |
-| **C** | Infino-only cost | none (GET count, bytes/query, $/month, cold vs warm) | 100K → 100M | in-process harness + committed JSON |
-| **D** | Full-Wikipedia FTS | Tantivy, Lucene, … (out of process, HTTP-timed) | fixed Wikipedia corpus | [`search-benchmark/`](search-benchmark/README.md) |
+| Benchmark | Comparators | Scale | Where |
+|---|---|---|---|
+| [Embedded vector libraries](#embedded-vector-libraries) | turbovec, FAISS, LanceDB | 100K / 1M / 10M | [`benches/comparison/`](benches/comparison/) → [`results/inprocess/`](results/inprocess/) |
+| [Vector databases](#vector-databases) | VectorDBBench's bundled peers | 1M / 10M | [live viewer](https://vdbbench-viewer-q6unoyyhua-uc.a.run.app) |
+| [SQL on ClickBench](#sql-on-clickbench) | the public leaderboard | 100M rows | [`clickbench/`](clickbench/README.md) |
+| [Full-text at Wikipedia scale](#full-text-at-wikipedia-scale) | Tantivy, Lucene, … | fixed Wikipedia corpus | [`search-benchmark/`](search-benchmark/README.md) |
+| [Cost and scale](#cost-and-scale) | none — Infino's own $/query | 100K → 100M | in-process harness + committed JSON |
 
-the single-host comparison suite stops at 10M because RAM does. A 100M × 768-d corpus is 307 GB as
-float32 and 38 GB even at 4-bit; it does not fit on the the single-host comparison suite/C box. Infino
-serves that scale from object storage — that is Track C, and the absence of a
-comparator column is the result.
+Scales are chosen where each comparison is honest. The in-process suite stops
+at 10M because RAM does: a 100M × 768-d corpus is 307 GB as float32 and 38 GB
+even at 4-bit — it does not fit the box. Infino serves that scale from object
+storage, which is what the cost battery measures, and the absence of a
+comparator column there is the finding.
 
-Track D is single-threaded, full-Wikipedia, HTTP-timed. Do not fold those
-numbers into a the single-host comparison suite table.
+## Embedded vector libraries
 
-## Hardware
+Every engine in one process: same queries, brute-force exact ground truth,
+each library reached through its own public API. Infino's row is the shipped
+`flat_ivf` mode — a table built by the normal lifecycle (`append` → `commit`
+→ `optimize()`), serving the resident 4-bit plane that one config line
+selects.
 
-| Track | Machine |
-|---|---|
-| A / C (in-process) | recorded in every run's `results/inprocess/<run>/run.json`; official RSS runs require Linux |
-| B | dispatched VM, instance type recorded per VectorDBBench run |
-| ClickBench | `c6a.4xlarge` (reference) and `c8g.metal-48xl` (leaderboard) — see [`clickbench/`](clickbench/README.md) |
-| D | AWS `c7i.2xlarge` (matches turbopuffer's published instance) |
+Measured at dbpedia-1536, 100K rows, top-10 (box threads):
 
-## Invocation (the single-host comparison suite)
+| engine | recall@10 | warm p50 | resident |
+|---|---|---|---|
+| Infino `flat_ivf` | 0.934 | 1.51 ms | 74.8 MiB |
+| turbovec 4-bit | 0.944 | 1.55 ms | 75.2 MiB |
+| turbovec 2-bit | 0.835 | 0.42 ms | 37.8 MiB |
+| FAISS PQ fastscan | 0.672 | 4.38 ms | 74.1 MiB |
+| FAISS PQ 8-bit | 0.943 | 45.3 ms | 75.5 MiB |
+
+Reproduce that table with plain `cargo bench` (the corpus downloads once):
 
 ```sh
-cargo bench -- [tier] [modality] [phase ...]
-# Full declared matrix: dbpedia-1536 + glove-200 + Cohere-768,
-# 100K / 1M / 10M where each corpus exists.
-./scripts/publish_results.sh
-
-# One development cell:
-INFINO_BENCH_ALLOW_DIRTY=1 ./scripts/publish_results.sh \
-  glove-200-100k 100000 annb:glove-200-angular target/corpora
+printf 'vector:\n  search_mode: flat_ivf\n' > infino.yaml
+INFINO_BENCH_SUPERTABLE_DOCS=100000 \
+  cargo bench -- vector-codec \
+  corpus=hf:KShivendu/dbpedia-entities-openai-1M corpus-dir=./corpora
 ```
 
-Env: `INFINO_BENCH_SUPERFILE_DOCS`, `INFINO_BENCH_SUPERTABLE_DOCS`,
-`INFINO_BENCH_STORE`.
+Add `--features faiss` (after `scripts/build_faiss.sh`, which builds the
+exact FAISS source faiss-rs bundles, with `-march=native` — without it
+FastScan silently runs scalar) for the FAISS rows. Remove `infino.yaml`
+before running other cells; everything else measures shipped defaults.
 
-The runner builds the exact FAISS source bundled by faiss-rs, refuses
-official publication from a dirty tree, preserves each corpus/scale under a
-separate results directory, and regenerates [`results/README.md`](results/README.md).
+To regenerate the committed results — every battery for one corpus rung,
+both thread modes, publisher refusing a dirty tree and stamping
+host/commit/command into `run.json`:
 
-Track C's 100M object-store cost row is deferred. Historical mixed-commit
-numbers are not copied into this battery.
+```sh
+./scripts/publish_results.sh dbpedia-1536-100k 100000 \
+  hf:KShivendu/dbpedia-entities-openai-1M ./corpora
+```
 
-## Track B (VectorDBBench)
+Selection grammar matches Infino's own bench suite:
+`cargo bench -- [tier] [modality] [phase ...]`, plus the `vector-codec` and
+`table-writes` cells. Scale knobs: `INFINO_BENCH_SUPERFILE_DOCS`,
+`INFINO_BENCH_SUPERTABLE_DOCS`, `INFINO_BENCH_STORE`. Engine behavior is
+YAML-only; environment variables never change it.
+
+## Vector databases
+
+Runs through [VectorDBBench](https://github.com/zilliztech/VectorDBBench)
+via [our client](https://github.com/infino-ai/VectorDBBench/tree/main/vectordb_bench/backend/clients/infino),
+dispatched to a VM whose instance type is recorded per run.
 
 Viewer (stable URL): **https://vdbbench-viewer-q6unoyyhua-uc.a.run.app**
 
 ```sh
 gh workflow run vdbbench-vector.yml --repo infino-ai/retrievalbench \
   -f vector_case=Performance768D1M -f publish_results=true
-gh workflow run vdbbench-vector.yml --repo infino-ai/retrievalbench \
-  -f vector_case=Performance768D10M -f publish_results=true
 ```
 
 Docs: [`vdbbench-viewer/README.md`](vdbbench-viewer/README.md).
 
-## ClickBench
+## SQL on ClickBench
 
-Headline (c8g.metal-48xl): hot sum **6.45 s**, geomean **0.090**, #17 of 60.
-See [`clickbench/README.md`](clickbench/README.md).
+Runs through [our port](https://github.com/infino-ai/clickbench/tree/add-infino/infino)
+of the public [ClickBench](https://benchmark.clickhouse.com/) suite.
+Headline on c8g.metal-48xl: hot sum **6.45 s**, geomean **0.090** — #17 of
+60 systems. Details and per-machine results: [`clickbench/`](clickbench/README.md).
 
-Refresh from a `clickbench-cloud` log artifact:
+Refresh a result from a `clickbench-cloud` log artifact:
 
 ```sh
 python3 scripts/ingest_clickbench_log.py \
@@ -82,13 +100,37 @@ python3 scripts/ingest_clickbench_log.py \
   --out clickbench/results/infino/c8g.metal-48xl.json
 ```
 
-## Track D
+## Full-text at Wikipedia scale
 
-[`search-benchmark/README.md`](search-benchmark/README.md) — dispatch
-`searchbenchmark-cloud.yml`, or the game's own nightly.
+[Search Benchmark, the Game](https://tantivy-search.github.io/bench/) via
+[our fork](https://github.com/infino-ai/search-benchmark-game) —
+single-threaded, full-Wikipedia, HTTP-timed. Dispatch
+`searchbenchmark-cloud.yml` or use the game's own nightly; see
+[`search-benchmark/README.md`](search-benchmark/README.md). Do not fold these
+numbers into the in-process tables: the measurement model is different.
+
+## Cost and scale
+
+Infino-only: GET count, bytes per query, $/month, cold vs warm — the
+object-storage serving economics no in-memory comparator has an equivalent
+of. Lives in the in-process harness; results land with the same provenance.
+The 100M object-store cost row is deferred; historical mixed-commit numbers
+are not copied into this battery.
+
+## Hardware
+
+| Suite | Machine |
+|---|---|
+| In-process (embedded, cost) | recorded in each run's `results/inprocess/<run>/run.json`; official RSS runs require Linux |
+| Vector databases | dispatched VM, instance type recorded per run |
+| ClickBench | `c6a.4xlarge` (reference) and `c8g.metal-48xl` (leaderboard) |
+| Full-text | AWS `c7i.2xlarge` (matches turbopuffer's published instance) |
 
 ## Comparator pins
 
-Recorded in `Cargo.toml` / `Cargo.lock` and copied into each run's provenance.
-No personal forks. Infino is canonical SHA `23bb9cca`; LanceDB 0.37.1,
-turbovec `ccab9f32`, and faiss-rs 0.13.0.
+Recorded in `Cargo.toml` / `Cargo.lock` and copied into each run's
+provenance. No personal forks — every pin is a canonical-repo SHA or a
+crates.io release: Infino `447ff2fc` (main `3aaffb64` plus the benches-only
+commits under review as infino-ai/infino#679; the pin repoints to a main SHA
+when that merges), turbovec `ccab9f32` (the 1.0.0 release), LanceDB 0.37.1,
+faiss-rs 0.13.0.
