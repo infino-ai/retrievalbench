@@ -49,7 +49,7 @@ host/commit/command into `run.json`:
 
 Selection grammar matches Infino's own bench suite:
 `cargo bench -- [tier] [modality] [phase ...]`, plus the `vector-codec` and
-`table-writes` cells. Scale knobs: `INFINO_BENCH_SUPERFILE_DOCS`,
+`table-writes` selections. Scale knobs: `INFINO_BENCH_SUPERFILE_DOCS`,
 `INFINO_BENCH_SUPERTABLE_DOCS`, `INFINO_BENCH_STORE`. Engine behavior is
 YAML-only; environment variables never change it.
 
@@ -95,7 +95,7 @@ in-process tables. See [`search-benchmark/README.md`](search-benchmark/README.md
 | Suite | Machine |
 |---|---|
 | In-process (embedded, cost) | recorded in each run's `results/inprocess/<run>/run.json` (memory figures recorded on Linux) |
-| Vector databases | dispatched VM, instance type recorded per run |
+| Vector databases | cloud VM, instance type recorded per run |
 | ClickBench | `c6a.4xlarge` (reference) and `c8g.metal-48xl` (leaderboard) |
 | Full-text | AWS `c7i.2xlarge` |
 
