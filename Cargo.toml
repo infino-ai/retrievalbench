@@ -9,35 +9,58 @@ publish = false
 # framework that ships in `infino-bench-utils` (infino `main`): the
 # `FtsEngine`/`VectorEngine`/`SqlEngine` traits, the `run_*` drivers, the
 # shared corpus, RSS sampling, and run-to-run delta reporting. This crate
-# only adds peer-engine adapters and per-modality runners. See
-# `claude-plans/todo/020_comparison_harness.md`.
+# only adds peer-engine adapters and per-modality runners.
 
 [dependencies]
-# infino `main` (sql-opt merged) — the framework + Infino reference engines.
-infino-bench-utils = { path = "../infino-public-interface/benches/utils" }
-infino = { path = "../infino-public-interface", features = ["test-helpers"] }
-# infino-bench-utils = { git = "ssh://git@github.com/infino-ai/infino.git" }
-# infino = { git = "ssh://git@github.com/infino-ai/infino.git", features = ["test-helpers"] }
-tantivy = "0.26"
+# The engine under measurement, pinned to a REV rather than a branch or a
+# local path: published rows are only attributable if the engine they ran
+# against is identifiable. `447ff2fc` is infino main `3aaffb64` (which
+# carries the shipped `flat_ivf` / `hnsw_ivf` modes) plus three benches-only
+# commits on the `bench/per-k-sweep` branch: the shared per-k
+# recall/latency sweep, the VectorEngine insert/remove/save-load surface the
+# lifecycle cells drive, and the local-table-through-`optimize()` builder +
+# resident-blob accounting this harness's infino arm drives. Fetchable by
+# SHA pre-merge; repoint at a main SHA once that branch merges.
+infino-bench-utils = { git = "https://github.com/infino-ai/infino.git", rev = "447ff2fc83b6308e36eb27ec5218f8bd30261c62" }
+infino = { git = "https://github.com/infino-ai/infino.git", rev = "447ff2fc83b6308e36eb27ec5218f8bd30261c62", features = ["test-helpers"] }
+tantivy = "0.26.1"
 # Async — driven through a
 # small tokio runtime inside the adapter. Brings its own arrow; the
 # harness only bridges plain corpus types across the boundary.
-lancedb = { version = "0.30.0", features = ["aws"] }
+lancedb = { version = "0.37.1", features = ["aws", "azure"] }
+# TurboQuant compressed flat index — pinned to the 1.0.0 release SHA so
+# measured numbers are attributable to exact code.
+turbovec = { git = "https://github.com/RyanCodrai/turbovec.git", rev = "ccab9f325e6ce2a270a87daf01ae4e443bcf2d49" }
+# FAISS PQ / PQFastScan peer. `scripts/build_faiss.sh` builds the exact
+# C++ source bundled by faiss-sys 0.7.0 into `target/faiss`; the runner
+# adds that directory to the compile/runtime library path.
+faiss = { version = "0.13.0", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread"] }
-# Arrow at the exact version lancedb 0.30 resolves to (== infino's 58.3.0),
+# Engine diagnostics (drain declines, fallback warnings) are tracing
+# events; without a subscriber they are silently dropped, and a run that
+# quietly fell back to a different serving mode is exactly what this
+# harness must never publish. RUST_LOG=infino=warn surfaces them.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Arrow at the exact version lancedb 0.37 resolves to (== infino's 58.3.0),
 # used to build the RecordBatches handed to LanceDB. futures drives the
 # async result stream; tempfile backs the local (in-memory tier) dataset.
 arrow-array = "58"
 arrow-schema = "58"
+parquet = "58"
 futures = "0.3"
 tempfile = "3"
-# DataFusion at the exact version lancedb 0.30 resolves to (53.1, built
+# DataFusion at the exact version lancedb 0.37 resolves to (54, built
 # against arrow 58). The SQL adapter answers the cross-engine battery by
 # registering the Lance dataset as a DataFusion `TableProvider`
 # (`lancedb::table::datafusion::BaseTableAdapter`) and running `ctx.sql`,
 # so LanceDB is measured through a real Lance scan — the apples-to-apples
 # peer for Infino's supertable + DataFusion path.
-datafusion = "53.1"
+datafusion = "54.0"
+
+[features]
+# Kept explicit so ordinary non-vector comparison builds avoid compiling
+# the large C++ dependency. Track A always enables it.
+faiss = ["dep:faiss"]
 
 # The peer-engine adapters. A library crate so their unit tests run under
 # `cargo test`. Each adapter implements an `infino-bench-utils` engine
@@ -57,3 +80,4 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 debug = 1
+

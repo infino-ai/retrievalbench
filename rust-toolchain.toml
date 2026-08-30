@@ -1,0 +1,8 @@
+# Pinned to the same channel infino pins, so the harness and the engine under
+# measurement are built by one compiler. A published number is only
+# attributable if the toolchain is part of what is pinned: codegen differences
+# across releases move SIMD kernel latency, which is exactly what several of
+# these cells measure.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]

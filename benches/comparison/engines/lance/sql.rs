@@ -5,76 +5,27 @@
 //!
 //! Builds a Lance dataset with the portable scalar columns the SQL
 //! battery references (`title`, `category`, `rating`) and answers queries
-//! through a DataFusion context backed by the Lance dataset.
+//! through a DataFusion context backed by the live Lance table provider
+//! (real lance scans with pushdown — never an in-memory copy).
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow_array::{Int64Array, RecordBatch, StringArray, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
-use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
-use futures::TryStreamExt;
 use lancedb::Table;
-use lancedb::query::ExecutableQuery;
-use tempfile::TempDir;
+use lancedb::table::datafusion::BaseTableAdapter;
 use tokio::runtime::Runtime;
 
+use super::location::{LanceLocation, LanceStorage, lance_peer_label};
+
+use infino_bench_utils::executors::payload_bytes;
+use infino_bench_utils::executors::sql::SqlRead;
 use infino_bench_utils::harness::{Capabilities, SqlEngine, SqlOutput, SqlRow};
 
 const SQL_TABLE: &str = "sql";
 const SQL_VIEW: &str = "supertable";
 const LANCE_TEXT_BATCH_ROWS: usize = 100_000;
-
-enum LanceStorage {
-    Local { _dir: TempDir },
-    S3,
-}
-
-struct LanceLocation {
-    uri: String,
-    storage_options: Vec<(String, String)>,
-    storage: LanceStorage,
-}
-
-impl LanceLocation {
-    fn local() -> Self {
-        let dir = tempfile::tempdir().expect("lance tempdir");
-        let uri = dir.path().to_str().expect("utf8 temp path").to_string();
-        Self {
-            uri,
-            storage_options: Vec::new(),
-            storage: LanceStorage::Local { _dir: dir },
-        }
-    }
-
-    fn s3(prefix: &str) -> Self {
-        let bucket = infino_bench_utils::tiers::real_s3_bucket_env()
-            .expect("INFINO_REAL_S3_BUCKET required for LanceDB S3 tier");
-        let root = infino_bench_utils::tiers::real_s3_prefix_root("retrievalbench-lance");
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock before UNIX_EPOCH")
-            .as_nanos();
-        let uri = format!(
-            "s3://{}/{}/{prefix}-{}-{unique}",
-            bucket,
-            root.trim_matches('/'),
-            std::process::id(),
-        );
-        let mut storage_options = Vec::new();
-        if let Ok(region) =
-            std::env::var("AWS_REGION").or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
-        {
-            storage_options.push(("aws_region".to_string(), region));
-        }
-        Self {
-            uri,
-            storage_options,
-            storage: LanceStorage::S3,
-        }
-    }
-}
 
 fn new_runtime() -> Runtime {
     tokio::runtime::Builder::new_multi_thread()
@@ -146,15 +97,15 @@ async fn build_sql_table(
 }
 
 async fn register_sql_ctx(table: &Table) -> SessionContext {
+    // Register the REAL lance table provider (projection/filter pushdown
+    // into lance scans), not an in-memory copy: the battery must pay
+    // lance's actual storage read path, exactly as infino's SQL battery
+    // pays its own object-store scan path.
     let ctx = SessionContext::new();
-    let stream = table.query().execute().await.expect("scan lance table");
-    let batches: Vec<RecordBatch> = stream.try_collect().await.expect("collect lance scan");
-    let schema = batches
-        .first()
-        .map(|b| b.schema())
-        .unwrap_or_else(|| Arc::new(Schema::empty()));
-    let mem = MemTable::try_new(schema, vec![batches]).expect("build memtable");
-    ctx.register_table(SQL_VIEW, Arc::new(mem))
+    let adapter = BaseTableAdapter::try_new(table.base_table().clone())
+        .await
+        .expect("adapt lance table for datafusion");
+    ctx.register_table(SQL_VIEW, Arc::new(adapter))
         .expect("register supertable provider");
     ctx
 }
@@ -202,11 +153,11 @@ fn write_index(index: &mut LanceSqlIndex, rows: &[SqlRow<'_>]) {
     index.ctx = Some(ctx);
 }
 
-fn parallel_write_index(rows: &[SqlRow<'_>], writers: usize, s3: bool) {
+fn parallel_write_index(rows: &[SqlRow<'_>], writers: usize, remote: bool) {
     if writers <= 1 {
         let rt = new_runtime();
-        let location = if s3 {
-            LanceLocation::s3("sql")
+        let location = if remote {
+            LanceLocation::object_store("sql")
         } else {
             LanceLocation::local()
         };
@@ -224,8 +175,8 @@ fn parallel_write_index(rows: &[SqlRow<'_>], writers: usize, s3: bool) {
         .enumerate()
         .map(|(i, shard)| {
             let rt = new_runtime();
-            let location = if s3 {
-                LanceLocation::s3(&format!("sql-shard-{i}"))
+            let location = if remote {
+                LanceLocation::object_store(&format!("sql-shard-{i}"))
             } else {
                 LanceLocation::local()
             };
@@ -250,7 +201,7 @@ fn read_index(index: &LanceSqlIndex, sql: &str) -> SqlOutput {
 }
 
 impl LanceSqlIndex {
-    /// Reopen the same S3 artifact and run one SQL query. Used by the
+    /// Reopen the same object-store artifact and run one SQL query. Used by the
     /// comparison cold tier so cold does not include rebuild time.
     pub fn cold_read(&self, sql: &str) -> SqlOutput {
         let uri = self.location.uri.clone();
@@ -266,7 +217,7 @@ impl LanceSqlIndex {
         })
     }
 
-    /// Open the cold S3 artifact (connect + open_table + register the scanned
+    /// Open the cold object-store artifact (connect + open_table + register the scanned
     /// dataset into a DataFusion context) without running the query. The cold
     /// tier times only the query, so this hydration is excluded — matching the
     /// Infino cold path, which opens its consumer outside the timed region.
@@ -292,8 +243,82 @@ impl LanceSqlIndex {
     }
 }
 
+/// One SQL query against a DataFusion context over the live lance
+/// provider, returning the collected batches — the shared `SqlRead`
+/// phases below all route through this.
+fn sql_batches(rt: &Runtime, ctx: &SessionContext, sql: &str) -> Vec<RecordBatch> {
+    rt.block_on(async {
+        let df = ctx.sql(sql).await.expect("plan sql");
+        df.collect().await.expect("collect sql result")
+    })
+}
+
+pub(crate) fn scalar_i64(batches: &[RecordBatch]) -> i64 {
+    batches
+        .first()
+        .expect("scalar result batch")
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("i64 scalar column")
+        .value(0)
+}
+
+impl SqlRead for LanceSqlIndex {
+    fn query_rows(&self, sql: &str) -> usize {
+        sql_batches(&self.rt, self.ctx(), sql)
+            .iter()
+            .map(|b| b.num_rows())
+            .sum()
+    }
+
+    fn query_payload(&self, sql: &str) -> (u64, u64) {
+        payload_bytes(&sql_batches(&self.rt, self.ctx(), sql))
+    }
+
+    fn query_count(&self, sql: &str) -> i64 {
+        scalar_i64(&sql_batches(&self.rt, self.ctx(), sql))
+    }
+}
+
+/// Cold-tier guard: fresh connection + table open + provider
+/// registration per instance (constructor = the timed open); the first
+/// query then pays lance's real cold scan, exactly like the infino cold
+/// guard pays its fresh-cache read path.
+pub struct LanceSqlColdGuard<'a> {
+    index: &'a LanceSqlIndex,
+    ctx: SessionContext,
+}
+
+impl<'a> LanceSqlColdGuard<'a> {
+    pub fn open(index: &'a LanceSqlIndex) -> Self {
+        let ctx = index.rt.block_on(async {
+            let table = open_sql_table(&index.location.uri, &index.location.storage_options).await;
+            register_sql_ctx(&table).await
+        });
+        Self { index, ctx }
+    }
+}
+
+impl SqlRead for LanceSqlColdGuard<'_> {
+    fn query_rows(&self, sql: &str) -> usize {
+        sql_batches(&self.index.rt, &self.ctx, sql)
+            .iter()
+            .map(|b| b.num_rows())
+            .sum()
+    }
+
+    fn query_payload(&self, sql: &str) -> (u64, u64) {
+        payload_bytes(&sql_batches(&self.index.rt, &self.ctx, sql))
+    }
+
+    fn query_count(&self, sql: &str) -> i64 {
+        scalar_i64(&sql_batches(&self.index.rt, &self.ctx, sql))
+    }
+}
+
 fn delete_index(index: LanceSqlIndex) {
-    if matches!(index.location.storage, LanceStorage::S3) {
+    if matches!(index.location.storage, LanceStorage::Remote) {
         let uri = index.location.uri.clone();
         let storage_options = index.location.storage_options.clone();
         index.rt.block_on(async move {
@@ -316,6 +341,7 @@ impl SqlEngine for LanceSqlEngine {
             vector: true,
             sql: true,
             hybrid: true,
+            ..Default::default()
         }
     }
 
@@ -349,7 +375,7 @@ impl SqlEngine for LanceS3SqlEngine {
     type Index = LanceSqlIndex;
 
     fn name() -> &'static str {
-        "lancedb-s3"
+        lance_peer_label()
     }
 
     fn capabilities() -> Capabilities {
@@ -357,7 +383,7 @@ impl SqlEngine for LanceS3SqlEngine {
     }
 
     fn create() -> Self::Index {
-        create_index(LanceLocation::s3("sql"))
+        create_index(LanceLocation::object_store("sql"))
     }
 
     fn write(index: &mut Self::Index, rows: &[SqlRow<'_>]) {

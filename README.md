@@ -1,55 +1,94 @@
-# retrievalbench comparison harness
+# retrievalbench
 
-This repo contains third-party comparison benches for Infino. The benchmark
-drivers, corpora, reporting, and Infino reference engines come from
-`../infino/benches/utils`; this repo only adds peer-engine adapters and
-comparison entry points.
+One harness for Infino's external comparisons. Four tracks; each owns the
+scale and corpus where the comparison is honest. These are our measurements,
+from a stated commit, on a stated machine — not a third-party-reproducible
+board until this repo is public.
 
-Current peer scope:
+## Tracks
 
-- LanceDB: FTS, vector, SQL
-- Tantivy: FTS
+| Track | What | Comparators | Scale | Where |
+|---|---|---|---|---|
+| **A** | In-memory libraries | FAISS, turbovec, LanceDB | 100K / 1M / 10M | `benches/comparison/` |
+| **B** | Vector databases | Milvus, Qdrant, and VectorDBBench's own bundled peers | 1M / 10M / 100M | [live viewer](https://vdbbench-viewer-q6unoyyhua-uc.a.run.app) |
+| **C** | Infino-only cost | none (GET count, bytes/query, $/month, cold vs warm) | 100K → 100M | in-process harness + committed JSON |
+| **D** | Full-Wikipedia FTS | Tantivy, Lucene, … (out of process, HTTP-timed) | fixed Wikipedia corpus | [`search-benchmark/`](search-benchmark/README.md) |
 
-DuckDB and CoreDB are not wired in this branch.
+the single-host comparison suite stops at 10M because RAM does. A 100M × 768-d corpus is 307 GB as
+float32 and 38 GB even at 4-bit; it does not fit on the the single-host comparison suite/C box. Infino
+serves that scale from object storage — that is Track C, and the absence of a
+comparator column is the result.
 
-## Invocation
+Track D is single-threaded, full-Wikipedia, HTTP-timed. Do not fold those
+numbers into a the single-host comparison suite table.
 
-Single binary, same positional grammar as infino's own bench suite:
-`cargo bench -- [tier] [modality] [phase ...]`.
+## Hardware
+
+| Track | Machine |
+|---|---|
+| A / C (in-process) | recorded in every run's `results/inprocess/<run>/run.json`; official RSS runs require Linux |
+| B | dispatched VM, instance type recorded per VectorDBBench run |
+| ClickBench | `c6a.4xlarge` (reference) and `c8g.metal-48xl` (leaderboard) — see [`clickbench/`](clickbench/README.md) |
+| D | AWS `c7i.2xlarge` (matches turbopuffer's published instance) |
+
+## Invocation (the single-host comparison suite)
 
 ```sh
-# Run every current comparison.
-cargo bench
+cargo bench -- [tier] [modality] [phase ...]
+# Full declared matrix: dbpedia-1536 + glove-200 + Cohere-768,
+# 100K / 1M / 10M where each corpus exists.
+./scripts/publish_results.sh
 
-# Run one tier or one cell.
-cargo bench -- superfile
-cargo bench -- superfile fts
-cargo bench -- superfile vector sql
-
-# Supertable cells, optionally narrowed by phase.
-cargo bench -- supertable fts warm
-cargo bench -- supertable vector cold
-cargo bench -- supertable sql build warm cold
+# One development cell:
+INFINO_BENCH_ALLOW_DIRTY=1 ./scripts/publish_results.sh \
+  glove-200-100k 100000 annb:glove-200-angular target/corpora
 ```
 
-The superfile comparisons run Infino vs the in-memory peer adapters. The
-supertable comparisons run Infino vs the object-store peer adapters. Unsupported
-cells are omitted: Tantivy participates in FTS superfile comparisons only;
-LanceDB participates in all current FTS/vector/SQL cells.
+Env: `INFINO_BENCH_SUPERFILE_DOCS`, `INFINO_BENCH_SUPERTABLE_DOCS`,
+`INFINO_BENCH_STORE`.
 
-Scale and backend knobs are inherited from `infino-bench-utils`:
+The runner builds the exact FAISS source bundled by faiss-rs, refuses
+official publication from a dirty tree, preserves each corpus/scale under a
+separate results directory, and regenerates [`results/README.md`](results/README.md).
 
-- `INFINO_BENCH_SUPERFILE_DOCS`
-- `INFINO_BENCH_SUPERTABLE_DOCS`
-- `INFINO_BENCH_WRITERS`
-- `INFINO_BENCH_STORE`
-- `INFINO_REAL_S3_BUCKET` / `INFINO_REAL_AZURE_CONTAINER`
+Track C's 100M object-store cost row is deferred. Historical mixed-commit
+numbers are not copied into this battery.
 
-## Bench Layout
+## Track B (VectorDBBench)
 
-```text
-benches/comparison/main.rs        unified comparison selector
-benches/comparison/superfile.rs   Infino vs Lance/Tantivy, in-memory tier
-benches/comparison/supertable.rs  Infino vs LanceDB S3, object-store tier
-benches/comparison/engines/       peer engine adapters
+Viewer (stable URL): **https://vdbbench-viewer-q6unoyyhua-uc.a.run.app**
+
+```sh
+gh workflow run vdbbench-vector.yml --repo infino-ai/retrievalbench \
+  -f vector_case=Performance768D1M -f publish_results=true
+gh workflow run vdbbench-vector.yml --repo infino-ai/retrievalbench \
+  -f vector_case=Performance768D10M -f publish_results=true
 ```
+
+Docs: [`vdbbench-viewer/README.md`](vdbbench-viewer/README.md).
+
+## ClickBench
+
+Headline (c8g.metal-48xl): hot sum **6.45 s**, geomean **0.090**, #17 of 60.
+See [`clickbench/README.md`](clickbench/README.md).
+
+Refresh from a `clickbench-cloud` log artifact:
+
+```sh
+python3 scripts/ingest_clickbench_log.py \
+  --log /tmp/clickbench.log \
+  --machine c8g.metal-48xl \
+  --infino-ref <commit-sha> \
+  --out clickbench/results/infino/c8g.metal-48xl.json
+```
+
+## Track D
+
+[`search-benchmark/README.md`](search-benchmark/README.md) — dispatch
+`searchbenchmark-cloud.yml`, or the game's own nightly.
+
+## Comparator pins
+
+Recorded in `Cargo.toml` / `Cargo.lock` and copied into each run's provenance.
+No personal forks. Infino is canonical SHA `23bb9cca`; LanceDB 0.37.1,
+turbovec `ccab9f32`, and faiss-rs 0.13.0.

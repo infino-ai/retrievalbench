@@ -8,75 +8,36 @@
 //! are disabled to match the simple tokenizer the other engines use.
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow_array::{Float32Array, RecordBatch, StringArray, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
+use datafusion::prelude::SessionContext;
 use futures::TryStreamExt;
 use lancedb::Table;
 use lancedb::index::Index;
 use lancedb::index::scalar::{
-    FtsIndexBuilder, FtsQuery, FullTextSearchQuery, MatchQuery, Operator,
+    BooleanQuery, FtsIndexBuilder, FtsQuery, FullTextSearchQuery, MatchQuery, Operator, PhraseQuery,
 };
-use lancedb::query::{ExecutableQuery, QueryBase};
-use tempfile::TempDir;
+use lancedb::query::{ExecutableQuery, QueryBase, Select};
+use lancedb::table::datafusion::BaseTableAdapter;
 use tokio::runtime::Runtime;
 
+use super::location::{LanceLocation, LanceStorage, lance_peer_label};
+use super::sql::scalar_i64;
+
+use infino::superfile::fts::reader::BoolMode as InfinoBoolMode;
+use infino::superfile::fts::tokenize::{AsciiLowerTokenizer, Tokenizer};
+use infino_bench_utils::executors::fts::{FtsRead, to_infino_mode};
+use infino_bench_utils::executors::payload_bytes;
 use infino_bench_utils::harness::{BoolMode, Capabilities, FtsEngine, Hit};
 
 const ID_COL: &str = "id";
 const FTS_TABLE: &str = "fts";
 const LANCE_TEXT_BATCH_ROWS: usize = 100_000;
-
-enum LanceStorage {
-    Local { _dir: TempDir },
-    S3,
-}
-
-struct LanceLocation {
-    uri: String,
-    storage_options: Vec<(String, String)>,
-    storage: LanceStorage,
-}
-
-impl LanceLocation {
-    fn local() -> Self {
-        let dir = tempfile::tempdir().expect("lance tempdir");
-        let uri = dir.path().to_str().expect("utf8 temp path").to_string();
-        Self {
-            uri,
-            storage_options: Vec::new(),
-            storage: LanceStorage::Local { _dir: dir },
-        }
-    }
-
-    fn s3(prefix: &str) -> Self {
-        let bucket = infino_bench_utils::tiers::real_s3_bucket_env()
-            .expect("INFINO_REAL_S3_BUCKET required for LanceDB S3 tier");
-        let root = infino_bench_utils::tiers::real_s3_prefix_root("retrievalbench-lance");
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock before UNIX_EPOCH")
-            .as_nanos();
-        let uri = format!(
-            "s3://{}/{}/{prefix}-{}-{unique}",
-            bucket,
-            root.trim_matches('/'),
-            std::process::id(),
-        );
-        let mut storage_options = Vec::new();
-        if let Ok(region) =
-            std::env::var("AWS_REGION").or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
-        {
-            storage_options.push(("aws_region".to_string(), region));
-        }
-        Self {
-            uri,
-            storage_options,
-            storage: LanceStorage::S3,
-        }
-    }
-}
+/// Registration name + statement for the count phase's COUNT(*) over the
+/// FTS-matched provider.
+const FTS_COUNT_VIEW: &str = "fts_matches";
+const FTS_COUNT_SQL: &str = "SELECT COUNT(*) FROM fts_matches";
 
 fn new_runtime() -> Runtime {
     tokio::runtime::Builder::new_multi_thread()
@@ -133,10 +94,16 @@ async fn build_fts_table(
             .await
             .expect("add lance fts batch");
     }
+    // Positions on: the shared battery includes phrase shapes, and lance
+    // only executes `PhraseQuery` against a position-indexed column (the
+    // position storage is the cost any lance user pays for phrase
+    // support). Stemming/stop-words/folding stay off to match the simple
+    // tokenizer the other engines use.
     let params = FtsIndexBuilder::default()
         .stem(false)
         .remove_stop_words(false)
-        .ascii_folding(false);
+        .ascii_folding(false)
+        .with_position(true);
     table
         .create_index(&[column], Index::FTS(params))
         .execute()
@@ -181,11 +148,11 @@ fn write_index(index: &mut LanceFtsIndex, docs: &[(u64, &str)]) {
     index.table = Some(table);
 }
 
-fn parallel_write_index(column: &str, docs: &[(u64, &str)], writers: usize, s3: bool) {
+fn parallel_write_index(column: &str, docs: &[(u64, &str)], writers: usize, remote: bool) {
     if writers <= 1 {
         let rt = new_runtime();
-        let location = if s3 {
-            LanceLocation::s3("fts")
+        let location = if remote {
+            LanceLocation::object_store("fts")
         } else {
             LanceLocation::local()
         };
@@ -208,8 +175,8 @@ fn parallel_write_index(column: &str, docs: &[(u64, &str)], writers: usize, s3: 
             .map(|(i, shard)| {
                 scope.spawn(move || {
                     let rt = new_runtime();
-                    let location = if s3 {
-                        LanceLocation::s3(&format!("fts-shard-{i}"))
+                    let location = if remote {
+                        LanceLocation::object_store(&format!("fts-shard-{i}"))
                     } else {
                         LanceLocation::local()
                     };
@@ -230,6 +197,112 @@ fn parallel_write_index(column: &str, docs: &[(u64, &str)], writers: usize, s3: 
     });
 }
 
+/// Build the lance query DSL for one battery shape. Clause polarity
+/// (sigils, phrases, And-mode folding of bare terms into musts) is
+/// decided by infino's OWN tokenizer — one parser rules both engines —
+/// and only the DSL construction below is lance-specific.
+fn battery_query(column: &str, query: &str, mode: InfinoBoolMode) -> FtsQuery {
+    let clauses = AsciiLowerTokenizer.parse(query).into_clauses(mode);
+    let col = || Some(column.to_string());
+    let join = |terms: &[std::borrow::Cow<'_, str>]| {
+        terms
+            .iter()
+            .map(|t| t.as_ref())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let phrase = |tokens: &Vec<std::borrow::Cow<'_, str>>| {
+        FtsQuery::Phrase(PhraseQuery::new(join(tokens)).with_column(col()))
+    };
+
+    let simple = clauses.must_phrases.is_empty()
+        && clauses.should_phrases.is_empty()
+        && clauses.negatives.is_empty()
+        && clauses.negative_phrases.is_empty();
+    if simple && clauses.musts.is_empty() {
+        return FtsQuery::Match(
+            MatchQuery::new(join(&clauses.shoulds))
+                .with_column(col())
+                .with_operator(Operator::Or),
+        );
+    }
+    if simple && clauses.shoulds.is_empty() {
+        return FtsQuery::Match(
+            MatchQuery::new(join(&clauses.musts))
+                .with_column(col())
+                .with_operator(Operator::And),
+        );
+    }
+
+    let mut bq = BooleanQuery::new(std::iter::empty());
+    if !clauses.musts.is_empty() {
+        bq = bq.with_must(FtsQuery::Match(
+            MatchQuery::new(join(&clauses.musts))
+                .with_column(col())
+                .with_operator(Operator::And),
+        ));
+    }
+    for p in &clauses.must_phrases {
+        bq = bq.with_must(phrase(p));
+    }
+    if !clauses.shoulds.is_empty() {
+        bq = bq.with_should(FtsQuery::Match(
+            MatchQuery::new(join(&clauses.shoulds))
+                .with_column(col())
+                .with_operator(Operator::Or),
+        ));
+    }
+    for p in &clauses.should_phrases {
+        bq = bq.with_should(phrase(p));
+    }
+    if !clauses.negatives.is_empty() {
+        bq = bq.with_must_not(FtsQuery::Match(
+            MatchQuery::new(join(&clauses.negatives))
+                .with_column(col())
+                .with_operator(Operator::Or),
+        ));
+    }
+    for p in &clauses.negative_phrases {
+        bq = bq.with_must_not(phrase(p));
+    }
+    // A lone must clause needs no boolean wrapper.
+    if bq.should.is_empty() && bq.must_not.is_empty() && bq.must.len() == 1 {
+        return bq.must.pop().expect("single must clause");
+    }
+    FtsQuery::Boolean(bq)
+}
+
+/// Run one battery query and return the raw result batches. `fetched`
+/// selects the fetch phase (id + the searched text column) vs the
+/// search phase (id only; `_score` is system-added on both).
+fn fts_query_batches(
+    rt: &Runtime,
+    table: &Table,
+    column: &str,
+    query: &str,
+    k: usize,
+    mode: InfinoBoolMode,
+    fetched: bool,
+) -> Vec<RecordBatch> {
+    let fts_query = FullTextSearchQuery::new_query(battery_query(column, query, mode));
+    let select = if fetched {
+        vec![ID_COL.to_string(), column.to_string()]
+    } else {
+        vec![ID_COL.to_string()]
+    };
+    rt.block_on(async {
+        let stream = table
+            .query()
+            .full_text_search(fts_query)
+            .select(Select::Columns(select))
+            .limit(k.max(1))
+            .execute()
+            .await
+            .expect("fts query execute");
+        stream.try_collect().await.expect("collect stream")
+    })
+}
+
 fn read_table(
     rt: &Runtime,
     table: &Table,
@@ -238,25 +311,16 @@ fn read_table(
     k: usize,
     mode: BoolMode,
 ) -> Vec<Hit> {
-    let operator = match mode {
-        BoolMode::Or => Operator::Or,
-        BoolMode::And => Operator::And,
-    };
-    let match_q = MatchQuery::new(terms.join(" "))
-        .with_column(Some(column.to_string()))
-        .with_operator(operator);
-    let fts_query = FullTextSearchQuery::new_query(FtsQuery::Match(match_q));
-
-    rt.block_on(async {
-        let stream = table
-            .query()
-            .full_text_search(fts_query)
-            .limit(k.max(1))
-            .execute()
-            .await
-            .expect("fts query execute");
-        let batches: Vec<RecordBatch> = stream.try_collect().await.expect("collect stream");
-
+    let batches = fts_query_batches(
+        rt,
+        table,
+        column,
+        &terms.join(" "),
+        k,
+        to_infino_mode(mode),
+        false,
+    );
+    {
         let mut out = Vec::with_capacity(k);
         for b in &batches {
             let ids = b
@@ -279,7 +343,7 @@ fn read_table(
             }
         }
         out
-    })
+    }
 }
 
 fn read_index(index: &LanceFtsIndex, terms: &[&str], k: usize, mode: BoolMode) -> Vec<Hit> {
@@ -287,7 +351,7 @@ fn read_index(index: &LanceFtsIndex, terms: &[&str], k: usize, mode: BoolMode) -
 }
 
 impl LanceFtsIndex {
-    /// Reopen the same S3 artifact and run one FTS query. Used by the
+    /// Reopen the same object-store artifact and run one FTS query. Used by the
     /// comparison cold tier so cold does not include rebuild time.
     pub fn cold_read(&self, terms: &[&str], k: usize, mode: BoolMode) -> Vec<Hit> {
         let uri = self.location.uri.clone();
@@ -296,7 +360,7 @@ impl LanceFtsIndex {
         read_table(&self.rt, &table, &self.column, terms, k, mode)
     }
 
-    /// Open the cold S3 artifact (connect + open_table) without querying.
+    /// Open the cold object-store artifact (connect + open_table) without querying.
     /// The cold tier times only the search, so the open is excluded —
     /// matching the Infino cold path, which opens its consumer outside the
     /// timed region.
@@ -312,8 +376,147 @@ impl LanceFtsIndex {
     }
 }
 
+/// Both `FtsRead` phases for a given open lance table — the shared
+/// protocol batteries (`exec_fts::measure_warm` / `measure_cold` /
+/// `measure_count`) drive the peer through exactly these calls.
+fn fts_read_rows(
+    rt: &Runtime,
+    table: &Table,
+    column: &str,
+    query: &str,
+    k: usize,
+    mode: InfinoBoolMode,
+    fetched: bool,
+) -> usize {
+    fts_query_batches(rt, table, column, query, k, mode, fetched)
+        .iter()
+        .map(|b| b.num_rows())
+        .sum()
+}
+
+fn fts_read_payloads(
+    rt: &Runtime,
+    table: &Table,
+    column: &str,
+    query: &str,
+    k: usize,
+    mode: InfinoBoolMode,
+) -> ((u64, u64), (u64, u64)) {
+    let search = fts_query_batches(rt, table, column, query, k, mode, false);
+    let fetched = fts_query_batches(rt, table, column, query, k, mode, true);
+    (payload_bytes(&search), payload_bytes(&fetched))
+}
+
+fn fts_read_count(
+    rt: &Runtime,
+    table: &Table,
+    column: &str,
+    query: &str,
+    mode: InfinoBoolMode,
+) -> u64 {
+    // Normal-SQL count of the FTS match: attach the query to the live
+    // lance provider and let DataFusion aggregate COUNT(*) in the engine
+    // pipeline — only the scalar crosses, same as infino's count path
+    // returns a count, not ids.
+    let fts_query = FullTextSearchQuery::new_query(battery_query(column, query, mode));
+    rt.block_on(async {
+        let adapter = BaseTableAdapter::try_new(table.base_table().clone())
+            .await
+            .expect("adapt lance table for datafusion")
+            .with_fts_query(fts_query);
+        let ctx = SessionContext::new();
+        ctx.register_table(FTS_COUNT_VIEW, Arc::new(adapter))
+            .expect("register fts count provider");
+        let batches = ctx
+            .sql(FTS_COUNT_SQL)
+            .await
+            .expect("plan fts count")
+            .collect()
+            .await
+            .expect("collect fts count");
+        scalar_i64(&batches) as u64
+    })
+}
+
+impl FtsRead for LanceFtsIndex {
+    fn bm25_rows(&self, column: &str, query: &str, k: usize, mode: InfinoBoolMode) -> usize {
+        fts_read_rows(&self.rt, self.table(), column, query, k, mode, false)
+    }
+
+    fn bm25_rows_fetched(
+        &self,
+        column: &str,
+        query: &str,
+        k: usize,
+        mode: InfinoBoolMode,
+    ) -> usize {
+        fts_read_rows(&self.rt, self.table(), column, query, k, mode, true)
+    }
+
+    fn bm25_payloads(
+        &self,
+        column: &str,
+        query: &str,
+        k: usize,
+        mode: InfinoBoolMode,
+    ) -> ((u64, u64), (u64, u64)) {
+        fts_read_payloads(&self.rt, self.table(), column, query, k, mode)
+    }
+
+    fn count_matching(&self, column: &str, query: &str, mode: InfinoBoolMode) -> u64 {
+        fts_read_count(&self.rt, self.table(), column, query, mode)
+    }
+}
+
+/// Cold-tier guard: one fresh connection + table open per instance, so
+/// the shared `exec_fts::measure_cold` driver times the open and the
+/// first query separately, for both phases on separate fresh opens.
+pub struct LanceFtsColdGuard<'a> {
+    index: &'a LanceFtsIndex,
+    table: Table,
+}
+
+impl<'a> LanceFtsColdGuard<'a> {
+    pub fn open(index: &'a LanceFtsIndex) -> Self {
+        Self {
+            table: index.cold_open(),
+            index,
+        }
+    }
+}
+
+impl FtsRead for LanceFtsColdGuard<'_> {
+    fn bm25_rows(&self, column: &str, query: &str, k: usize, mode: InfinoBoolMode) -> usize {
+        fts_read_rows(&self.index.rt, &self.table, column, query, k, mode, false)
+    }
+
+    fn bm25_rows_fetched(
+        &self,
+        column: &str,
+        query: &str,
+        k: usize,
+        mode: InfinoBoolMode,
+    ) -> usize {
+        fts_read_rows(&self.index.rt, &self.table, column, query, k, mode, true)
+    }
+
+    fn bm25_payloads(
+        &self,
+        column: &str,
+        query: &str,
+        k: usize,
+        mode: InfinoBoolMode,
+    ) -> ((u64, u64), (u64, u64)) {
+        fts_read_payloads(&self.index.rt, &self.table, column, query, k, mode)
+    }
+
+    fn count_matching(&self, column: &str, query: &str, mode: InfinoBoolMode) -> u64 {
+        fts_read_count(&self.index.rt, &self.table, column, query, mode)
+    }
+}
+
 fn delete_index(index: LanceFtsIndex) {
-    if matches!(index.location.storage, LanceStorage::S3) {
+    if matches!(index.location.storage, LanceStorage::Remote) {
         let uri = index.location.uri.clone();
         let storage_options = index.location.storage_options.clone();
         index.rt.block_on(async move {
@@ -336,6 +539,7 @@ impl FtsEngine for LanceFtsEngine {
             vector: true,
             sql: true,
             hybrid: true,
+            ..Default::default()
         }
     }
 
@@ -368,7 +572,7 @@ impl FtsEngine for LanceS3FtsEngine {
     type Index = LanceFtsIndex;
 
     fn name() -> &'static str {
-        "lancedb-s3"
+        lance_peer_label()
     }
 
     fn capabilities() -> Capabilities {
@@ -376,7 +580,7 @@ impl FtsEngine for LanceS3FtsEngine {
     }
 
     fn create(column: &str) -> Self::Index {
-        create_index(column, LanceLocation::s3("fts"))
+        create_index(column, LanceLocation::object_store("fts"))
     }
 
     fn write(index: &mut Self::Index, docs: &[(u64, &str)]) {

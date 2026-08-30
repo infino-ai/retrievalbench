@@ -95,6 +95,7 @@ impl FtsEngine for TantivyFtsEngine {
             vector: false,
             sql: false,
             hybrid: false,
+            ..Default::default()
         }
     }
 

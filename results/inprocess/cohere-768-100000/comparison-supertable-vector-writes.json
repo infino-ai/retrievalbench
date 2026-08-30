@@ -1,0 +1,19 @@
+{
+  "comparison/supertable/vector/writes|Append / delete|infino append 1 row|Peak RSS": 853229568.0,
+  "comparison/supertable/vector/writes|Append / delete|lancedb delete 1 row|Peak RSS": 807821312.0,
+  "comparison/supertable/vector/writes|Append / delete|infino append 1 row|Wall/op": 15745918.625,
+  "comparison/supertable/vector/writes|Append / delete|infino append 100 rows|Wall/op": 298066417.0,
+  "comparison/supertable/vector/writes|Append / delete|lancedb add 100 rows|Wall/op": 1973864.0,
+  "comparison/supertable/vector/writes|Append / delete|lancedb delete 100 rows|Peak RSS": 808316928.0,
+  "__corpus": 1904754353013293.0,
+  "comparison/supertable/vector/writes|Append / delete|infino append 100 rows|Peak RSS": 1541578752.0,
+  "comparison/supertable/vector/writes|Append / delete|lancedb delete 1 row|Wall/op": 3760564.875,
+  "comparison/supertable/vector/writes|Append / delete|lancedb add 1 row|Wall/op": 1026557.1249999999,
+  "comparison/supertable/vector/writes|Append / delete|lancedb add 1 row|Peak RSS": 771751936.0,
+  "comparison/supertable/vector/writes|Append / delete|infino delete 100 rows|Peak RSS": 673648640.0,
+  "comparison/supertable/vector/writes|Append / delete|infino delete 100 rows|Wall/op": 11871069.0,
+  "comparison/supertable/vector/writes|Append / delete|infino delete 1 row|Peak RSS": 677777408.0,
+  "comparison/supertable/vector/writes|Append / delete|infino delete 1 row|Wall/op": 5954117.75,
+  "comparison/supertable/vector/writes|Append / delete|lancedb delete 100 rows|Wall/op": 6151015.0,
+  "comparison/supertable/vector/writes|Append / delete|lancedb add 100 rows|Peak RSS": 776306688.0
+}

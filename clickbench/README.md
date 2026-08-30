@@ -134,4 +134,15 @@ The rest of the field is linked from [FULL_COMPARISON.md](FULL_COMPARISON.md) ra
 
 ## Updating
 
-These files are meant to be refreshed programmatically. A later pass will add a script that turns a `clickbench-cloud` run-log artifact into `results/infino/<machine>.json`, so a new machine or a new run is one command. Reference numbers are re-read from upstream ClickBench.
+These files are meant to be refreshed programmatically. From a
+`clickbench-cloud` run-log artifact:
+
+```sh
+python3 scripts/ingest_clickbench_log.py \
+  --log /tmp/clickbench.log \
+  --machine c8g.metal-48xl \
+  --infino-ref <commit-sha> \
+  --out clickbench/results/infino/c8g.metal-48xl.json
+```
+
+Reference numbers are re-read from upstream ClickBench.

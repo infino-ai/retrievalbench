@@ -1,0 +1,19 @@
+{
+  "comparison/supertable/vector/lancedb||0.99 bar|cold open (median)": 69808276.0,
+  "comparison/supertable/vector/lancedb||default|cold 1st query (median)": 101113120.0,
+  "comparison/supertable/vector/lancedb||0.99 bar|Median RSS": 961564672.0,
+  "comparison/supertable/vector/lancedb||default|warm p90": 9223280.0,
+  "comparison/supertable/vector/lancedb||default|Median RSS": 2218409984.0,
+  "comparison/supertable/vector/lancedb||0.99 bar|warm p50": 112430890.0,
+  "comparison/supertable/vector/lancedb||default|Peak RSS": 2218418176.0,
+  "comparison/supertable/vector/lancedb||0.99 bar|warm p90": 205379665.0,
+  "comparison/supertable/vector/lancedb||default|warm p99": 13475518.0,
+  "comparison/supertable/vector/lancedb||default|warm p50": 7919920.0,
+  "comparison/supertable/vector/lancedb||0.99 bar|cold 1st query (median)": 365954490.0,
+  "__corpus": 1904754353013293.0,
+  "comparison/supertable/vector/lancedb||0.99 bar|warm p99": 318522783.0,
+  "comparison/supertable/vector/lancedb||0.99 bar|P90 RSS": 1070755840.0,
+  "comparison/supertable/vector/lancedb||0.99 bar|Peak RSS": 1073643520.0,
+  "comparison/supertable/vector/lancedb||default|cold open (median)": 71124720.0,
+  "comparison/supertable/vector/lancedb||default|P90 RSS": 2218418176.0
+}

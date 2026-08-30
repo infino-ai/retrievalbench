@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "run_id": "cohere-768-100000",
+  "corpus": "parquet:/mnt/scratch/corpora/cohere-100000",
+  "docs": 100000,
+  "host": "Host: AMD EPYC 9V74 80-Core Processor \u00b7 8 logical cores \u00b7 63 GiB RAM \u00b7 linux/x86_64",
+  "retrievalbench_commit": "691b8422edb41facee4cff4535a6c19980b1eca3",
+  "dependencies": {
+    "faiss": "0.13.0",
+    "infino": "0.5.9 (d75d14a73c7e)",
+    "lancedb": "0.37.1",
+    "tantivy": "0.26.1",
+    "turbovec": "1.0.0 (ccab9f325e6c)"
+  },
+  "command": "./scripts/run_track_a.sh cohere-768-100000 100000 parquet:/mnt/scratch/corpora/cohere-100000 /mnt/scratch/corpora",
+  "published_at": "2026-08-27T08:54:11.598411+00:00",
+  "dirty": false
+}
