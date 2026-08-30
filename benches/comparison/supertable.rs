@@ -7,36 +7,26 @@
 //! `infino_bench_utils::supertable::{fts,vector,sql}::run(Phases)`, called
 //! verbatim — so its protocol, tables, and report JSON are identical to
 //! `cargo bench -- supertable <modality>` in the infino repo. This file
-//! adds only what bench-utils cannot ship: the LanceDB peer, built from
-//! the same corpus generators and seeds, ingested through the shared
-//! engine-generic drivers, and searched at its own shipped defaults via
-//! the shared `exec_vec` primitives (recall reported, not floor-gated).
+//! adds the comparison-only cells — the codec table and the write
+//! cells — on top of those.
 
 use std::{env, sync::Arc, time::Duration};
 
 use infino::config::{VectorSearchMode, global as engine_config};
-use infino_bench_utils::corpus::{self, MmapTextCorpus};
-use infino_bench_utils::executors::fts::FTS_BATTERY;
-use infino_bench_utils::executors::sql::SQL_BATTERY;
+use infino_bench_utils::corpus;
 use infino_bench_utils::harness::{
-    FtsQuery, SqlQuery, SqlRunConfig, VectorBuildStat, VectorEngine, VectorMetric, VectorQuery,
-    VectorRunConfig, VectorSearch, run_fts, run_fts_with_index, run_sql, run_sql_with_index,
-    run_vector, run_vector_with_index,
+    VectorBuildStat, VectorEngine, VectorMetric, VectorQuery, VectorRunConfig, VectorSearch,
+    run_vector_with_index,
 };
-use infino_bench_utils::ingest::supertable::{self, TEXT_COLUMN, VEC_COLUMN};
-use infino_bench_utils::markdown::{fmt_count, fmt_throughput, fmt_time};
+use infino_bench_utils::ingest::supertable::{self, VEC_COLUMN};
+use infino_bench_utils::markdown::{fmt_count, fmt_time};
 use infino_bench_utils::report::{Better, Block, Cell, Report, Section, metric, text};
 use infino_bench_utils::rss;
-use infino_bench_utils::superfile::sql::sql_rows;
 use infino_bench_utils::supertable::{self as st_bench, Phases};
 use infino_bench_utils::tiers;
-use retrievalbench::{LanceS3FtsEngine, LanceS3SqlEngine, LanceS3VectorEngine, lance_peer_label};
 
-const EMPTY_FTS_QUERIES: &[FtsQuery] = &[];
 const EMPTY_VECTOR_QUERIES: &[VectorQuery<'_>] = &[];
-const EMPTY_SQL_QUERIES: &[SqlQuery] = &[];
 const WARM_ITERS: usize = 20;
-const COLD_ITERS: usize = 5;
 const TOP_K: usize = 10;
 const THREAD_MODE_ENV: &str = "INFINO_BENCH_THREAD_MODE";
 /// The `k` knots reported for each codec rung. A coarse codec loses the
@@ -54,208 +44,8 @@ const RECALL_KS_DEEPEST: usize = 100;
 /// pass, which is parallel and seconds at these corpus sizes.
 const CURVE_QUERIES: usize = 200;
 
-fn lance_fts_ingest_row(n_docs: usize) -> Vec<Cell> {
-    eprintln!(
-        "[comparison-supertable] building LanceDB FTS-only peer on the object store over {} docs...",
-        fmt_count(n_docs)
-    );
-    let corpus = MmapTextCorpus::generate(n_docs, 1);
-    let docs = corpus.rows();
-    let result = run_fts::<LanceS3FtsEngine>(TEXT_COLUMN, &docs, EMPTY_FTS_QUERIES, 10, 1, 1);
-    let build = result
-        .builds
-        .first()
-        .expect("lancedb object-store build row");
-    let secs = build.phase.wall.as_secs_f64();
-    let wall_ns = secs * 1e9;
-    let throughput = if secs > 0.0 {
-        n_docs as f64 / secs
-    } else {
-        0.0
-    };
-    vec![
-        text("LanceDB FTS-only"),
-        metric(wall_ns, fmt_time(wall_ns), Better::Lower),
-        metric(throughput, fmt_throughput(throughput), Better::Higher),
-        text("—"),
-        metric(
-            build.phase.rss.peak_rss_bytes as f64,
-            rss::fmt_bytes(build.phase.rss.peak_rss_bytes),
-            Better::Lower,
-        ),
-        metric(
-            build.phase.rss.median_rss_bytes as f64,
-            rss::fmt_bytes(build.phase.rss.median_rss_bytes),
-            Better::Lower,
-        ),
-        metric(
-            build.phase.rss.p90_rss_bytes as f64,
-            rss::fmt_bytes(build.phase.rss.p90_rss_bytes),
-            Better::Lower,
-        ),
-    ]
-}
-
-fn lance_vector_ingest_row(n_docs: usize) -> Vec<Cell> {
-    eprintln!(
-        "[comparison-supertable] building LanceDB vector-only peer on the object store over {} docs...",
-        fmt_count(n_docs)
-    );
-    let prepared = supertable::prepare_corpus(supertable::Modality::Vector);
-    let vectors = prepared
-        .vectors()
-        .expect("vector modality prepares a vector corpus");
-    let cfg = VectorRunConfig {
-        column: VEC_COLUMN,
-        dim: corpus::dim(),
-        metric: VectorMetric::Cosine,
-        k: TOP_K,
-        iters: 1,
-        parallel: 1,
-    };
-    let vslice = &vectors.as_slice()[..n_docs * corpus::dim()];
-    let result = run_vector::<LanceS3VectorEngine>(cfg, vslice, EMPTY_VECTOR_QUERIES);
-    let build = result
-        .builds
-        .first()
-        .expect("lancedb object-store vector build row");
-    let secs = build.wall.as_secs_f64();
-    let wall_ns = secs * 1e9;
-    let throughput = if secs > 0.0 {
-        n_docs as f64 / secs
-    } else {
-        0.0
-    };
-    vec![
-        text("LanceDB vector-only"),
-        metric(wall_ns, fmt_time(wall_ns), Better::Lower),
-        metric(throughput, fmt_throughput(throughput), Better::Higher),
-        text("—"),
-        metric(
-            build.rss.peak_rss_bytes as f64,
-            rss::fmt_bytes(build.rss.peak_rss_bytes),
-            Better::Lower,
-        ),
-        metric(
-            build.rss.median_rss_bytes as f64,
-            rss::fmt_bytes(build.rss.median_rss_bytes),
-            Better::Lower,
-        ),
-        metric(
-            build.rss.p90_rss_bytes as f64,
-            rss::fmt_bytes(build.rss.p90_rss_bytes),
-            Better::Lower,
-        ),
-    ]
-}
-
-fn lance_sql_ingest_row(n_docs: usize) -> Vec<Cell> {
-    eprintln!(
-        "[comparison-supertable] building LanceDB SQL peer on the object store over {} docs...",
-        fmt_count(n_docs)
-    );
-    let corpus = MmapTextCorpus::generate(n_docs, 1);
-    let corpus_rows = corpus.rows();
-    let rows = sql_rows(&corpus_rows);
-    let cfg = SqlRunConfig {
-        iters: 1,
-        parallel: 1,
-    };
-    let result = run_sql::<LanceS3SqlEngine>(cfg, &rows, EMPTY_SQL_QUERIES);
-    let build = result
-        .builds
-        .first()
-        .expect("lancedb object-store sql build row");
-    let secs = build.wall.as_secs_f64();
-    let wall_ns = secs * 1e9;
-    let throughput = if secs > 0.0 {
-        n_docs as f64 / secs
-    } else {
-        0.0
-    };
-    vec![
-        text("LanceDB SQL"),
-        metric(wall_ns, fmt_time(wall_ns), Better::Lower),
-        metric(throughput, fmt_throughput(throughput), Better::Higher),
-        text("—"),
-        metric(
-            build.rss.peak_rss_bytes as f64,
-            rss::fmt_bytes(build.rss.peak_rss_bytes),
-            Better::Lower,
-        ),
-        metric(
-            build.rss.median_rss_bytes as f64,
-            rss::fmt_bytes(build.rss.median_rss_bytes),
-            Better::Lower,
-        ),
-        metric(
-            build.rss.p90_rss_bytes as f64,
-            rss::fmt_bytes(build.rss.p90_rss_bytes),
-            Better::Lower,
-        ),
-    ]
-}
-
-/// The peer ingest table. Infino's ingest table (isolated shape
-/// subprocesses) is emitted by infino's own bench cells running in this
-/// same invocation; this section adds only the LanceDB rows, once per
-/// process.
-pub fn run() {
-    static INGEST_ONCE: std::sync::Once = std::sync::Once::new();
-    let mut first = false;
-    INGEST_ONCE.call_once(|| first = true);
-    if !first {
-        return;
-    }
-
-    if let Err(reason) = tiers::supertable_backend_check() {
-        eprintln!("[comparison-supertable] skipped: {reason}");
-        return;
-    }
-
-    let n_docs = supertable::n_docs();
-    let rows = vec![
-        lance_fts_ingest_row(n_docs),
-        lance_vector_ingest_row(n_docs),
-        lance_sql_ingest_row(n_docs),
-    ];
-
-    let mut report = Report::load("comparison-supertable");
-    report.emit(&Section {
-        anchor: "comparison/supertable/ingest".into(),
-        title: format!(
-            "Supertable comparison — {} ingest, object store ({} docs × dim={})",
-            lance_peer_label(),
-            fmt_count(n_docs),
-            corpus::dim()
-        ),
-        note: "LanceDB peer ingest rows, driven by the shared `run_fts`/`run_vector`/`run_sql` \
-               drivers with object-store-configured adapters (INFINO_BENCH_STORE: s3 or azure). \
-               The Infino ingest table (isolated shape subprocesses) is emitted by infino's own \
-               supertable bench cells running in this same invocation."
-            .into(),
-        blocks: vec![Block {
-            subtitle: "Ingest".into(),
-            headers: vec![
-                "Shape".into(),
-                "Time".into(),
-                "Throughput".into(),
-                "Superfiles".into(),
-                "Peak RSS".into(),
-                "Median RSS".into(),
-                "P90 RSS".into(),
-            ],
-            rows,
-        }],
-    });
-    report.save();
-}
-
 pub mod fts {
     use super::*;
-    use infino_bench_utils::executors::fts as exec_fts;
-    use infino_bench_utils::executors::fts::FtsRead;
-    use retrievalbench::lance::fts::LanceFtsColdGuard;
 
     pub fn run(build: bool, warm: bool, cold: bool) {
         if let Err(reason) = tiers::supertable_backend_check() {
@@ -264,111 +54,12 @@ pub mod fts {
         }
         // Infino: infino's own supertable FTS bench cell, verbatim.
         st_bench::fts::run(Phases { build, warm, cold });
-        if build {
-            super::run();
-        }
-        if !(warm || cold) {
-            return;
-        }
-
-        // Peer: LanceDB dataset from the same corpus generator; the
-        // batteries below run through the SAME `exec_fts` protocol
-        // machinery infino's cell uses (search + fetch phases, count,
-        // cold on fresh opens) — only the `FtsRead` impl is lance's.
-        let n_docs = supertable::n_docs();
-        let corpus = MmapTextCorpus::generate(n_docs, 1);
-        let docs = corpus.rows();
-        let (_build, lance_index) = run_fts_with_index::<LanceS3FtsEngine>(
-            TEXT_COLUMN,
-            &docs,
-            EMPTY_FTS_QUERIES,
-            TOP_K,
-            1,
-            1,
-        );
-
-        let mut report = Report::load("comparison-supertable-fts");
-        let warm_stats = warm.then(|| {
-            // Prewarm every battery shape once — the mirror of the
-            // in-tree cell's consumer prewarm before its warm rows.
-            for q in FTS_BATTERY {
-                let query = q.terms.join(" ");
-                let _ = lance_index.bm25_rows(
-                    TEXT_COLUMN,
-                    &query,
-                    TOP_K,
-                    exec_fts::to_infino_mode(q.mode),
-                );
-            }
-            exec_fts::measure_warm(
-                &lance_index,
-                FTS_BATTERY,
-                TEXT_COLUMN,
-                TOP_K,
-                WARM_ITERS,
-                "comparison-supertable-fts/lancedb",
-            )
-        });
-        let counts = warm.then(|| {
-            exec_fts::measure_count(
-                &lance_index,
-                FTS_BATTERY,
-                TEXT_COLUMN,
-                WARM_ITERS,
-                "comparison-supertable-fts/lancedb",
-            )
-        });
-        let cold_stats = cold.then(|| {
-            exec_fts::measure_cold(
-                || LanceFtsColdGuard::open(&lance_index),
-                FTS_BATTERY,
-                TEXT_COLUMN,
-                TOP_K,
-                COLD_ITERS,
-                true,
-                "comparison-supertable-fts/lancedb",
-            )
-        });
-        exec_fts::emit_search(
-            &mut report,
-            "comparison/supertable/fts/lancedb",
-            format!(
-                "Supertable FTS — {}, queries + cost ({} docs)",
-                lance_peer_label(),
-                fmt_count(n_docs)
-            ),
-            "Peer battery through the same `exec_fts` protocol as infino's own cell: \
-             search phase (id + score) and fetch phase (+ top-k text), cold on fresh \
-             table opens per iteration. Infino's tables are emitted by its own bench \
-             cell in this same invocation.",
-            warm_stats.as_deref(),
-            cold_stats.as_ref(),
-            None,
-        );
-        if let Some(counts) = &counts {
-            exec_fts::emit_count(
-                &mut report,
-                "comparison/supertable/fts/lancedb/count",
-                format!(
-                    "Supertable FTS — {}, count ({} docs)",
-                    lance_peer_label(),
-                    fmt_count(n_docs)
-                ),
-                "Count via normal SQL: COUNT(*) aggregated in the engine pipeline over \
-                 the FTS-matched lance provider — only the scalar crosses, matching \
-                 infino's count path returning a count, not ids.",
-                counts,
-            );
-        }
-        report.save();
     }
 }
 
 pub mod vector {
     use super::*;
-    use crate::superfile::vector::peer_default_rows;
     use infino_bench_utils::executors::vector as exec_vec;
-    use retrievalbench::lance::vector::LanceVecColdGuard;
     // Compressed-flat peers, kept separate from table-level search.
     use infino_bench_utils::cpu;
     use infino_bench_utils::rss::PeakSampler;
@@ -890,98 +581,11 @@ pub mod vector {
         // ingest shapes, default (law-served) search, recall floors, and
         // its report tables all come from bench-utils unchanged.
         st_bench::vector::run(Phases { build, warm, cold });
-        if build {
-            super::run();
-        }
-        if !(warm || cold) {
-            return;
-        }
-
-        // Peer: LanceDB over the SAME corpus infino just ingested —
-        // `prepare_corpus` is the selector infino's own cell uses, so a
-        // real dataset (annb / hf / parquet) and the synthetic generator
-        // both land here identically and the two engines can never index
-        // different bytes.
-        let n_docs = supertable::n_docs();
-        let prepared = supertable::prepare_corpus(supertable::Modality::Vector);
-        let vectors = prepared
-            .vectors()
-            .expect("vector modality prepares a vector corpus");
-        let cfg = VectorRunConfig {
-            column: VEC_COLUMN,
-            dim: corpus::dim(),
-            metric: VectorMetric::Cosine,
-            k: TOP_K,
-            iters: WARM_ITERS,
-            parallel: 1,
-        };
-        // `prepare_corpus` materializes base + one delta commit; index
-        // and grade the ingested prefix only, as infino's cell does.
-        let vslice = &vectors.as_slice()[..n_docs * corpus::dim()];
-        let (_lance_build, lance_index) =
-            run_vector_with_index::<LanceS3VectorEngine>(cfg, vslice, EMPTY_VECTOR_QUERIES);
-
-        // Same held-out query protocol as infino's own bench cell:
-        // `bench_queries` dispatches by corpus — the dataset's own test
-        // set for annb, rows past the ingested prefix for parquet/hf,
-        // perturbed corpus members for synthetic.
-        let q_corr = corpus::bench_queries(
-            vslice,
-            n_docs,
-            exec_vec::N_CORRECTNESS_QUERIES,
-            exec_vec::QUERY_CORRECTNESS_SEED,
-            true,
-            exec_vec::QUERY_SIGMA,
-        );
-        let gt_corr = retrievalbench::cohere::ground_truth(
-            corpus::corpus_source(),
-            n_docs,
-            q_corr.len(),
-            TOP_K,
-        )
-        .unwrap_or_else(|| corpus::ground_truth(vslice, n_docs, &q_corr, TOP_K));
-
-        let mut report = Report::load("comparison-supertable-vector");
-        let lance_rows = peer_default_rows(
-            &lance_index,
-            || LanceVecColdGuard::open(&lance_index),
-            VEC_COLUMN,
-            &q_corr,
-            &gt_corr,
-            TOP_K,
-            warm,
-            cold,
-            COLD_ITERS,
-            "comparison-supertable-vector/lancedb",
-        );
-        exec_vec::emit_recall_table(
-            &mut report,
-            "comparison/supertable/vector/lancedb",
-            format!(
-                "Supertable vector — {}, default serving ({} docs × dim={})",
-                lance_peer_label(),
-                fmt_count(n_docs),
-                corpus::dim()
-            ),
-            "Peer default row through the same `exec_vec` primitives infino's own bench \
-             uses; recall at LanceDB's own shipped search defaults is reported, not \
-             floor-gated. cold = fresh table open per iteration. Infino's search table \
-             is emitted by its own bench cell in this same invocation.",
-            &lance_rows,
-            warm,
-            cold,
-        );
-
-        report.save();
     }
 }
 
 pub mod sql {
     use super::*;
-    use infino_bench_utils::executors::ColdTiming;
-    use infino_bench_utils::executors::sql as exec_sql;
-    use retrievalbench::lance::sql::LanceSqlColdGuard;
-    use std::collections::HashMap;
 
     pub fn run(build: bool, warm: bool, cold: bool) {
         if let Err(reason) = tiers::supertable_backend_check() {
@@ -990,126 +594,5 @@ pub mod sql {
         }
         // Infino: infino's own supertable SQL bench cell, verbatim.
         st_bench::sql::run(Phases { build, warm, cold });
-        if build {
-            super::run();
-        }
-        if !(warm || cold) {
-            return;
-        }
-
-        // Peer: LanceDB dataset from the same scalar rows. Warm runs the
-        // shared `run_sql` driver battery; cold runs the shared
-        // `exec_sql::measure_cold` (fresh open per iteration, GETs
-        // metered) with the lance `SqlRead` guard.
-        let n_docs = supertable::n_docs();
-        let corpus = MmapTextCorpus::generate(n_docs, 1);
-        let corpus_rows = corpus.rows();
-        let rows = sql_rows(&corpus_rows);
-        let cfg = SqlRunConfig {
-            iters: WARM_ITERS,
-            parallel: 1,
-        };
-        let (lance_warm, lance_index) =
-            run_sql_with_index::<LanceS3SqlEngine>(cfg, &rows, SQL_BATTERY);
-
-        let mut report = Report::load("comparison-supertable-sql");
-        let warm_rows: Option<Vec<(&'static str, Duration)>> =
-            warm.then(|| lance_warm.queries.iter().map(|q| (q.name, q.p50)).collect());
-        let cold_map: Option<HashMap<&'static str, ColdTiming>> = cold.then(|| {
-            let battery: Vec<(&'static str, &str)> =
-                SQL_BATTERY.iter().map(|q| (q.name, q.sql)).collect();
-            exec_sql::measure_cold(
-                || LanceSqlColdGuard::open(&lance_index),
-                &battery,
-                COLD_ITERS,
-                "comparison-supertable-sql/lancedb",
-            )
-        });
-        emit_peer_sql(
-            &mut report,
-            "comparison/supertable/sql/lancedb",
-            format!(
-                "Supertable SQL — {} queries ({} rows)",
-                lance_peer_label(),
-                fmt_count(n_docs)
-            ),
-            "Warm = shared `run_sql` driver battery on a warmed table handle; cold = \
-             the shared `exec_sql::measure_cold` (fresh connection + provider per \
-             iteration, first real lance scan timed, object-store GETs metered where \
-             instrumented). Infino's tables are emitted by its own bench cell in this \
-             same invocation.",
-            warm_rows.as_deref(),
-            cold_map.as_ref(),
-        );
-        report.save();
-    }
-
-    /// Rendering-only: one row per battery shape from measurements the
-    /// shared drivers produced above. Never measures.
-    fn emit_peer_sql(
-        report: &mut Report,
-        anchor: &str,
-        title: String,
-        note: &str,
-        warm: Option<&[(&'static str, Duration)]>,
-        cold: Option<&HashMap<&'static str, ColdTiming>>,
-    ) {
-        const NS_PER_SEC: f64 = 1e9;
-        let mut headers = vec!["Query".to_string()];
-        if warm.is_some() {
-            headers.push("warm p50".into());
-        }
-        if cold.is_some() {
-            headers.push("cold open".into());
-            headers.push("cold 1st query".into());
-            headers.push("cold GETs".into());
-        }
-        let names: Vec<&'static str> = SQL_BATTERY.iter().map(|q| q.name).collect();
-        let rows = names
-            .iter()
-            .map(|name| {
-                let mut row = vec![text((*name).to_string())];
-                if let Some(warm) = warm {
-                    match warm.iter().find(|(n, _)| n == name) {
-                        Some((_, d)) => {
-                            let ns = d.as_secs_f64() * NS_PER_SEC;
-                            row.push(metric(ns, fmt_time(ns), Better::Lower));
-                        }
-                        None => row.push(text(String::from("—"))),
-                    }
-                }
-                if let Some(cold) = cold {
-                    match cold.get(name) {
-                        Some(c) => {
-                            let open_ns = c.open.as_secs_f64() * NS_PER_SEC;
-                            let search_ns = c.search.as_secs_f64() * NS_PER_SEC;
-                            row.push(metric(open_ns, fmt_time(open_ns), Better::Lower));
-                            row.push(metric(search_ns, fmt_time(search_ns), Better::Lower));
-                            row.push(metric(
-                                c.search_get_count as f64,
-                                format!("{}", c.search_get_count),
-                                Better::Lower,
-                            ));
-                        }
-                        None => {
-                            row.push(text(String::from("—")));
-                            row.push(text(String::from("—")));
-                            row.push(text(String::from("—")));
-                        }
-                    }
-                }
-                row
-            })
-            .collect();
-        report.emit(&Section {
-            anchor: anchor.into(),
-            title,
-            note: note.into(),
-            blocks: vec![Block {
-                subtitle: format!("{} — SQL battery", lance_peer_label()),
-                headers,
-                rows,
-            }],
-        });
     }
 }

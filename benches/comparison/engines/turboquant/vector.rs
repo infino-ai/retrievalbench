@@ -54,7 +54,7 @@ impl TurbovecVectorIndex {
     }
 }
 
-/// Shared recall-calibration hook, mirroring the Lance adapter: ids are
+/// Shared recall-calibration hook, shared across adapters: ids are
 /// insertion positions (`0..n_docs`), already global. The flat scan has
 /// no `(probe, refine)` vocabulary, so both knobs are ignored.
 impl VectorRead for TurbovecVectorIndex {
@@ -128,7 +128,7 @@ fn parallel_write_index(
         return;
     }
     // Concurrent shard builds — the same independent-shard semantics as
-    // the Infino and Lance parallel builds. Build-only; shards discarded.
+    // the Infino parallel build. Build-only; shards discarded.
     let n_docs = vectors.len() / dim;
     let docs_per_shard = n_docs.div_ceil(writers);
     std::thread::scope(|scope| {
@@ -225,7 +225,7 @@ fn load_index(
 }
 
 /// Both widths share every code path; only the constructor's bit width
-/// and the display name differ, exactly like the Lance local/S3 pair.
+/// and the display name differ, as adapters with local/remote pairs do.
 const CAPABILITIES: Capabilities = Capabilities {
     fts: false,
     vector: true,
