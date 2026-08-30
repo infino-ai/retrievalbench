@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Track A: one pinned binary, one host, all declared corpora/scales.
+# Run every comparison battery for one corpus rung on this host and
+# publish the results (host/commit/command stamped) into results/inprocess.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,7 +11,7 @@ THREADS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.logicalcpu)"
 ALLOW_DIRTY="${INFINO_BENCH_ALLOW_DIRTY:-0}"
 
 if [ "$(uname -s)" != "Linux" ] && [ "$ALLOW_DIRTY" != "1" ]; then
-  echo "official Track A publication requires Linux: PeakSampler uses /proc RSS" >&2
+  echo "official publication requires Linux: PeakSampler uses /proc RSS" >&2
   echo "set INFINO_BENCH_ALLOW_DIRTY=1 only for a non-published smoke run" >&2
   exit 2
 fi
@@ -24,14 +25,14 @@ run_one() {
   local docs="$2"
   local corpus="$3"
   local corpus_dir="$4"
-  local command="./scripts/run_track_a.sh $run_id $docs $corpus $corpus_dir"
+  local command="./scripts/publish_results.sh $run_id $docs $corpus $corpus_dir"
   local -a corpus_args=("corpus=$corpus" "corpus-dir=$corpus_dir")
 
   export INFINO_BENCH_SUPERFILE_DOCS="$docs"
   export INFINO_BENCH_SUPERTABLE_DOCS="$docs"
   rm -f "$TARGET/infino-bench"/*.json "$TARGET/infino-bench/host.txt"
 
-  echo "[track-a] run=$run_id docs=$docs corpus=$corpus threads=$THREADS"
+  echo "[publish-results] run=$run_id docs=$docs corpus=$corpus threads=$THREADS"
 
   # The codec cells compare RAM-resident quantized indexes, so infino's
   # arm serves the shipped resident-plane mode: one YAML line, applied
@@ -45,19 +46,19 @@ run_one() {
     XDG_CONFIG_HOME="$FLAT_CFG_HOME" \
     RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 \
     cargo bench --features faiss --bench bench -- \
-      track-a-codec "${corpus_args[@]}"
+      vector-codec "${corpus_args[@]}"
 
   INFINO_BENCH_THREAD_MODE=box-threads \
     XDG_CONFIG_HOME="$FLAT_CFG_HOME" \
     RAYON_NUM_THREADS="$THREADS" OMP_NUM_THREADS="$THREADS" \
     cargo bench --features faiss --bench bench -- \
-      track-a-codec "${corpus_args[@]}"
+      vector-codec "${corpus_args[@]}"
 
   rm -rf "$FLAT_CFG_HOME"
 
   RAYON_NUM_THREADS="$THREADS" OMP_NUM_THREADS="$THREADS" \
     cargo bench --features faiss --bench bench -- \
-      track-a-writes "${corpus_args[@]}"
+      table-writes "${corpus_args[@]}"
 
   RAYON_NUM_THREADS="$THREADS" OMP_NUM_THREADS="$THREADS" \
     cargo bench --features faiss --bench bench -- \

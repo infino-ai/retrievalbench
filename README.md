@@ -14,13 +14,13 @@ board until this repo is public.
 | **C** | Infino-only cost | none (GET count, bytes/query, $/month, cold vs warm) | 100K → 100M | in-process harness + committed JSON |
 | **D** | Full-Wikipedia FTS | Tantivy, Lucene, … (out of process, HTTP-timed) | fixed Wikipedia corpus | [`search-benchmark/`](search-benchmark/README.md) |
 
-Track A stops at 10M because RAM does. A 100M × 768-d corpus is 307 GB as
-float32 and 38 GB even at 4-bit; it does not fit on the Track A/C box. Infino
+the single-host comparison suite stops at 10M because RAM does. A 100M × 768-d corpus is 307 GB as
+float32 and 38 GB even at 4-bit; it does not fit on the the single-host comparison suite/C box. Infino
 serves that scale from object storage — that is Track C, and the absence of a
 comparator column is the result.
 
 Track D is single-threaded, full-Wikipedia, HTTP-timed. Do not fold those
-numbers into a Track A table.
+numbers into a the single-host comparison suite table.
 
 ## Hardware
 
@@ -31,16 +31,16 @@ numbers into a Track A table.
 | ClickBench | `c6a.4xlarge` (reference) and `c8g.metal-48xl` (leaderboard) — see [`clickbench/`](clickbench/README.md) |
 | D | AWS `c7i.2xlarge` (matches turbopuffer's published instance) |
 
-## Invocation (Track A)
+## Invocation (the single-host comparison suite)
 
 ```sh
 cargo bench -- [tier] [modality] [phase ...]
 # Full declared matrix: dbpedia-1536 + glove-200 + Cohere-768,
 # 100K / 1M / 10M where each corpus exists.
-./scripts/run_track_a.sh
+./scripts/publish_results.sh
 
 # One development cell:
-INFINO_BENCH_ALLOW_DIRTY=1 ./scripts/run_track_a.sh \
+INFINO_BENCH_ALLOW_DIRTY=1 ./scripts/publish_results.sh \
   glove-200-100k 100000 annb:glove-200-angular target/corpora
 ```
 

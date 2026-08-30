@@ -97,8 +97,8 @@ struct Phases {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SpecialCell {
-    TrackACodec,
-    TrackAWrites,
+    VectorCodec,
+    TableWrites,
 }
 
 const ALL_PHASES: Phases = Phases {
@@ -144,7 +144,7 @@ fn print_usage_and_exit(code: i32) -> ! {
          Modality  : fts | vector | sql            (omitted => all three)\n\
          Phase     : build | warm | cold | search  (search = warm+cold; omitted => all)\n\
          all       : every tier x modality x phase (the default for a bare `cargo bench`)\n\
-         Special   : track-a-codec | track-a-writes\n\
+         Special   : vector-codec | table-writes\n\
          corpus=<spec>     : synthetic (default) | annb:<slug> | hf:<owner/repo> | parquet:<dir>\n\
          corpus-dir=<path> : where downloadable corpora are staged\n\
          \n\
@@ -207,8 +207,8 @@ fn parse_args() -> (Vec<Tier>, Vec<Modality>, Phases, Option<SpecialCell>) {
                     modalities.push(Modality::Sql);
                 }
             }
-            "track-a-codec" => special = Some(SpecialCell::TrackACodec),
-            "track-a-writes" => special = Some(SpecialCell::TrackAWrites),
+            "vector-codec" => special = Some(SpecialCell::VectorCodec),
+            "table-writes" => special = Some(SpecialCell::TableWrites),
             "build" => build = true,
             "warm" => warm = true,
             "cold" => cold = true,
@@ -284,11 +284,11 @@ fn main() {
 
     let (tiers, modalities, phases, special) = parse_args();
     match special {
-        Some(SpecialCell::TrackACodec) => {
+        Some(SpecialCell::VectorCodec) => {
             supertable::vector::codec_curve();
             return;
         }
-        Some(SpecialCell::TrackAWrites) => {
+        Some(SpecialCell::TableWrites) => {
             table_writes::run();
             return;
         }
