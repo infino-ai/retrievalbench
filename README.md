@@ -20,15 +20,9 @@ each library reached through its own public API. Infino's row is the shipped
 → `optimize()`), serving the resident 4-bit plane that one config line
 selects.
 
-Measured at dbpedia-1536, 100K rows, top-10 (box threads):
+Measured at dbpedia-1536, 100K rows, top-10:
 
-| engine | recall@10 | warm p50 | resident |
-|---|---|---|---|
-| Infino `flat_ivf` | 0.934 | 1.51 ms | 74.8 MiB |
-| turbovec 4-bit | 0.944 | 1.55 ms | 75.2 MiB |
-| turbovec 2-bit | 0.835 | 0.42 ms | 37.8 MiB |
-| FAISS PQ fastscan | 0.672 | 4.38 ms | 74.1 MiB |
-| FAISS PQ 8-bit | 0.943 | 45.3 ms | 75.5 MiB |
+![Quantized vector indexes vs embedded libraries](docs/assets/compare-embedded.svg)
 
 Reproduce that table with plain `cargo bench` (the corpus downloads once):
 
@@ -42,9 +36,9 @@ INFINO_BENCH_SUPERTABLE_DOCS=100000 \
 Add `--features faiss` (after `scripts/build_faiss.sh`, which builds the
 exact FAISS source faiss-rs bundles, with `-march=native` — without it
 FastScan silently runs scalar) for the FAISS rows. Remove `infino.yaml`
-before running other cells; everything else measures shipped defaults.
+before running other benchmarks; everything else measures shipped defaults.
 
-To regenerate the committed results — every battery for one corpus rung,
+To regenerate the committed results — every benchmark for one corpus,
 both thread modes, publisher refusing a dirty tree and stamping
 host/commit/command into `run.json`:
 
@@ -61,52 +55,47 @@ YAML-only; environment variables never change it.
 
 ## Vector databases
 
-Runs through [VectorDBBench](https://github.com/zilliztech/VectorDBBench)
-via [our client](https://github.com/infino-ai/VectorDBBench/tree/main/vectordb_bench/backend/clients/infino),
-dispatched to a VM whose instance type is recorded per run.
+![Vector search vs vector databases](docs/assets/compare-vdb.svg)
 
-Viewer (stable URL): **https://vdbbench-viewer-q6unoyyhua-uc.a.run.app**
+Runs through [VectorDBBench](https://github.com/zilliztech/VectorDBBench) via
+[our client](https://github.com/infino-ai/VectorDBBench/tree/main/vectordb_bench/backend/clients/infino);
+the public leaderboard is at
+[zilliz.com/vdbbench-leaderboard](https://zilliz.com/vdbbench-leaderboard?dataset=vectorSearch).
+To run it yourself, the same way as any engine on that board:
 
 ```sh
-gh workflow run vdbbench-vector.yml --repo infino-ai/retrievalbench \
-  -f vector_case=Performance768D1M -f publish_results=true
+git clone https://github.com/infino-ai/VectorDBBench && cd VectorDBBench
+pip install -e .
+init_bench
 ```
 
-Docs: [`vdbbench-viewer/README.md`](vdbbench-viewer/README.md).
-
 ## SQL on ClickBench
+
+![SQL vs analytic engines](docs/assets/compare-sql.svg)
+
+![SQL vs search engines](docs/assets/compare-sql-search.svg)
 
 Runs through [our port](https://github.com/infino-ai/clickbench/tree/add-infino/infino)
 of the public [ClickBench](https://benchmark.clickhouse.com/) suite.
 Headline on c8g.metal-48xl: hot sum **6.45 s**, geomean **0.090** — #17 of
 60 systems. Details and per-machine results: [`clickbench/`](clickbench/README.md).
 
-Refresh a result from a `clickbench-cloud` log artifact:
-
-```sh
-python3 scripts/ingest_clickbench_log.py \
-  --log /tmp/clickbench.log \
-  --machine c8g.metal-48xl \
-  --infino-ref <commit-sha> \
-  --out clickbench/results/infino/c8g.metal-48xl.json
-```
-
 ## Full-text at Wikipedia scale
+
+![Full-text vs search libraries](docs/assets/compare-fts.svg)
 
 [Search Benchmark, the Game](https://tantivy-search.github.io/bench/) via
 [our fork](https://github.com/infino-ai/search-benchmark-game) —
-single-threaded, full-Wikipedia, HTTP-timed. Dispatch
-`searchbenchmark-cloud.yml` or use the game's own nightly; see
-[`search-benchmark/README.md`](search-benchmark/README.md). Do not fold these
-numbers into the in-process tables: the measurement model is different.
+single-threaded, full-Wikipedia, HTTP-timed, so not comparable to the
+in-process tables. See [`search-benchmark/README.md`](search-benchmark/README.md).
 
 
 ## Hardware
 
 | Suite | Machine |
 |---|---|
-| In-process (embedded, cost) | recorded in each run's `results/inprocess/<run>/run.json`; official RSS runs require Linux |
+| In-process (embedded, cost) | recorded in each run's `results/inprocess/<run>/run.json` (memory figures recorded on Linux) |
 | Vector databases | dispatched VM, instance type recorded per run |
 | ClickBench | `c6a.4xlarge` (reference) and `c8g.metal-48xl` (leaderboard) |
-| Full-text | AWS `c7i.2xlarge` (matches turbopuffer's published instance) |
+| Full-text | AWS `c7i.2xlarge` |
 
