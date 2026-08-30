@@ -24,10 +24,6 @@ publish = false
 infino-bench-utils = { git = "https://github.com/infino-ai/infino.git", rev = "447ff2fc83b6308e36eb27ec5218f8bd30261c62" }
 infino = { git = "https://github.com/infino-ai/infino.git", rev = "447ff2fc83b6308e36eb27ec5218f8bd30261c62", features = ["test-helpers"] }
 tantivy = "0.26.1"
-# Async — driven through a
-# small tokio runtime inside the adapter. Brings its own arrow; the
-# harness only bridges plain corpus types across the boundary.
-lancedb = { version = "0.37.1", features = ["aws", "azure"] }
 # TurboQuant compressed flat index — pinned to the 1.0.0 release SHA so
 # measured numbers are attributable to exact code.
 turbovec = { git = "https://github.com/RyanCodrai/turbovec.git", rev = "ccab9f325e6ce2a270a87daf01ae4e443bcf2d49" }
@@ -41,20 +37,17 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 # quietly fell back to a different serving mode is exactly what this
 # harness must never publish. RUST_LOG=infino=warn surfaces them.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-# Arrow at the exact version lancedb 0.37 resolves to (== infino's 58.3.0),
-# used to build the RecordBatches handed to LanceDB. futures drives the
-# async result stream; tempfile backs the local (in-memory tier) dataset.
+# Arrow at infino's version (58.3.0), used to build RecordBatches for
+# ingest and to read real-corpus parquet. futures drives async result
+# streams; tempfile backs local-tier scratch datasets.
 arrow-array = "58"
 arrow-schema = "58"
 parquet = "58"
 futures = "0.3"
 tempfile = "3"
-# DataFusion at the exact version lancedb 0.37 resolves to (54, built
-# against arrow 58). The SQL adapter answers the cross-engine battery by
-# registering the Lance dataset as a DataFusion `TableProvider`
-# (`lancedb::table::datafusion::BaseTableAdapter`) and running `ctx.sql`,
-# so LanceDB is measured through a real Lance scan — the apples-to-apples
-# peer for Infino's supertable + DataFusion path.
+# DataFusion at the version built against arrow 58: infino's public
+# `update`/`delete` take DataFusion `Expr` predicates, so the write cells
+# need it to drive the public API.
 datafusion = "54.0"
 
 [features]

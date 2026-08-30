@@ -4,7 +4,7 @@
 //! The single comparison benchmark binary — same positional grammar as
 //! infino's own bench binary.
 //!
-//! Current engine scope: LanceDB for FTS/vector/SQL, Tantivy for FTS,
+//! Current engine scope: Tantivy for FTS,
 //! and FAISS/turbovec for compressed-vector cells.
 //!
 //! ```text
@@ -50,8 +50,8 @@ const CORPUS_DIR_ENV: &str = "INFINO_BENCH_COMPARISON_CORPUS_DIR";
 /// stderr, honoring `RUST_LOG`. Defaults to `infino=warn`: a warning here
 /// usually means a cell is not measuring what its label claims.
 fn init_engine_logging() {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("infino=warn"));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("infino=warn"));
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)

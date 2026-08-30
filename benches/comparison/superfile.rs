@@ -7,7 +7,7 @@ pub mod fts {
     // SPDX-License-Identifier: Apache-2.0
     // SPDX-FileCopyrightText: Copyright The Infino Authors
 
-    //! FTS comparison bench — drives infino, lancedb, and tantivy through the
+    //! FTS comparison bench — drives infino and tantivy through the
     //! same `run_fts` driver and emits a single comparison section.
 
     use std::collections::HashMap;
@@ -20,7 +20,7 @@ pub mod fts {
     use infino_bench_utils::rss;
     use infino_bench_utils::superfile::fts::{FTS_COLUMN, K, WARM_ITERS};
 
-    use retrievalbench::{LanceFtsEngine, TantivyFtsEngine};
+    use retrievalbench::TantivyFtsEngine;
 
     fn pct(peer: f64, baseline: f64) -> String {
         if baseline == 0.0 {
@@ -45,10 +45,6 @@ pub mod fts {
             (
                 "infino",
                 run_fts::<InfinoFtsEngine>(FTS_COLUMN, &docs, FTS_BATTERY, K, WARM_ITERS, parallel),
-            ),
-            (
-                "lancedb",
-                run_fts::<LanceFtsEngine>(FTS_COLUMN, &docs, FTS_BATTERY, K, WARM_ITERS, parallel),
             ),
             (
                 "tantivy",
@@ -76,8 +72,8 @@ pub mod fts {
             .flat_map(|(name, res)| res.queries.iter().map(move |q| ((*name, q.name), q)))
             .collect();
 
-        let engines = ["infino", "lancedb", "tantivy"];
-        let peers = ["lancedb", "tantivy"];
+        let engines = ["infino", "tantivy"];
+        let peers = ["tantivy"];
 
         // ── Build comparison blocks (one per metric) ────────────────────────
         let writer_counts: Vec<usize> = results[0].1.builds.iter().map(|b| b.writers).collect();
@@ -202,9 +198,7 @@ pub mod fts {
         let build_headers = vec![
             "Config".into(),
             "infino".into(),
-            "lancedb".into(),
             "tantivy".into(),
-            "lancedb Δ".into(),
             "tantivy Δ".into(),
         ];
 
@@ -246,9 +240,7 @@ pub mod fts {
         let query_headers = vec![
             "Query".into(),
             "infino".into(),
-            "lancedb".into(),
             "tantivy".into(),
-            "lancedb Δ".into(),
             "tantivy Δ".into(),
         ];
 
@@ -276,7 +268,7 @@ pub mod vector {
     // SPDX-License-Identifier: Apache-2.0
     // SPDX-FileCopyrightText: Copyright The Infino Authors
 
-    //! Vector comparison bench — drives infino and lancedb through the same
+    //! Vector comparison bench — drives infino through the same
     //! `run_vector` build driver and the same default-serving search
     //! protocol infino's own vector bench uses (`exec_vec::run_search`,
     //! grid off): each engine at its own shipped default configuration,
@@ -303,8 +295,6 @@ pub mod vector {
         queries_correctness, vectors,
     };
 
-    use retrievalbench::LanceVectorEngine;
-
     const TOP_K: usize = 10;
     const VEC_COLUMN: &str = "v";
     /// Recall-target calibration grid — off by default, mirroring infino's
@@ -328,121 +318,6 @@ pub mod vector {
         ) -> Vec<(u32, f32)> {
             unreachable!("cold tier is disabled for this cell")
         }
-    }
-
-    /// Recall bar for the peer's tuned row: infino's shipped
-    /// `vector.target_recall` — the grade infino's default serving is
-    /// calibrated to. The peer row reports the cheapest configuration
-    /// that reaches it (or `—` if none does).
-    const PEER_RECALL_BAR: f32 = 0.99;
-
-    /// The peer engine's rows, measured through the same `exec_vec`
-    /// primitives `run_search` uses (`mean_recall`, `measure_warm`,
-    /// `measure_cold`): a `default` row at `ENGINE_DEFAULT` — the peer's
-    /// own shipped search defaults, no harness-tuned parameters — plus a
-    /// `bar` row at the cheapest configuration reaching
-    /// [`PEER_RECALL_BAR`] (infino's product bar), so latency can be
-    /// compared at matched quality even when the peer's defaults
-    /// under-deliver. Unlike `run_search`, no recall floor is asserted:
-    /// the peer's numbers are reported results of the comparison, and a
-    /// weak peer default must render in the table, not abort the bench.
-    /// Infino keeps its floors via `run_search`.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn peer_default_rows<R, G>(
-        reader: &R,
-        open_cold: impl Fn() -> G,
-        column: &str,
-        q_correct: &[Vec<f32>],
-        gt_correct: &[Vec<u32>],
-        k: usize,
-        include_warm: bool,
-        include_cold: bool,
-        cold_iters: usize,
-        log_prefix: &str,
-    ) -> Vec<exec_vec::RecallRow>
-    where
-        R: exec_vec::VectorRead,
-        G: exec_vec::VectorRead,
-    {
-        let q0 = q_correct
-            .first()
-            .expect("peer default row needs at least one query");
-        eprintln!(
-            "[{log_prefix}] default-config recall@{k} on {} queries ({})...",
-            q_correct.len(),
-            reader.search_params(exec_vec::ENGINE_DEFAULT, exec_vec::ENGINE_DEFAULT),
-        );
-        let recall = exec_vec::mean_recall(
-            reader,
-            column,
-            q_correct,
-            gt_correct,
-            k,
-            exec_vec::ENGINE_DEFAULT,
-            exec_vec::ENGINE_DEFAULT,
-        );
-        eprintln!("[{log_prefix}] default-config recall@{k} = {recall:.3} (reported, not gated)");
-        let mut rows = vec![exec_vec::RecallRow {
-            target: "default".into(),
-            params: reader.search_params(exec_vec::ENGINE_DEFAULT, exec_vec::ENGINE_DEFAULT),
-            recall: format!("{recall:.3}"),
-            warm: include_warm.then(|| {
-                exec_vec::measure_warm(
-                    reader,
-                    column,
-                    q0,
-                    k,
-                    exec_vec::ENGINE_DEFAULT,
-                    exec_vec::ENGINE_DEFAULT,
-                )
-            }),
-            cold: include_cold.then(|| {
-                exec_vec::measure_cold(
-                    &open_cold,
-                    column,
-                    q0,
-                    k,
-                    exec_vec::ENGINE_DEFAULT,
-                    exec_vec::ENGINE_DEFAULT,
-                    cold_iters,
-                )
-            }),
-        }];
-        // Matched-quality row: the cheapest peer configuration reaching
-        // infino's product bar. Peer-only — infino's default row already
-        // serves at (or above) this grade by construction.
-        eprintln!(
-            "[{log_prefix}] calibrating the peer to the {PEER_RECALL_BAR:.2} bar ({} queries)...",
-            q_correct.len(),
-        );
-        match exec_vec::calibrate(
-            reader,
-            column,
-            q_correct,
-            gt_correct,
-            PEER_RECALL_BAR,
-            k,
-            log_prefix,
-        ) {
-            Some(c) => rows.push(exec_vec::RecallRow {
-                target: format!("{PEER_RECALL_BAR:.2} bar"),
-                params: reader.search_params(c.probe, c.refine),
-                recall: format!("{:.3}", c.recall),
-                warm: include_warm
-                    .then(|| exec_vec::measure_warm(reader, column, q0, k, c.probe, c.refine)),
-                cold: include_cold.then(|| {
-                    exec_vec::measure_cold(&open_cold, column, q0, k, c.probe, c.refine, cold_iters)
-                }),
-            }),
-            None => rows.push(exec_vec::RecallRow {
-                target: format!("{PEER_RECALL_BAR:.2} bar"),
-                params: "—".into(),
-                recall: "—".into(),
-                warm: None,
-                cold: None,
-            }),
-        }
-        rows
     }
 
     /// One compact side-by-side block from each engine's `default` row:
@@ -646,10 +521,7 @@ pub mod vector {
         let no_queries: Vec<VectorQuery<'_>> = Vec::new();
         let (infino_res, mut infino_idx) =
             run_vector_with_index::<InfinoVectorEngine>(cfg, vecs, &no_queries);
-        let (lance_res, mut lance_idx) =
-            run_vector_with_index::<LanceVectorEngine>(cfg, vecs, &no_queries);
-        let results: Vec<(&str, EngineVectorResult)> =
-            vec![("infino", infino_res), ("lancedb", lance_res)];
+        let results: Vec<(&str, EngineVectorResult)> = vec![("infino", infino_res)];
 
         let input_bytes = (n_docs * corpus::dim() * std::mem::size_of::<f32>()) as f64;
         let mut report = Report::load("comparison-vector");
@@ -659,8 +531,8 @@ pub mod vector {
             .flat_map(|(name, res)| res.builds.iter().map(move |b| ((*name, b.writers), b)))
             .collect();
 
-        let engines = ["infino", "lancedb"];
-        let peers = ["lancedb"];
+        let engines = ["infino"];
+        let peers: [&str; 0] = [];
 
         let writer_counts: Vec<usize> = results[0].1.builds.iter().map(|b| b.writers).collect();
 
@@ -775,12 +647,7 @@ pub mod vector {
             build_p90_rows.push(p90_row);
         }
 
-        let build_headers = vec![
-            "Config".into(),
-            "infino".into(),
-            "lancedb".into(),
-            "lancedb Δ".into(),
-        ];
+        let build_headers = vec!["Config".into(), "infino".into()];
 
         report.emit(&Section {
             anchor: "comparison/vector".into(),
@@ -877,34 +744,6 @@ pub mod vector {
             "Identical protocol to infino's own superfile vector bench: default \
              options, recall on the shared brute-force oracle, floor-asserted.",
         );
-        let lance_rows = peer_default_rows(
-            &lance_idx,
-            || NoCold,
-            VEC_COLUMN,
-            qcorr,
-            tcorr,
-            TOP_K,
-            true,
-            false,
-            0,
-            "comparison-vector/lancedb",
-        );
-        exec_vec::emit_recall_table(
-            &mut report,
-            "comparison/superfile/vector/lancedb",
-            format!(
-                "Superfile vector — lancedb, default serving ({} docs × dim={})",
-                fmt_count(n_docs),
-                corpus::dim()
-            ),
-            "Peer default row through the same `exec_vec` primitives the infino \
-             table uses; recall at LanceDB's own shipped search defaults is \
-             reported, not floor-gated.",
-            &lance_rows,
-            true,
-            false,
-        );
-
         emit_default_comparison(
             &mut report,
             "comparison/superfile/vector",
@@ -913,7 +752,7 @@ pub mod vector {
                 fmt_count(n_docs),
                 corpus::dim()
             ),
-            &[("infino", &infino_rows), ("lancedb", &lance_rows)],
+            &[("infino", &infino_rows)],
             true,
             false,
         );
@@ -927,8 +766,6 @@ pub mod vector {
 
         InfinoVectorEngine::close(&mut infino_idx);
         InfinoVectorEngine::delete(infino_idx);
-        LanceVectorEngine::close(&mut lance_idx);
-        LanceVectorEngine::delete(lance_idx);
     }
 }
 
@@ -936,7 +773,7 @@ pub mod sql {
     // SPDX-License-Identifier: Apache-2.0
     // SPDX-FileCopyrightText: Copyright The Infino Authors
 
-    //! SQL comparison bench — drives infino and lancedb through the same
+    //! SQL comparison bench — drives infino through the same
     //! `run_sql` driver and emits a single comparison section.
 
     use std::collections::HashMap;
@@ -948,8 +785,6 @@ pub mod sql {
     use infino_bench_utils::report::{Better, Block, Report, Section, metric, text};
     use infino_bench_utils::rss;
     use infino_bench_utils::superfile::sql::sql_rows;
-
-    use retrievalbench::LanceSqlEngine;
 
     fn pct(peer: f64, baseline: f64) -> String {
         if baseline == 0.0 {
@@ -976,16 +811,10 @@ pub mod sql {
             parallel,
         };
 
-        let results: Vec<(&str, EngineSqlResult)> = vec![
-            (
-                "infino",
-                run_sql::<InfinoSqlEngine>(cfg, &rows, SQL_BATTERY),
-            ),
-            (
-                "lancedb",
-                run_sql::<LanceSqlEngine>(cfg, &rows, SQL_BATTERY),
-            ),
-        ];
+        let results: Vec<(&str, EngineSqlResult)> = vec![(
+            "infino",
+            run_sql::<InfinoSqlEngine>(cfg, &rows, SQL_BATTERY),
+        )];
 
         let mut report = Report::load("comparison-sql");
 
@@ -998,8 +827,8 @@ pub mod sql {
             .flat_map(|(name, res)| res.queries.iter().map(move |q| ((*name, q.name), q)))
             .collect();
 
-        let engines = ["infino", "lancedb"];
-        let peers = ["lancedb"];
+        let engines = ["infino"];
+        let peers: [&str; 0] = [];
 
         let writer_counts: Vec<usize> = results[0].1.builds.iter().map(|b| b.writers).collect();
 
@@ -1090,12 +919,7 @@ pub mod sql {
             build_p90_rows.push(p90_row);
         }
 
-        let build_headers = vec![
-            "Config".into(),
-            "infino".into(),
-            "lancedb".into(),
-            "lancedb Δ".into(),
-        ];
+        let build_headers = vec!["Config".into(), "infino".into()];
 
         let mut query_lat_rows = Vec::new();
         let mut query_rss_rows = Vec::new();
@@ -1136,12 +960,7 @@ pub mod sql {
             query_rows_rows.push(rows_row);
         }
 
-        let query_headers = vec![
-            "Query".into(),
-            "infino".into(),
-            "lancedb".into(),
-            "lancedb Δ".into(),
-        ];
+        let query_headers = vec!["Query".into(), "infino".into()];
 
         report.emit(&Section {
             anchor: "comparison/sql".into(),

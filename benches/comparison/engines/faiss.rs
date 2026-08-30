@@ -187,7 +187,7 @@ impl FaissPqVectorIndex {
     }
 }
 
-/// Shared recall-calibration hook, mirroring the Lance/TurboQuant
+/// Shared recall-calibration hook, mirroring the TurboQuant
 /// adapters. FAISS PQ has no `(probe, refine)` vocabulary — it is a
 /// flat scan over every quantized code — so both knobs are ignored, the
 /// same posture `sq4flat.rs` and `turboquant/vector.rs` take for their

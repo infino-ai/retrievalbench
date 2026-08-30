@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Infino Authors
 
-//! Table-level append and delete: Infino `append`/`delete` (each a
-//! commit) vs Lance `Table::add` / `Table::delete`, timed with
-//! [`PeakSampler`].
+//! Table-level append and delete: Infino `append`/`delete`, each a
+//! commit, timed with [`PeakSampler`].
 //!
 //! Superfile insert/remove is not this cell. Infino superfiles are
-//! sealed; new rows land as a new superfile on the manifest. Lance
-//! appends into the live dataset (IVF_PQ is not rebuilt — new rows stay
-//! searchable through Lance's unindexed fallback).
+//! sealed; new rows land as a new superfile on the manifest.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,13 +16,10 @@ use datafusion::prelude::{col, lit};
 use infino::{IndexSpec, Metric, connect};
 use infino_bench_utils::corpus;
 use infino_bench_utils::cpu;
-use infino_bench_utils::harness::{VectorEngine, VectorMetric};
 use infino_bench_utils::ingest::supertable::{self, VEC_COLUMN};
 use infino_bench_utils::markdown::{fmt_count, fmt_time};
 use infino_bench_utils::report::{Better, Block, Report, Section, metric, text};
 use infino_bench_utils::rss::{self, PeakSampler, RssStats};
-use retrievalbench::LanceVectorEngine;
-use retrievalbench::lance::vector::LanceVectorIndex;
 
 /// Single-row append / delete, matching the in-memory insert n=1 cell.
 const APPEND_SINGLE: usize = 1;
@@ -178,59 +172,6 @@ fn infino_cells(
     ]
 }
 
-fn lance_cells(
-    seed: &[f32],
-    extra: &[f32],
-    dim: usize,
-) -> Vec<Vec<infino_bench_utils::report::Cell>> {
-    let n_seed = seed.len() / dim;
-    let mut index: LanceVectorIndex =
-        LanceVectorEngine::create(VEC_COLUMN, dim, VectorMetric::Cosine);
-    LanceVectorEngine::write(&mut index, seed);
-
-    let extra_n = extra.len() / dim;
-    assert!(
-        extra_n >= APPEND_SINGLE * N_MUTATIONS + APPEND_BATCH,
-        "need leftover rows for measured appends"
-    );
-
-    let mut next_id = n_seed as u64;
-    let append_1 = measure(|| {
-        for i in 0..N_MUTATIONS {
-            let start = i * dim;
-            index.add_vectors(&extra[start..start + dim], next_id);
-            next_id += 1;
-        }
-    });
-    let batch_off = N_MUTATIONS * APPEND_SINGLE;
-    let append_100 = measure(|| {
-        index.add_vectors(
-            &extra[batch_off * dim..(batch_off + APPEND_BATCH) * dim],
-            next_id,
-        );
-    });
-    let delete_1 = measure(|| {
-        let ids: Vec<u64> = (0..N_MUTATIONS as u64).collect();
-        for id in ids {
-            index.delete_ids(&[id]);
-        }
-    });
-    let delete_100 = measure(|| {
-        let ids: Vec<u64> = (N_MUTATIONS as u64..(N_MUTATIONS + APPEND_BATCH) as u64).collect();
-        index.delete_ids(&ids);
-    });
-
-    LanceVectorEngine::close(&mut index);
-    LanceVectorEngine::delete(index);
-
-    vec![
-        sample_row("lancedb add 1 row", N_MUTATIONS, &append_1),
-        sample_row("lancedb add 100 rows", 1, &append_100),
-        sample_row("lancedb delete 1 row", N_MUTATIONS, &delete_1),
-        sample_row("lancedb delete 100 rows", 1, &delete_100),
-    ]
-}
-
 pub fn run() {
     let prepared = supertable::prepare_corpus(supertable::Modality::Vector);
     let vectors = prepared
@@ -265,27 +206,25 @@ pub fn run() {
 
     eprintln!(
         "[comparison-table-writes] seed {} docs × dim={}, then append 1 / 100 and delete 1 / 100 \
-         (Infino append+commit vs Lance Table::add / Table::delete)...",
+         (each op a durable commit)...",
         fmt_count(seed_n),
         dim
     );
 
-    let mut rows = infino_cells(seed, extra, dim);
-    rows.extend(lance_cells(seed, extra, dim));
+    let rows = infino_cells(seed, extra, dim);
 
     let mut report = Report::load("comparison-supertable-vector-writes");
     report.emit(&Section {
         anchor: "comparison/supertable/vector/writes".into(),
         title: format!(
-            "Supertable writes — Infino append/delete vs Lance add/delete ({} seed docs × dim={})",
+            "Supertable writes — append / delete as commits ({} seed docs × dim={})",
             fmt_count(seed_n),
             dim
         ),
         note: "Infino `append` / `delete` each commit (new superfile or tombstone). \
-               Lance `Table::add` / `Table::delete` mutate the live dataset; IVF_PQ is \
-               not rebuilt on add. Single-row ops are averaged over a short loop. Peak \
-               RSS is process-wide (PeakSampler) over that window. This is the table \
-               path — not a sealed-superfile rebuild."
+               Single-row ops are averaged over a short loop. Peak RSS is process-wide \
+               (PeakSampler) over that window. This is the table path — not a \
+               sealed-superfile rebuild."
             .into(),
         blocks: vec![Block {
             subtitle: "Append / delete".into(),
