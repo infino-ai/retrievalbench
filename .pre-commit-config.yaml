@@ -1,10 +1,10 @@
 # Optional local hooks: `pip install pre-commit && pre-commit install`.
 #
-# Deliberately limited to formatting and file hygiene. `cargo check` and
-# `clippy` are not hooks here — this crate compiles the engine, DataFusion,
-# and Arrow, and optionally FAISS, so a per-commit build would cost minutes.
-# Run them yourself before opening a pull request; the checklist in
-# .github/PULL_REQUEST_TEMPLATE.md lists them.
+# Formatting and file hygiene only. `cargo check` and `clippy` are not hooks
+# here: this crate compiles the engine, DataFusion, and Arrow, and optionally
+# FAISS, so a per-commit build would cost minutes. Run them yourself before
+# opening a pull request.
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.4.0
@@ -15,13 +15,14 @@ repos:
       - id: check-symlinks
       - id: check-yaml
         args: [--allow-multiple-documents]
-      - id: end-of-file-fixer
-        # Generated results are written by scripts/publish_inprocess.py; let
-        # the generator own their exact bytes.
-        exclude: ^results/
       - id: mixed-line-ending
+      # Published results are written by scripts/publish_inprocess.py and by
+      # the ClickBench runs, and the license texts are reproduced verbatim from
+      # upstream. Both need to keep their exact bytes.
+      - id: end-of-file-fixer
+        exclude: '^(results/|clickbench/results/|LICENSE)'
       - id: trailing-whitespace
-        exclude: ^results/
+        exclude: '^(results/|clickbench/results/|LICENSE)'
   - repo: local
     hooks:
       - id: rustfmt

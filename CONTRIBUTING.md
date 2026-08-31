@@ -1,41 +1,36 @@
 # Contributing to RetrievalBench
 
-Thanks for your interest. This repository publishes head-to-head
-measurements, so the bar it holds is a little unusual: the code matters less
-than whether a number in `results/` is one a stranger could reproduce and
-trust. Most of what follows is in service of that.
+This repo publishes head-to-head measurements. The code matters less than
+whether a number in `results/` is one a stranger can reproduce.
 
 ## Contributor License Agreement
 
 Before your first pull request can be merged you need to sign the Infino
-Individual Contributor License Agreement. The full text is in
+Individual Contributor License Agreement. The text is in
 [`cla/ICLA.md`](cla/ICLA.md).
 
-You do not need to do anything in advance. Open your pull request and the
-`license/cla` check will comment with a link; signing is a single click and
-covers every Infino repository, so if you have already signed for
-[`infino`](https://github.com/infino-ai/infino) you are done.
-
-If your employer owns the rights to work you do, see section 4 of the ICLA —
-you may need a Corporate CLA on file instead.
+Nothing to do in advance: open your pull request and the `license/cla` check
+comments with a link. Signing is one click and covers every Infino repository,
+so if you've already signed for
+[`infino`](https://github.com/infino-ai/infino) you're done. If your employer
+owns the rights to work you do, see section 4 of the ICLA — you may need a
+Corporate CLA on file instead.
 
 ## Prerequisites
 
 - **Rust** — install via [rustup](https://www.rust-lang.org/tools/install).
-  You do not need to pick a version: `rust-toolchain.toml` pins the exact
-  toolchain and rustup installs it automatically on first build.
-- **CMake ≥ 3.18** — the bench utilities read ann-benchmarks datasets through
-  a vendored, statically built HDF5, compiled once by `cargo build`.
+  You don't need to pick a version; `rust-toolchain.toml` pins the toolchain
+  and rustup installs it on first build.
+- **CMake ≥ 3.18** — the bench utilities read ann-benchmarks datasets through a
+  vendored, statically built HDF5, compiled once by `cargo build`.
 - **A C++ toolchain**, only for the optional FAISS comparator. Build it with
-  `scripts/build_faiss.sh` before using `--features faiss`; without
-  `-march=native`, which that script passes, FastScan silently runs scalar
-  and every FAScan row you produce is wrong.
+  `scripts/build_faiss.sh` before using `--features faiss`. That script passes
+  `-march=native`; without it FastScan silently runs scalar and every FastScan
+  row you produce is wrong.
 
-The engine under measurement is pinned by `rev` in `Cargo.toml`, not by
-branch and not by path. That is deliberate — a published row is only
-attributable if the engine it ran against is identifiable. Do not replace
-either `infino` dependency with a `path =` dependency in a commit, however
-convenient it is while developing.
+The engine is pinned by `rev` in `Cargo.toml`, not by branch and not by path,
+so a published row stays attributable. Don't commit a `path =` dependency,
+however convenient it is while developing.
 
 ## Build and test
 
@@ -47,16 +42,13 @@ cargo clippy --all-targets -- -D warnings
 ```
 
 Optionally, `pip install pre-commit && pre-commit install` sets up local hooks
-for formatting and file hygiene. They stop short of `cargo check` and `clippy`
-on purpose — this crate compiles the engine, DataFusion, and Arrow, so a
-per-commit build would cost minutes. Run those two yourself before opening a
-pull request.
+for formatting and file hygiene. They stop short of `cargo check` and
+`clippy`: this crate compiles the engine, DataFusion, and Arrow, so a
+per-commit build would cost minutes. Run those two yourself.
 
-The adapters live in `benches/comparison/engines/` and are exposed as a
-library crate precisely so they can be unit-tested. An adapter that reaches a
-peer engine's API incorrectly produces a plausible-looking wrong number, which
-is the worst failure this repository has; a test that pins the adapter's
-behaviour is the cheapest defence against it.
+The adapters in `benches/comparison/engines/` are a library crate so they can
+be unit-tested. An adapter that reaches a peer's API wrongly produces a
+plausible-looking wrong number, and nothing else in the build catches that.
 
 ## Running a benchmark
 
@@ -68,14 +60,13 @@ Selection grammar matches Infino's own bench suite, plus the `vector-codec`
 and `table-writes` selections. Scale is set by `INFINO_BENCH_SUPERFILE_DOCS`,
 `INFINO_BENCH_SUPERTABLE_DOCS`, and `INFINO_BENCH_STORE`.
 
-Engine behaviour is configured by `infino.yaml` only. Environment variables
-size the run; they never change what the engine does. If you find a variable
-that does change engine behaviour, that is a bug worth reporting.
+Engine behavior is configured by `infino.yaml` only. Environment variables
+size the run; they never change what the engine does.
 
 Run with `RUST_LOG=infino=warn`. Engine diagnostics — drain declines, fallback
-warnings — are tracing events, and without a subscriber they are dropped
-silently. A run that quietly fell back to a different serving mode is exactly
-the run this harness must never publish.
+warnings — are tracing events, and without a subscriber they're dropped
+silently, so a run that fell back to a different serving mode looks exactly
+like a good one.
 
 ## Publishing results
 
@@ -84,57 +75,46 @@ the run this harness must never publish.
 ```
 
 The publisher refuses a dirty tree and stamps host, commit, and command into
-`run.json`. Both of those are load-bearing, not conveniences:
+`run.json`.
 
-- **Never hand-edit a number** in `results/`. The markdown under
+- **Never hand-edit a number** in `results/`. The markdown in
   `results/README.md` is generated by `scripts/publish_inprocess.py` from the
-  committed JSON. To refresh it, re-run and re-generate.
-- **Never commit a result produced from a dirty tree**, or with the refusal
-  bypassed. A number nobody can regenerate is worse than no number.
-- **One machine per comparison.** Rows compared against each other must come
-  from the same run on the same host. Do not assemble a table from runs on
-  different hardware.
+  committed JSON. To refresh it, re-run and regenerate.
+- **Never commit a result from a dirty tree**, or with the refusal bypassed. A
+  number nobody can regenerate is worse than no number.
+- **One machine per comparison.** Rows compared against each other come from
+  the same run on the same host.
 - If a comparator is removed or its version changes, remove or regenerate its
   rows rather than leaving stale ones in place.
 
 ## Measuring a peer engine fairly
 
-We publish comparisons against other people's work, much of it maintained by
-volunteers. That carries an obligation.
-
 - Reach each engine through its **own public API**, the way its documentation
-  tells users to. Do not reach past it into internals to make a number move.
+  tells users to. Don't reach past it into internals to make a number move.
 - Give every engine its **documented build settings** and a fair tuning pass.
-  If a peer has a fast path that needs a flag, pass the flag — the FAISS
-  `-march=native` case is the example to keep in mind.
 - **Pin peer versions by SHA or release**, and record them.
-- Report **recall alongside latency** for anything approximate. A latency
-  number without its recall is not a result.
-- If our engine loses a row, publish the row. A benchmark that only shows
-  favourable numbers is marketing, and readers can tell.
+- Report **recall alongside latency** for anything approximate.
+- If Infino loses a row, publish the row.
 
-If you maintain an engine measured here and believe we have configured it
-unfairly or read its API wrongly, please open an issue. We would rather fix
-the number than defend it.
+If you maintain an engine measured here and think we've configured it unfairly
+or read its API wrongly, please open an issue.
 
 ## Changing CI
 
-Every workflow here triggers on `workflow_dispatch`, `workflow_call`, or
-`schedule` — never on `pull_request`. Those workflows federate into AWS,
-Azure, and GCP over OIDC and create real virtual machines, and the absence of
-a pull-request trigger is what keeps those identities out of reach of pull
-requests from forks. Treat that as an invariant. Adding a `pull_request` or
-`pull_request_target` trigger to a job holding `id-token: write` is a security
-change; see [`SECURITY.md`](SECURITY.md).
+Every workflow triggers on `workflow_dispatch`, `workflow_call`, or
+`schedule`, never on `pull_request`. Those workflows federate into AWS, Azure,
+and GCP over OIDC and create real virtual machines; the absence of a
+pull-request trigger keeps those identities out of reach of pull requests from
+forks. Adding one to a job with `id-token: write` is a security change — see
+[`SECURITY.md`](SECURITY.md).
 
-Cloud runs cost money and a leaked VM keeps costing it. The dispatch
-workflows serialize on purpose and are never cancelled mid-flight, because
-cancellation is how a VM is orphaned; `vm-reaper.yml` exists to clean up after
-the cases that still slip through. Preserve both properties.
+Dispatch workflows serialize and are never cancelled mid-flight: a cancelled
+run orphans a VM that keeps billing. `vm-reaper.yml` cleans up what still
+slips through.
 
 ## Pull requests
 
-1. Fork the repository and branch off `main`.
+1. Fork and branch off `main`.
 2. Make the change. If it affects a published number, regenerate the results
    in the same pull request and say which host produced them.
 3. Run `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, and
@@ -145,9 +125,7 @@ Pull requests need one approving review before merge.
 
 ## Licensing of contributions
 
-This repository is dual-licensed — Apache-2.0 for the harness code,
-CC-BY-4.0 for the published results — and your contribution is taken under
-whichever applies to the files you touched. See
-[README.md § License](README.md#license). The ICLA also lets Infino
-distribute contributions under other terms, which is what makes the split
-above possible; section 2 of the ICLA has the detail.
+The harness is Apache-2.0 and the published results are CC-BY-4.0 (see
+[README.md](README.md#license)); your contribution is taken under whichever
+applies to the files you touched. Section 2 of the ICLA is what lets Infino
+distribute contributions under both.

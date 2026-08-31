@@ -104,12 +104,12 @@ in-process tables. See [`search-benchmark/README.md`](search-benchmark/README.md
 ## Contributing
 
 Bug reports, better peer-engine configurations, and additional comparators are
-all welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the setup, how results
-are published, and the standards we hold a published number to.
+all welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, how results get
+published, and the standards a published number is held to.
 
-**If you maintain an engine measured here** and believe we have configured it
-unfairly or read its API wrongly, please
-[open an issue](https://github.com/infino-ai/retrievalbench/issues). We would
+If you maintain an engine measured here and think we've configured it unfairly
+or read its API wrongly, please
+[open an issue](https://github.com/infino-ai/retrievalbench/issues). We'd
 rather fix a number than defend it.
 
 Participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md).
@@ -118,20 +118,18 @@ tracker.
 
 ## License
 
-This repository is dual-licensed, because code and measurements are used
-differently:
+This repository is dual-licensed:
 
 | What | License |
 |---|---|
 | Harness code — `benches/`, `scripts/`, `annbench/`, `vdbbench-viewer/`, `.github/` | [Apache-2.0](LICENSE) |
-| Published results and figures — `results/`, `docs/assets/`, the benchmark tables in this README | [CC BY 4.0](LICENSE-CC-BY-4.0) |
+| Published results and figures — `results/`, `docs/assets/`, the tables above | [CC BY 4.0](LICENSE-CC-BY-4.0) |
 
 So you can reuse the harness under Apache-2.0, and you can quote, chart, or
 republish our numbers anywhere — including in a comparison that disagrees with
-ours — as long as you attribute Infino AI, Inc. and link back to this
-repository. Please cite the run: each `results/inprocess/<run>/run.json`
-records the host, the engine commit, and the exact command, and a number is
-only meaningful alongside them.
+ours — as long as you attribute Infino AI, Inc. and link back here. Please
+cite the run: each `results/inprocess/<run>/run.json` records the host, the
+engine commit, and the exact command.
 
 Contributions are accepted under the
 [Individual Contributor License Agreement](cla/ICLA.md); the `license/cla`

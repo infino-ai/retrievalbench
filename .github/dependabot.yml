@@ -1,13 +1,8 @@
 version: 2
 updates:
-  # GitHub Actions only.
-  #
-  # Cargo is deliberately absent. The engine under measurement is pinned by
-  # `rev` and every published row is attributed to that exact commit, so an
-  # automated bump would silently detach the committed results from the code
-  # they measured. The same reasoning covers the peer engines: their versions
-  # are pinned so a number stays reproducible. Moving any of those pins is a
-  # measurement decision that comes with a re-run, never a merge of a bot PR.
+  # GitHub Actions only. Cargo is excluded: the engine and the peer engines are
+  # pinned by rev/SHA so published rows stay attributable, and moving a pin
+  # means re-running the benchmark. Not something to merge from a bot.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
