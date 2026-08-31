@@ -67,6 +67,16 @@ pub mod vector {
 
     const INPLACE_SINGLE: usize = 1;
     const INPLACE_BATCH: usize = 100;
+    /// Discarded mutations before any mutation cell is timed. The first
+    /// insert or remove on a freshly built index pays one-time costs —
+    /// invalidating and rebuilding the engine's packed/search-ready caches,
+    /// first touch of grown buffers — that are not part of the steady-state
+    /// per-op cost. Without this, `add n=1` timed slower than `add n=100`
+    /// on three of four engines, which no per-op cost can explain.
+    const MUTATION_WARMUP: usize = 1;
+    /// Timed repetitions per mutation cell. The reported figure is the
+    /// median, so one outlier sample cannot set the published number.
+    const MUTATION_SAMPLES: usize = 5;
     const NS_PER_SEC: f64 = 1e9;
     type CodecKRow = (usize, f32, f64, f64, usize);
 
@@ -109,6 +119,58 @@ pub mod vector {
         let sampler = PeakSampler::start_default();
         let ((), wall, _) = cpu::timed(f);
         (wall, sampler.stop_stats().peak_rss_bytes)
+    }
+
+    /// Median sample by wall time, so a single slow run cannot set the
+    /// published figure.
+    fn median_op(mut samples: Vec<(Duration, u64)>) -> (Duration, u64) {
+        assert!(!samples.is_empty(), "median of no samples");
+        samples.sort_by_key(|(wall, _)| *wall);
+        samples[samples.len() / 2]
+    }
+
+    /// Warm up, then time [`MUTATION_SAMPLES`] inserts of `count` rows and
+    /// return the median. Every repetition re-inserts the same held-out
+    /// rows under fresh ids: only the row count bears on the timing.
+    fn timed_inserts<E: VectorEngine>(
+        index: &mut E::Index,
+        rows: &[f32],
+        count: usize,
+        next_id: &mut u64,
+    ) -> (Duration, u64) {
+        for _ in 0..MUTATION_WARMUP {
+            assert!(E::insert(index, rows, *next_id));
+            *next_id += count as u64;
+        }
+        let mut samples = Vec::with_capacity(MUTATION_SAMPLES);
+        for _ in 0..MUTATION_SAMPLES {
+            let id = *next_id;
+            samples.push(timed_op(|| assert!(E::insert(index, rows, id))));
+            *next_id += count as u64;
+        }
+        median_op(samples)
+    }
+
+    /// The remove counterpart of [`timed_inserts`], taking the highest
+    /// `count` live ids each time so the rows just inserted are the ones
+    /// removed and the index returns to its original length.
+    fn timed_removes<E: VectorEngine>(
+        index: &mut E::Index,
+        count: usize,
+        next_id: &mut u64,
+    ) -> (Duration, u64) {
+        for _ in 0..MUTATION_WARMUP {
+            let ids: Vec<u64> = (*next_id - count as u64..*next_id).collect();
+            assert!(E::remove(index, &ids));
+            *next_id -= count as u64;
+        }
+        let mut samples = Vec::with_capacity(MUTATION_SAMPLES);
+        for _ in 0..MUTATION_SAMPLES {
+            let ids: Vec<u64> = (*next_id - count as u64..*next_id).collect();
+            samples.push(timed_op(|| assert!(E::remove(index, &ids))));
+            *next_id -= count as u64;
+        }
+        median_op(samples)
     }
 
     fn codec_lifecycle<E: VectorEngine>(
@@ -156,25 +218,21 @@ pub mod vector {
             std::hint::black_box(hits);
         });
 
+        // Inserts run before removes so the rows added here are the ones
+        // taken away, leaving the index back at `n_docs` for the reopen
+        // cell below.
         let mut next_id = n_docs as u64;
-        let (ins1_wall, ins1_rss) = timed_op(|| {
-            assert!(E::insert(index, extra_1, next_id));
-        });
-        next_id += INPLACE_SINGLE as u64;
-        let (ins100_wall, ins100_rss) = timed_op(|| {
-            assert!(E::insert(index, extra_100, next_id));
-        });
-        next_id += INPLACE_BATCH as u64;
-
-        let last = next_id - 1;
-        let (rem1_wall, rem1_rss) = timed_op(|| {
-            assert!(E::remove(index, &[last]));
-        });
-        next_id -= 1;
-        let rem100: Vec<u64> = (next_id - INPLACE_BATCH as u64..next_id).collect();
-        let (rem100_wall, rem100_rss) = timed_op(|| {
-            assert!(E::remove(index, &rem100));
-        });
+        let (ins1_wall, ins1_rss) =
+            timed_inserts::<E>(index, extra_1, INPLACE_SINGLE, &mut next_id);
+        let (ins100_wall, ins100_rss) =
+            timed_inserts::<E>(index, extra_100, INPLACE_BATCH, &mut next_id);
+        let (rem100_wall, rem100_rss) = timed_removes::<E>(index, INPLACE_BATCH, &mut next_id);
+        let (rem1_wall, rem1_rss) = timed_removes::<E>(index, INPLACE_SINGLE, &mut next_id);
+        assert_eq!(
+            next_id, n_docs as u64,
+            "lifecycle inserts and removes must balance so the reopen cell \
+             sees the index it started from"
+        );
 
         // mutate → save → reopen → first query
         assert!(E::insert(index, extra_1, n_docs as u64));
@@ -205,7 +263,10 @@ pub mod vector {
             ),
             note: "Native in-place add/remove and native save/load on the same index the \
                    recall curve just built. Infino superfile has no equivalent mutable \
-                   path — table `append`/`delete` is a separate cell."
+                   path — table `append`/`delete` is a separate cell. Mutation cells \
+                   discard a warm-up op, then report the median of five timed \
+                   repetitions: the first mutation of a fresh index pays one-time \
+                   cache-rebuild costs that are not a per-op cost."
                 .into(),
             blocks: vec![Block {
                 subtitle: E::name().into(),
