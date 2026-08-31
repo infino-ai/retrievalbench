@@ -45,52 +45,24 @@ Corpus: `parquet:/mnt/scratch/corpora/cohere-100000` · docs: `100,000` · retri
 | infino append 100 rows | 1.44 GiB | 298 ms |
 | infino delete 1 row | 646 MiB | 5.95 ms |
 | infino delete 100 rows | 642 MiB | 11.9 ms |
-| lancedb add 1 row | 736 MiB | 1.03 ms |
-| lancedb add 100 rows | 740 MiB | 1.97 ms |
-| lancedb delete 1 row | 770 MiB | 3.76 ms |
-| lancedb delete 100 rows | 771 MiB | 6.15 ms |
 
 ### `comparison-supertable-vector`
 
-**comparison/supertable/vector/lancedb**
-
-| Row | cold open (median) | cold 1st query (median) | Median RSS | warm p90 | warm p50 | Peak RSS | warm p99 | P90 RSS |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0.99 bar | 69.8 ms | 3.66e+08 | 917 MiB | 205 ms | 112 ms | 1.02e+03 MiB | 319 ms | 1.02e+03 MiB |
-| default | 71.1 ms | 1.011e+08 | 2.07 GiB | 9.22 ms | 7.92 ms | 2.07 GiB | 13.5 ms | 2.07 GiB |
-
 ### `comparison-supertable`
-
-**Ingest**
-
-| Row | Throughput | P90 RSS | Time | Median RSS | Peak RSS |
-| --- | --- | --- | --- | --- | --- |
-| LanceDB FTS-only | 29,341/s | 2.65 GiB | 2.98 s | 2.28 GiB | 2.71 GiB |
-| LanceDB SQL | 129,411/s | 2.66 GiB | 675 ms | 2.59 GiB | 2.66 GiB |
-| LanceDB vector-only | 2,824/s | 2.58 GiB | 30.9 s | 2.46 GiB | 3.16 GiB |
 
 ### `comparison-vector`
 
 **Search — default serving**
 
-| Row | warm p50 | warm Δ |
-| --- | --- | --- |
-| infino | 683 µs | — |
-| lancedb | 2.89 ms | 2.209e+06 |
-| lancedb (0.99 bar) | 6.15 ms | 5.469e+06 |
+| Row | warm p50 |
+| --- | --- |
+| infino | 683 µs |
 
 **comparison/superfile/vector/infino**
 
 | Row | Peak RSS | warm p50 | P90 RSS | warm p99 | Median RSS | warm p90 |
 | --- | --- | --- | --- | --- | --- | --- |
 | default | 1.11 GiB | 683 µs | 1.11 GiB | 1.06 ms | 1.11 GiB | 782 µs |
-
-**comparison/superfile/vector/lancedb**
-
-| Row | warm p99 | warm p90 | Median RSS | warm p50 | P90 RSS | Peak RSS |
-| --- | --- | --- | --- | --- | --- | --- |
-| 0.99 bar | 9.1 ms | 7.86 ms | 1.47 GiB | 6.15 ms | 1.49 GiB | 1.49 GiB |
-| default | 3.74 ms | 2.93 ms | 1.12 GiB | 2.89 ms | 1.12 GiB | 1.12 GiB |
 
 **infino superfile**
 
@@ -102,45 +74,45 @@ Corpus: `parquet:/mnt/scratch/corpora/cohere-100000` · docs: `100,000` · retri
 
 **Build — Bandwidth**
 
-| Row | lancedb | lancedb Δ | infino |
-| --- | --- | --- | --- |
-| 1 writer | 9.2 MiB/s | -208 MiB/s | 217 MiB/s |
-| 8 writers | 10.5 MiB/s | -330 MiB/s | 341 MiB/s |
+| Row | infino |
+| --- | --- |
+| 1 writer | 217 MiB/s |
+| 8 writers | 341 MiB/s |
 
 **Build — Median RSS**
 
-| Row | infino | lancedb Δ | lancedb |
-| --- | --- | --- | --- |
-| 1 writer | 1.19 GiB | 192 MiB | 1.37 GiB |
-| 8 writers | 2.08 GiB | -230 MiB | 1.85 GiB |
+| Row | infino |
+| --- | --- |
+| 1 writer | 1.19 GiB |
+| 8 writers | 2.08 GiB |
 
 **Build — P90 RSS**
 
-| Row | infino | lancedb | lancedb Δ |
-| --- | --- | --- | --- |
-| 1 writer | 1.19 GiB | 2.21 GiB | 1.02 GiB |
-| 8 writers | 2.21 GiB | 2.07 GiB | -135 MiB |
+| Row | infino |
+| --- | --- |
+| 1 writer | 1.19 GiB |
+| 8 writers | 2.21 GiB |
 
 **Build — Peak RSS**
 
-| Row | infino | lancedb | lancedb Δ |
-| --- | --- | --- | --- |
-| 1 writer | 1.19 GiB | 2.57 GiB | 1.38 GiB |
-| 8 writers | 2.23 GiB | 2.41 GiB | 188 MiB |
+| Row | infino |
+| --- | --- |
+| 1 writer | 1.19 GiB |
+| 8 writers | 2.23 GiB |
 
 **Build — Throughput**
 
-| Row | infino | lancedb Δ | lancedb |
-| --- | --- | --- | --- |
-| 1 writer | 74,085/s | -70,946/s | 3,139/s |
-| 8 writers | 116,283/s | -112,704/s | 3,579/s |
+| Row | infino |
+| --- | --- |
+| 1 writer | 74,085/s |
+| 8 writers | 116,283/s |
 
 **Build — Time**
 
-| Row | lancedb Δ | infino | lancedb |
-| --- | --- | --- | --- |
-| 1 writer | 26.6 s | 1.18 s | 27.8 s |
-| 8 writers | 23.7 s | 751 ms | 24.4 s |
+| Row | infino |
+| --- | --- |
+| 1 writer | 1.18 s |
+| 8 writers | 751 ms |
 
 ### `supertable_vector`
 
@@ -408,52 +380,24 @@ Corpus: `hf:KShivendu/dbpedia-entities-openai-1M` · docs: `100,000` · retrieva
 | infino append 100 rows | 67.1 ms | 1.13 GiB |
 | infino delete 1 row | 8.07 ms | 1.14 GiB |
 | infino delete 100 rows | 15 ms | 1.14 GiB |
-| lancedb add 1 row | 1.08 ms | 1.26 GiB |
-| lancedb add 100 rows | 3.24 ms | 1.25 GiB |
-| lancedb delete 1 row | 4.99 ms | 1.26 GiB |
-| lancedb delete 100 rows | 6.23 ms | 1.26 GiB |
 
 ### `comparison-supertable-vector`
 
-**comparison/supertable/vector/lancedb**
-
-| Row | cold open (median) | warm p50 | P90 RSS | cold 1st query (median) | Peak RSS | warm p99 | Median RSS | warm p90 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0.99 bar | 70.8 ms | 113 ms | 1.26 GiB | 4.764e+08 | 1.29 GiB | 410 ms | 1.17 GiB | 173 ms |
-| default | 71.5 ms | 11.2 ms | 3.3 GiB | 1.922e+08 | 3.3 GiB | 13 ms | 3.3 GiB | 12.4 ms |
-
 ### `comparison-supertable`
-
-**Ingest**
-
-| Row | Median RSS | Peak RSS | P90 RSS | Throughput | Time |
-| --- | --- | --- | --- | --- | --- |
-| LanceDB FTS-only | 3.61 GiB | 3.77 GiB | 3.71 GiB | 32,277/s | 3.1 s |
-| LanceDB SQL | 3.64 GiB | 3.71 GiB | 3.71 GiB | 138,994/s | 719 ms |
-| LanceDB vector-only | 4.51 GiB | 6.17 GiB | 4.69 GiB | 1,520/s | 65.8 s |
 
 ### `comparison-vector`
 
 **Search — default serving**
 
-| Row | warm p50 | warm Δ |
-| --- | --- | --- |
-| infino | 655 µs | — |
-| lancedb | 5.71 ms | 5.054e+06 |
-| lancedb (0.99 bar) | 6.54 ms | 5.886e+06 |
+| Row | warm p50 |
+| --- | --- |
+| infino | 655 µs |
 
 **comparison/superfile/vector/infino**
 
 | Row | Median RSS | warm p50 | Peak RSS | P90 RSS | warm p90 | warm p99 |
 | --- | --- | --- | --- | --- | --- | --- |
 | default | 2.04 GiB | 655 µs | 2.04 GiB | 2.04 GiB | 743 µs | 2.48 ms |
-
-**comparison/superfile/vector/lancedb**
-
-| Row | P90 RSS | warm p90 | Median RSS | Peak RSS | warm p50 | warm p99 |
-| --- | --- | --- | --- | --- | --- | --- |
-| 0.99 bar | 2.55 GiB | 7.31 ms | 2.54 GiB | 2.55 GiB | 6.54 ms | 7.95 ms |
-| default | 2.06 GiB | 6.05 ms | 2.06 GiB | 2.06 GiB | 5.71 ms | 7.75 ms |
 
 **infino superfile**
 
@@ -465,45 +409,45 @@ Corpus: `hf:KShivendu/dbpedia-entities-openai-1M` · docs: `100,000` · retrieva
 
 **Build — Bandwidth**
 
-| Row | lancedb Δ | infino | lancedb |
-| --- | --- | --- | --- |
-| 1 writer | -154 MiB/s | 164 MiB/s | 10 MiB/s |
-| 8 writers | -335 MiB/s | 345 MiB/s | 9.83 MiB/s |
+| Row | infino |
+| --- | --- |
+| 1 writer | 164 MiB/s |
+| 8 writers | 345 MiB/s |
 
 **Build — Median RSS**
 
-| Row | infino | lancedb Δ | lancedb |
-| --- | --- | --- | --- |
-| 1 writer | 1.37 GiB | 1.49 GiB | 2.86 GiB |
-| 8 writers | 3.61 GiB | 34.6 MiB | 3.64 GiB |
+| Row | infino |
+| --- | --- |
+| 1 writer | 1.37 GiB |
+| 8 writers | 3.61 GiB |
 
 **Build — P90 RSS**
 
-| Row | lancedb Δ | infino | lancedb |
-| --- | --- | --- | --- |
-| 1 writer | 1.44 GiB | 1.83 GiB | 3.27 GiB |
-| 8 writers | 137 MiB | 3.9 GiB | 4.03 GiB |
+| Row | infino |
+| --- | --- |
+| 1 writer | 1.83 GiB |
+| 8 writers | 3.9 GiB |
 
 **Build — Peak RSS**
 
-| Row | infino | lancedb Δ | lancedb |
-| --- | --- | --- | --- |
-| 1 writer | 2.08 GiB | 2.65 GiB | 4.73 GiB |
-| 8 writers | 3.9 GiB | 735 MiB | 4.62 GiB |
+| Row | infino |
+| --- | --- |
+| 1 writer | 2.08 GiB |
+| 8 writers | 3.9 GiB |
 
 **Build — Throughput**
 
-| Row | lancedb | lancedb Δ | infino |
-| --- | --- | --- | --- |
-| 1 writer | 1,709/s | -26,341/s | 28,050/s |
-| 8 writers | 1,677/s | -57,156/s | 58,833/s |
+| Row | infino |
+| --- | --- |
+| 1 writer | 28,050/s |
+| 8 writers | 58,833/s |
 
 **Build — Time**
 
-| Row | infino | lancedb | lancedb Δ |
-| --- | --- | --- | --- |
-| 1 writer | 3.57 s | 58.5 s | 54.9 s |
-| 8 writers | 1.7 s | 59.6 s | 57.9 s |
+| Row | infino |
+| --- | --- |
+| 1 writer | 3.57 s |
+| 8 writers | 1.7 s |
 
 ### `supertable_vector`
 
