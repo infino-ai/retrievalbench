@@ -88,7 +88,7 @@ def os_cpu_count() -> int:
 
 def dependency_versions() -> dict[str, str]:
     lock = tomllib.loads((ROOT / "Cargo.lock").read_text())
-    wanted = {"faiss", "lancedb", "tantivy", "turbovec", "infino"}
+    wanted = {"faiss", "tantivy", "turbovec", "infino"}
     versions: dict[str, str] = {}
     for package in lock["package"]:
         name = package["name"]
@@ -154,6 +154,11 @@ def format_metric(value: float, subtitle: str, header: str) -> str:
     return f"{value:.4g}"
 
 
+# Engine removed from the comparison suite; its archived rows are not
+# rendered because the harness can no longer produce them.
+RETIRED_ENGINE = "lancedb"
+
+
 def tables_from_json(path: Path) -> str:
     data = json.loads(path.read_text())
     # Keys: anchor|subtitle|label|header → f64. Skip the corpus fingerprint.
@@ -169,6 +174,10 @@ def tables_from_json(path: Path) -> str:
             continue
         anchor, subtitle, label, header = parts
         if header in ("Config", "Query", "Op", "Engine", "Shape", "k"):
+            continue
+        # Rows for engines the suite no longer carries stay in the archived
+        # JSON but are not published: a reader cannot reproduce them.
+        if any(RETIRED_ENGINE in part.lower() for part in (anchor, subtitle, label, header)):
             continue
         slot = groups[(anchor, subtitle)][label]
         slot[header] = float(raw)
