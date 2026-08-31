@@ -85,7 +85,7 @@ mkdir -p "$RESULTS_LOCAL_DIR"
 # Without these the viewer lists the run as an opaque "res-<uuid>" and the
 # series as a bare "Infino", while every peer backend carries its hardware.
 TASK_LABEL="infino_${BENCH}_$(date -u +%Y%m%d)"
-DB_LABEL="${VM_SIZE:-unspecified}"
+DB_LABEL="${DB_LABEL:-${VM_SIZE:-unspecified}}"
 echo "task label: $TASK_LABEL | db label: $DB_LABEL"
 
 if [ "$BENCH" = "vector" ]; then

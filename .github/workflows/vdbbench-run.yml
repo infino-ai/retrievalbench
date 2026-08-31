@@ -35,6 +35,21 @@ on:
         required: false
         default: main
         type: string
+      infino_repo:
+        required: false
+        default: infino-ai/infino
+        description: "Repo to build the infino wheel from (e.g. a contributor fork)."
+        type: string
+      serve:
+        required: false
+        default: ""
+        description: "Set to 1 to drive search over the client's local loopback bench server (INFINO_BENCH_SERVE) instead of the embedded engine."
+        type: string
+      db_label:
+        required: false
+        default: ""
+        description: "Series label (db_name suffix); empty = the VM size."
+        type: string
       infino_env:
         required: false
         default: ""
@@ -120,7 +135,7 @@ jobs:
       - name: Checkout infino
         uses: actions/checkout@v4
         with:
-          repository: infino-ai/infino
+          repository: ${{ inputs.infino_repo }}
           ref: ${{ inputs.infino_ref }}
           path: infino
       - name: Rust cache
@@ -233,6 +248,8 @@ jobs:
              RERANK_MULT='${{ inputs.rerank_mult }}' \
              SEARCH_MODE='${{ inputs.search_mode }}' \
              EF_SWEEP='${{ inputs.ef_sweep }}' \
+             DB_LABEL='${{ inputs.db_label }}' \
+             INFINO_BENCH_SERVE='${{ inputs.serve }}' \
              bash -s" < .github/scripts/run_vdbbench.sh 2>&1 | tee /tmp/vdbbench.log
 
       - name: Copy results back

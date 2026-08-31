@@ -106,6 +106,21 @@ on:
         required: false
         default: main
         type: string
+      infino_repo:
+        description: "Repo to build the infino wheel from (e.g. a contributor fork)."
+        required: false
+        default: infino-ai/infino
+        type: string
+      serve:
+        description: "Set to 1 to drive search over the client's local loopback bench server (INFINO_BENCH_SERVE) instead of the embedded engine."
+        required: false
+        default: ""
+        type: string
+      db_label:
+        description: "Series label (db_name suffix, e.g. 16c64g-sq8walk); empty = the VM size."
+        required: false
+        default: ""
+        type: string
       vdbbench_ref:
         description: "VectorDBBench harness ref."
         required: false
@@ -149,6 +164,9 @@ jobs:
       location: ${{ inputs.location }}
       binding_source: ${{ inputs.binding_source }}
       infino_ref: ${{ inputs.infino_ref }}
+      infino_repo: ${{ inputs.infino_repo }}
+      serve: ${{ inputs.serve }}
+      db_label: ${{ inputs.db_label }}
       vdbbench_ref: ${{ inputs.vdbbench_ref }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
 
