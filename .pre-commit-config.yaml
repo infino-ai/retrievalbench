@@ -1,0 +1,32 @@
+# Optional local hooks: `pip install pre-commit && pre-commit install`.
+#
+# Deliberately limited to formatting and file hygiene. `cargo check` and
+# `clippy` are not hooks here — this crate compiles the engine, DataFusion,
+# and Arrow, and optionally FAISS, so a per-commit build would cost minutes.
+# Run them yourself before opening a pull request; the checklist in
+# .github/PULL_REQUEST_TEMPLATE.md lists them.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: fix-byte-order-marker
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: end-of-file-fixer
+        # Generated results are written by scripts/publish_inprocess.py; let
+        # the generator own their exact bytes.
+        exclude: ^results/
+      - id: mixed-line-ending
+      - id: trailing-whitespace
+        exclude: ^results/
+  - repo: local
+    hooks:
+      - id: rustfmt
+        name: rustfmt
+        description: Check formatting, including import layout (std/external/crate grouping + per-crate merge).
+        entry: cargo fmt --all -- --check --config imports_granularity=Crate,group_imports=StdExternalCrate --color always
+        language: system
+        pass_filenames: false
