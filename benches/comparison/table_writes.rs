@@ -40,6 +40,14 @@ const EXTRA_QUERY_SIGMA: f32 = 0.01;
 /// Marker column used for Infino delete predicates. `_id` is injected
 /// by the table and is not in the declared schema.
 const MARKER_COL: &str = "row_key";
+/// Rows per `append` call in the bulk-ingest cell. 6,250 rows × 1536 dims
+/// × 4 bytes ≈ 38 MiB of vector payload per commit — a large-batch shape,
+/// not a tuned one. The cell exists to measure the amortized per-row cost
+/// of the same public `append` the single-row cell times, so the two
+/// numbers differ only in how many rows share a commit.
+const BULK_BATCH: usize = 6_250;
+/// Batches in the bulk-ingest cell: 16 × [`BULK_BATCH`] = 100,000 rows.
+const BULK_BATCHES: usize = 16;
 const NS_PER_SEC: f64 = 1e9;
 
 struct OpSample {
@@ -184,9 +192,35 @@ fn infino_cells(
             .expect("delete 100 rows");
     });
 
+    let bulk_rows = BULK_BATCH * BULK_BATCHES;
+    assert!(
+        n_seed >= bulk_rows,
+        "bulk cell re-appends the first {bulk_rows} seed vectors; seed has {n_seed}"
+    );
+    let bulk_keys: Vec<Vec<String>> = (0..BULK_BATCHES)
+        .map(|b| {
+            (0..BULK_BATCH)
+                .map(|i| marker("bulk", b * BULK_BATCH + i))
+                .collect()
+        })
+        .collect();
+    let bulk = measure(|| {
+        for (b, keys) in bulk_keys.iter().enumerate() {
+            let start = b * BULK_BATCH * dim;
+            let batch = infino_batch(
+                schema.clone(),
+                dim,
+                keys,
+                &seed[start..start + BULK_BATCH * dim],
+            );
+            table.append(&batch).expect("bulk append");
+        }
+    });
+
     vec![
         sample_row("infino append 1 row", N_MUTATIONS, &append_1),
         sample_row("infino append 100 rows", 1, &append_100),
+        sample_row("infino append 100,000 rows (16 commits)", bulk_rows, &bulk),
         sample_row("infino delete 1 row", N_MUTATIONS, &delete_1),
         sample_row("infino delete 100 rows", 1, &delete_100),
     ]
@@ -199,7 +233,7 @@ pub fn run() {
         .expect("vector modality prepares a vector corpus");
     let dim = corpus::dim();
     let available_docs = vectors.n_docs();
-    let extra_needed = APPEND_SINGLE * N_MUTATIONS + APPEND_BATCH;
+    let extra_needed = APPEND_SINGLE * (N_MUTATIONS + MUTATION_WARMUP) + APPEND_BATCH;
     let seed_n = supertable::n_docs();
     assert!(
         available_docs >= seed_n,
@@ -242,7 +276,9 @@ pub fn run() {
             dim
         ),
         note: "Infino `append` / `delete` each commit (new superfile or tombstone). \
-               Single-row ops discard a warm-up commit, then average over a short loop. Peak RSS is process-wide \
+               Single-row ops discard a warm-up commit, then average over a short loop. \
+               The bulk row divides one timed 100K-row ingest (16 commits) by its \
+               row count. Peak RSS is process-wide \
                (PeakSampler) over that window. This is the table path — not a \
                sealed-superfile rebuild."
             .into(),
