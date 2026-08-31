@@ -28,6 +28,13 @@ const APPEND_BATCH: usize = 100;
 /// Single-row mutations averaged over this many committed ops so the
 /// process-CPU sampler sees a measurable window.
 const N_MUTATIONS: usize = 8;
+/// Discarded mutations before any timed window opens. The first commit on a
+/// freshly built table pays one-time costs that are not part of the
+/// steady-state per-op cost; averaging over [`N_MUTATIONS`] dilutes that
+/// cost eightfold rather than excluding it. The codec-lifecycle cells
+/// discard a warm-up for the same reason — without it, single-row adds
+/// measured slower there than hundred-row adds.
+const MUTATION_WARMUP: usize = 1;
 const EXTRA_QUERY_SEED: u64 = 1;
 const EXTRA_QUERY_SIGMA: f32 = 0.01;
 /// Marker column used for Infino delete predicates. `_id` is injected
@@ -124,11 +131,19 @@ fn infino_cells(
 
     let extra_n = extra.len() / dim;
     assert!(
-        extra_n >= APPEND_SINGLE * N_MUTATIONS + APPEND_BATCH,
-        "need leftover rows for measured appends"
+        extra_n >= APPEND_SINGLE * (N_MUTATIONS + MUTATION_WARMUP) + APPEND_BATCH,
+        "need leftover rows for the warm-up and the measured appends"
     );
 
     let mut extra_off = 0;
+    for i in 0..MUTATION_WARMUP {
+        let keys = [marker("warmup", i)];
+        let start = (extra_off + i) * dim;
+        let batch = infino_batch(schema.clone(), dim, &keys, &extra[start..start + dim]);
+        table.append(&batch).expect("warm-up append");
+    }
+    extra_off += MUTATION_WARMUP * APPEND_SINGLE;
+
     let append_1 = measure(|| {
         for i in 0..N_MUTATIONS {
             let key = marker("append1", i);
@@ -148,6 +163,11 @@ fn infino_cells(
             .expect("append 100 rows");
     });
 
+    for i in 0..MUTATION_WARMUP {
+        table
+            .delete(col(MARKER_COL).eq(lit(marker("warmup", i))))
+            .expect("warm-up delete");
+    }
     let delete_1 = measure(|| {
         for i in 0..N_MUTATIONS {
             table
@@ -222,7 +242,7 @@ pub fn run() {
             dim
         ),
         note: "Infino `append` / `delete` each commit (new superfile or tombstone). \
-               Single-row ops are averaged over a short loop. Peak RSS is process-wide \
+               Single-row ops discard a warm-up commit, then average over a short loop. Peak RSS is process-wide \
                (PeakSampler) over that window. This is the table path — not a \
                sealed-superfile rebuild."
             .into(),
