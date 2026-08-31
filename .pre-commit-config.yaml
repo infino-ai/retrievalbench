@@ -23,11 +23,19 @@ repos:
         exclude: '^(results/|clickbench/results/|LICENSE)'
       - id: trailing-whitespace
         exclude: '^(results/|clickbench/results/|LICENSE)'
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint
   - repo: local
     hooks:
+      # Plain `cargo fmt`, matching what CI would check. The engine's own
+      # config additionally passes imports_granularity/group_imports; this
+      # crate's imports have never been formatted that way, so enforcing them
+      # here would fail on a clean checkout.
       - id: rustfmt
         name: rustfmt
-        description: Check formatting, including import layout (std/external/crate grouping + per-crate merge).
-        entry: cargo fmt --all -- --check --config imports_granularity=Crate,group_imports=StdExternalCrate --color always
+        description: Check formatting.
+        entry: cargo fmt --all -- --check --color always
         language: system
         pass_filenames: false
