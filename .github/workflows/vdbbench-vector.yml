@@ -90,6 +90,11 @@ on:
         required: false
         default: ""
         type: string
+      disk_size_gb:
+        description: "VM os/boot disk size in GB (512 fits Cohere-10M; raise for 100M/1B)."
+        required: false
+        default: "512"
+        type: string
       location:
         description: "Region (Azure/AWS) or zone (GCP); empty = per-cloud default."
         required: false
@@ -105,6 +110,21 @@ on:
         description: "infino branch to build (binding_source=branch)."
         required: false
         default: main
+        type: string
+      infino_repo:
+        description: "Repo to build the infino wheel from (e.g. a contributor fork)."
+        required: false
+        default: infino-ai/infino
+        type: string
+      serve:
+        description: "Set to 1 to drive search over the client's local loopback bench server (INFINO_BENCH_SERVE) instead of the embedded engine."
+        required: false
+        default: ""
+        type: string
+      db_label:
+        description: "Series label (db_name suffix, e.g. 16c64g-sq8walk); empty = the VM size."
+        required: false
+        default: ""
         type: string
       vdbbench_ref:
         description: "VectorDBBench harness ref."
@@ -146,9 +166,13 @@ jobs:
       cache_budget_bytes: ${{ inputs.cache_budget_bytes }}
       cloud: ${{ inputs.cloud }}
       vm_size: ${{ inputs.vm_size }}
+      disk_size_gb: ${{ inputs.disk_size_gb }}
       location: ${{ inputs.location }}
       binding_source: ${{ inputs.binding_source }}
       infino_ref: ${{ inputs.infino_ref }}
+      infino_repo: ${{ inputs.infino_repo }}
+      serve: ${{ inputs.serve }}
+      db_label: ${{ inputs.db_label }}
       vdbbench_ref: ${{ inputs.vdbbench_ref }}
       timeout_minutes: ${{ inputs.timeout_minutes }}
 
