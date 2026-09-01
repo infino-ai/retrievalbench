@@ -75,6 +75,7 @@
 //! accounting and also exercising the save/load boundary.
 
 use std::cell::RefCell;
+use std::env;
 use std::fs;
 use std::io::Write;
 
@@ -95,9 +96,17 @@ use infino_bench_utils::rss::fmt_bytes;
 /// FastScan accumulation kernel only packs 4-bit codes — not a tuning
 /// choice, a hard constraint of the SIMD kernel.
 const FAST_SCAN_NBITS: u32 = 4;
-/// Bits per sub-quantizer code for the plain (LUT256) variant, per the
-/// task's recall-cell requirement.
+/// Default bits per sub-quantizer code for the plain (LUT-based)
+/// variant, per the task's recall-cell requirement. Overridable per run
+/// via [`PLAIN_PQ_NBITS_ENV`].
 const PLAIN_PQ_NBITS: u32 = 8;
+/// Env override for the plain variant's bits per sub-quantizer code.
+/// `4` scores the exact FastScan codebook geometry (per-coordinate
+/// sub-quantizers, 16 centroids) through the plain float-LUT path — the
+/// control that separates FastScan's scan kernel from its codebook. The
+/// chosen description string is printed at build time, so a run's log
+/// records which variant ran.
+const PLAIN_PQ_NBITS_ENV: &str = "INFINO_BENCH_FAISS_PLAIN_NBITS";
 /// Code density shared with Infino Sq4 and turbovec-4bit.
 const TARGET_BITS_PER_DIM: usize = 4;
 /// Maps the harness's engine-agnostic metric to FAISS's `MetricType`.
@@ -153,16 +162,18 @@ fn fast_scan_description(dim: usize) -> String {
     )
 }
 
-/// Factory description string for the plain LUT256 variant:
-/// `PQ<M>x8np`. The `np` suffix skips training the Polysemous
+/// Factory description string for the plain LUT-based variant:
+/// `PQ<M>x<nbits>np`, nbits 8 by default or per [`PLAIN_PQ_NBITS_ENV`].
+/// The `np` suffix skips training the Polysemous
 /// permutation, which FAISS only uses for Hamming pre-filtering — a
 /// mode this cell never queries — and whose training cost dominates
 /// everything else at these sub-quantizer counts.
 fn plain_pq_description(dim: usize) -> String {
-    format!(
-        "IDMap,PQ{}x{PLAIN_PQ_NBITS}np",
-        sub_quantizer_count(dim, PLAIN_PQ_NBITS)
-    )
+    let nbits = env::var(PLAIN_PQ_NBITS_ENV)
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(PLAIN_PQ_NBITS);
+    format!("IDMap,PQ{}x{nbits}np", sub_quantizer_count(dim, nbits))
 }
 
 pub struct FaissPqFastScanVectorEngine;

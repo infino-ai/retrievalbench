@@ -40,9 +40,11 @@ const RECALL_KS_DEEPEST: usize = 100;
 /// Held-out queries the codec curve grades over. Sized for RESOLUTION,
 /// not runtime: comparing codecs that differ by a point of recall needs a
 /// quantum well under a point, and the shallowest knot (`k = 1`) has the
-/// coarsest one — 1/[`CURVE_QUERIES`]. The extra cost is one exact-oracle
-/// pass, which is parallel and seconds at these corpus sizes.
-const CURVE_QUERIES: usize = 200;
+/// coarsest one — 1/[`CURVE_QUERIES`]. At 1000 the standard error on a
+/// mean recall is ~±0.004, so a two-point codec gap stands on a single
+/// run instead of leaning on repeats. The extra cost is one exact-oracle
+/// pass, which is parallel and minutes at the largest corpus size.
+const CURVE_QUERIES: usize = 1000;
 
 pub mod fts {
     use super::*;
@@ -323,8 +325,8 @@ pub mod vector {
         // of recall, and 20 queries cannot. At k=1 each query is worth
         // 0.05 recall, so a two-query difference reads as 10 points and
         // invites exactly the false attribution it should settle. At
-        // [`CURVE_QUERIES`] the k=1 quantum is 0.005 and the k=10 quantum
-        // 0.0005, which is finer than the differences being compared.
+        // [`CURVE_QUERIES`] the k=1 quantum is 0.001 and the k=10 quantum
+        // 0.0001, which is finer than the differences being compared.
         let q_corr = if vectors.n_docs() > n_docs {
             corpus::bench_queries(
                 vslice,
@@ -454,30 +456,11 @@ pub mod vector {
         ];
         #[cfg(feature = "faiss")]
         {
-            use retrievalbench::{FaissPqFastScanVectorEngine, FaissPqVectorEngine};
-            let (res, mut idx) = run_vector_with_index::<FaissPqFastScanVectorEngine>(
-                cfg,
-                vslice,
-                EMPTY_VECTOR_QUERIES,
-            );
-            build_rows.push(("faiss-pq-fastscan", res.builds));
-            curve_engines.push((
-                "faiss-pq-fastscan",
-                per_k_rows(&idx, &q_corr, &gt_deep, idx.serialized_bytes()),
-            ));
-            if thread_mode == "single-thread" {
-                codec_lifecycle::<FaissPqFastScanVectorEngine>(
-                    &mut report,
-                    &mut idx,
-                    extra_vectors,
-                    corpus::dim(),
-                    q0,
-                    TOP_K,
-                    n_docs,
-                );
-            }
-            FaissPqFastScanVectorEngine::close(&mut idx);
-            FaissPqFastScanVectorEngine::delete(idx);
+            // FastScan (`PQ<M>x4fs`) is not run: at this per-coordinate
+            // sub-quantizer count its recall is unstable across corpus
+            // sizes, so published rows report classic PQ only. The
+            // adapter stays in the lib for anyone measuring it directly.
+            use retrievalbench::FaissPqVectorEngine;
             let (res, mut idx) =
                 run_vector_with_index::<FaissPqVectorEngine>(cfg, vslice, EMPTY_VECTOR_QUERIES);
             build_rows.push(("faiss-pq", res.builds));
