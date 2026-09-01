@@ -191,6 +191,27 @@ jobs:
           print(f"{len(scripts)} pages render clean")
           PY
 
+      # Ground truth: what does the RUNNING image's collector actually load?
+      # Prints every standard_2026*/Infino group so we can see if the infino
+      # standard_20260403 series survives collect() inside the deployed image.
+      - name: Probe loaded results
+        run: |
+          docker run --rm -i --entrypoint python "$IMAGE:$TAG" - <<'PY'
+          import pathlib
+          from vectordb_bench import config
+          from vectordb_bench.backend.result_collector import ResultCollector
+
+          rs = ResultCollector.collect(pathlib.Path(config.RESULTS_LOCAL_DIR))
+          print(f"RESULTS_LOCAL_DIR={config.RESULTS_LOCAL_DIR}  total_TestResults={len(rs)}")
+          for tr in rs:
+              dbs = sorted({r.task_config.db_name for r in tr.results})
+              if tr.task_label.startswith("standard_2026") or any("Infino" in d for d in dbs):
+                  print(f"  label={tr.task_label:<26} run_id={str(tr.run_id)[:34]:<34} n={len(tr.results)} dbs={dbs}")
+          std = [tr for tr in rs if tr.task_label == "standard_20260403"]
+          has = any("Infino" in d for tr in std for r in tr.results for d in [r.task_config.db_name])
+          print(f">>> Infino under standard_20260403: {has}")
+          PY
+
       - name: Push image
         run: |
           set -euo pipefail
