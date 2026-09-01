@@ -1,6 +1,9 @@
 # RetrievalBench
 
-[Infino's](https://github.com/infino-ai/infino) external benchmark harness. 
+[![License: Apache-2.0](https://img.shields.io/badge/code-Apache--2.0-blue.svg)](LICENSE)
+[![Results: CC BY 4.0](https://img.shields.io/badge/results-CC--BY--4.0-lightgrey.svg)](LICENSE-CC-BY-4.0)
+
+[Infino's](https://github.com/infino-ai/infino) external benchmark harness.
 
 ## The benchmarks
 
@@ -98,3 +101,39 @@ in-process tables. See [`search-benchmark/README.md`](search-benchmark/README.md
 | ClickBench | `c6a.4xlarge` (reference) and `c8g.metal-48xl` (leaderboard) |
 | Full-text | AWS `c7i.2xlarge` |
 
+## Contributing
+
+Bug reports, better peer-engine configurations, and additional comparators are
+all welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, how results get
+published, and the standards a published number is held to.
+
+If you maintain an engine measured here and think we've configured it unfairly
+or read its API wrongly, please
+[open an issue](https://github.com/infino-ai/retrievalbench/issues). We'd
+rather fix a number than defend it.
+
+Participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md).
+Security issues go through [SECURITY.md](SECURITY.md), not the public issue
+tracker.
+
+## License
+
+This repository is dual-licensed:
+
+| What | License |
+|---|---|
+| Harness code — `benches/`, `scripts/`, `annbench/`, `vdbbench-viewer/`, `.github/` | [Apache-2.0](LICENSE) |
+| Published results and figures — `results/`, `docs/assets/`, the tables above | [CC BY 4.0](LICENSE-CC-BY-4.0) |
+
+So you can reuse the harness under Apache-2.0, and you can quote, chart, or
+republish our numbers anywhere — including in a comparison that disagrees with
+ours — as long as you attribute Infino AI, Inc. and link back here. Please
+cite the run: each `results/inprocess/<run>/run.json` records the host, the
+engine commit, and the exact command.
+
+Contributions are accepted under the
+[Individual Contributor License Agreement](cla/ICLA.md); the `license/cla`
+check on your first pull request walks you through signing it.
+
+The engines measured here are the property of their respective authors and
+carry their own licenses.
