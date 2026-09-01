@@ -8,7 +8,6 @@
   "dependencies": {
     "faiss": "0.13.0",
     "infino": "0.5.9 (d75d14a73c7e)",
-    "lancedb": "0.37.1",
     "tantivy": "0.26.1",
     "turbovec": "1.0.0 (ccab9f325e6c)"
   },

@@ -154,12 +154,12 @@ def format_metric(value: float, subtitle: str, header: str) -> str:
     return f"{value:.4g}"
 
 
-# Engines removed from the comparison suite; their archived rows are not
-# rendered because the default harness run can no longer produce them.
-# faiss-pq-fastscan: dropped from the default vector-codec cells (recall
-# unstable at per-coordinate sub-quantizer counts); the adapter remains
-# in the lib for direct measurement.
-RETIRED_ENGINES = ("lancedb", "faiss-pq-fastscan")
+# Engines removed from the default comparison run; their archived rows
+# are not rendered because the default harness run can no longer produce
+# them. faiss-pq-fastscan was dropped from the default vector-codec cells
+# (recall unstable at per-coordinate sub-quantizer counts); the adapter
+# remains in the lib for direct measurement.
+RETIRED_ENGINES = ("faiss-pq-fastscan",)
 
 
 def tables_from_json(path: Path) -> str:
