@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/infino-ai/retrievalbench/security/advisories/new
+    about: Do not open a public issue. Report privately — see SECURITY.md.
+  - name: A bug in the engine itself
+    url: https://github.com/infino-ai/infino/issues
+    about: If the problem is in Infino rather than in this harness, report it there — that is where a fix would ship.

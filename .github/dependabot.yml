@@ -1,0 +1,10 @@
+version: 2
+updates:
+  # GitHub Actions only. Cargo is excluded: the engine and the peer engines are
+  # pinned by rev/SHA so published rows stay attributable, and moving a pin
+  # means re-running the benchmark. Not something to merge from a bot.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

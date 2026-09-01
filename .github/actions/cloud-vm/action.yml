@@ -33,6 +33,10 @@ inputs:
     description: "Azure resource group (pre-existing, SP-scoped)."
     required: false
     default: rg-infino-bench
+  disk_size_gb:
+    description: "OS/boot disk size in GB. 512 fits Cohere-10M (dataset + ingest + optimize); raise for 100M/1B."
+    required: false
+    default: "512"
 
 runs:
   using: composite
@@ -46,6 +50,7 @@ runs:
         SSH_PUB: ${{ inputs.ssh_pub }}
         NAME_PREFIX: ${{ inputs.name_prefix }}
         AZURE_RG: ${{ inputs.azure_rg }}
+        DISK_SIZE: ${{ inputs.disk_size_gb }}
       run: |
         set -euo pipefail
         case "${{ inputs.cloud }}" in
@@ -58,7 +63,7 @@ runs:
           az vm create -g "$AZURE_RG" -n "$VM" \
             --image Ubuntu2404 --size "$SIZE" --location "$LOC" \
             --admin-username azureuser --ssh-key-values "$SSH_PUB" \
-            --public-ip-sku Standard --os-disk-size-gb 128 \
+            --public-ip-sku Standard --os-disk-size-gb "${DISK_SIZE:-512}" \
             --nsg-rule NONE --nsg "${VM}-nsg" --public-ip-address "${VM}-pip" \
             --vnet-name "${VM}-vnet" --subnet "${VM}-subnet" --os-disk-name "${VM}-osdisk" \
             --tags "${TAGS[@]}" -o none
@@ -123,7 +128,7 @@ runs:
           DELETE_AFTER="$(date -u -d '+3 hours' +%s)"   # epoch label; GCP labels forbid ':' in ISO
           gcloud compute instances create "$NAME" --quiet --zone "$ZONE" --machine-type "$SIZE" \
             --image-family ubuntu-2404-lts-amd64 --image-project ubuntu-os-cloud \
-            --boot-disk-size 128GB --tags "$NAME" \
+            --boot-disk-size "${DISK_SIZE:-512}GB" --tags "$NAME" \
             --labels "delete-after=$DELETE_AFTER,auto-delete=true" \
             --metadata "ssh-keys=benchuser:$(cat "$SSH_PUB")"
           VM_IP="$(gcloud compute instances describe "$NAME" --zone "$ZONE" \
