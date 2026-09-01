@@ -4,15 +4,14 @@
   "corpus": "hf:KShivendu/dbpedia-entities-openai-1M",
   "docs": 100000,
   "host": "Host: AMD EPYC 9V74 80-Core Processor \u00b7 8 logical cores \u00b7 63 GiB RAM \u00b7 linux/x86_64",
-  "retrievalbench_commit": "d4568401437dea9b9e834329cda834d866373618",
+  "retrievalbench_commit": "588215e3966ae7b89b3a6ddb713add937cca677d",
   "dependencies": {
     "faiss": "0.13.0",
-    "infino": "0.5.12 (447ff2fc83b6)",
-    "lancedb": "0.37.1",
+    "infino": "0.5.13 (daa572117f77)",
     "tantivy": "0.26.1",
     "turbovec": "1.0.0 (ccab9f325e6c)"
   },
-  "command": "./scripts/run_track_a.sh dbpedia-1536-100k 100000 hf:KShivendu/dbpedia-entities-openai-1M /mnt/scratch/corpora",
-  "published_at": "2026-08-30T06:50:04.706229+00:00",
+  "command": "XDG_CONFIG_HOME with 'vector: search_mode: flat_ivf' INFINO_BENCH_SUPERTABLE_DOCS=100000 cargo bench --features faiss --bench bench -- vector-codec corpus=hf:KShivendu/dbpedia-entities-openai-1M corpus-dir=/mnt/scratch/corpora (single-thread and box-threads) + table-writes",
+  "published_at": "2026-09-01T17:50:58.018428+00:00",
   "dirty": false
 }
