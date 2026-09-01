@@ -90,6 +90,11 @@ on:
         required: false
         default: ""
         type: string
+      disk_size_gb:
+        description: "VM os/boot disk size in GB (512 fits Cohere-10M; raise for 100M/1B)."
+        required: false
+        default: "512"
+        type: string
       location:
         description: "Region (Azure/AWS) or zone (GCP); empty = per-cloud default."
         required: false
@@ -161,6 +166,7 @@ jobs:
       cache_budget_bytes: ${{ inputs.cache_budget_bytes }}
       cloud: ${{ inputs.cloud }}
       vm_size: ${{ inputs.vm_size }}
+      disk_size_gb: ${{ inputs.disk_size_gb }}
       location: ${{ inputs.location }}
       binding_source: ${{ inputs.binding_source }}
       infino_ref: ${{ inputs.infino_ref }}

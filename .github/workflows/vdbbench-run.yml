@@ -19,6 +19,11 @@ on:
         required: false
         default: ""
         type: string
+      disk_size_gb:
+        required: false
+        default: "512"
+        description: "VM os/boot disk size in GB (512 fits Cohere-10M; raise for 100M/1B)."
+        type: string
       location:
         required: false
         default: ""
@@ -201,6 +206,7 @@ jobs:
           op: provision
           cloud: ${{ inputs.cloud }}
           vm_size: ${{ inputs.vm_size }}
+          disk_size_gb: ${{ inputs.disk_size_gb }}
           location: ${{ inputs.location }}
           ssh_pub: ${{ env.SSH_KEY }}.pub
           name_prefix: vdbbench-${{ inputs.bench }}
