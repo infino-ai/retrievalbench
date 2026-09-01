@@ -136,7 +136,7 @@ jobs:
       # Scoped by bench: the parent workflow calls this twice in one run, and
       # two uploads under one name collide.
       - name: Upload wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: infino-wheel-${{ inputs.bench }}
           path: wheels/*.whl
@@ -300,7 +300,7 @@ jobs:
       # always() so a timeout/cancel still yields the log for diagnostics.
       - name: Upload artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vectordbbench-results-${{ inputs.bench }}
           path: |
