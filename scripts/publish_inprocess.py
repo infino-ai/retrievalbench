@@ -154,9 +154,12 @@ def format_metric(value: float, subtitle: str, header: str) -> str:
     return f"{value:.4g}"
 
 
-# Engine removed from the comparison suite; its archived rows are not
-# rendered because the harness can no longer produce them.
-RETIRED_ENGINE = "lancedb"
+# Engines removed from the default comparison run; their archived rows
+# are not rendered because the default harness run can no longer produce
+# them. faiss-pq-fastscan was dropped from the default vector-codec cells
+# (recall unstable at per-coordinate sub-quantizer counts); the adapter
+# remains in the lib for direct measurement.
+RETIRED_ENGINES = ("faiss-pq-fastscan",)
 
 
 def tables_from_json(path: Path) -> str:
@@ -177,7 +180,11 @@ def tables_from_json(path: Path) -> str:
             continue
         # Rows for engines the suite no longer carries stay in the archived
         # JSON but are not published: a reader cannot reproduce them.
-        if any(RETIRED_ENGINE in part.lower() for part in (anchor, subtitle, label, header)):
+        if any(
+            retired in part.lower()
+            for retired in RETIRED_ENGINES
+            for part in (anchor, subtitle, label, header)
+        ):
             continue
         slot = groups[(anchor, subtitle)][label]
         slot[header] = float(raw)
