@@ -253,16 +253,16 @@ Corpus: `parquet:/mnt/scratch/corpora/cohere-100000` · docs: `100,000` · retri
 
 _Host: AMD EPYC 9V74 80-Core Processor · 8 logical cores · 63 GiB RAM · linux/x86_64_
 
-Corpus: `hf:KShivendu/dbpedia-entities-openai-1M` · docs: `100,000` · retrievalbench: `588215e3966a` · Infino: `0.5.13 (daa572117f77)`
+Corpus: `hf:KShivendu/dbpedia-entities-openai-1M` · docs: `100,000` · retrievalbench: `354141ad5425` · Infino: `0.5.13 (daa572117f77)`
 ### `comparison-supertable-vector-codec`
 
 **Build — box-threads**
 
 | Row | Peak RSS | Build wall | Build CPU |
 | --- | --- | --- | --- |
-| faiss-pq (1 writer) | 8.17 GiB | 76.2 s | 581 |
+| faiss-pq (1 writer) | 8.17 GiB | 39.7 s | 312 |
 | turbovec-2bit (1 writer) | 5.84 GiB | 1.11 s | 5.05 |
-| turbovec-4bit (1 writer) | 6.05 GiB | 1.54 s | 6.07 |
+| turbovec-4bit (1 writer) | 6.05 GiB | 374 ms | 1.2 |
 
 **Build — single-thread**
 
@@ -293,18 +293,18 @@ Corpus: `hf:KShivendu/dbpedia-entities-openai-1M` · docs: `100,000` · retrieva
 
 | Row | warm p50 (nq=1) | resident | warm p95 (nq=1) | k-recall | B/vec |
 | --- | --- | --- | --- | --- | --- |
-| faiss-pq @1 | 45 ms | 75.5 MiB | 45.6 ms | 0.9500 | 791 |
-| faiss-pq @10 | 45.1 ms | 75.5 MiB | 45.6 ms | 0.9435 | 791 |
-| faiss-pq @100 | 45.1 ms | 75.5 MiB | 46.4 ms | 0.9625 | 791 |
-| infino-flat_ivf @1 | 1.5 ms | 75.2 MiB | 1.84 ms | 0.9650 | 788 |
-| infino-flat_ivf @10 | 1.51 ms | 75.2 MiB | 1.83 ms | 0.9630 | 788 |
-| infino-flat_ivf @100 | 1.73 ms | 75.2 MiB | 2.02 ms | 0.9710 | 788 |
+| faiss-pq @1 | 45 ms | 75.5 MiB | 45.6 ms | 0.9490 | 791 |
+| faiss-pq @10 | 45.5 ms | 75.5 MiB | 45.6 ms | 0.9500 | 791 |
+| faiss-pq @100 | 45.1 ms | 75.5 MiB | 46.4 ms | 0.9630 | 791 |
+| infino-flat_ivf @1 | 1.5 ms | 75.2 MiB | 1.84 ms | 0.9700 | 788 |
+| infino-flat_ivf @10 | 1.5 ms | 75.2 MiB | 1.83 ms | 0.9630 | 788 |
+| infino-flat_ivf @100 | 1.73 ms | 75.2 MiB | 2.02 ms | 0.9700 | 788 |
 | turbovec-2bit @1 | 1.57 ms | 37.8 MiB | 1.69 ms | 0.8350 | 396 |
 | turbovec-2bit @10 | 1.6 ms | 37.8 MiB | 1.67 ms | 0.8345 | 396 |
 | turbovec-2bit @100 | 1.67 ms | 37.8 MiB | 1.74 ms | 0.8511 | 396 |
-| turbovec-4bit @1 | 2.08 ms | 75.2 MiB | 2.18 ms | 0.9400 | 788 |
-| turbovec-4bit @10 | 2.12 ms | 75.2 MiB | 2.22 ms | 0.9445 | 788 |
-| turbovec-4bit @100 | 2.25 ms | 75.2 MiB | 2.31 ms | 0.9569 | 788 |
+| turbovec-4bit @1 | 2.08 ms | 75.2 MiB | 2.18 ms | 0.9460 | 788 |
+| turbovec-4bit @10 | 1.59 ms | 75.2 MiB | 2.22 ms | 0.9480 | 788 |
+| turbovec-4bit @100 | 2.25 ms | 75.2 MiB | 2.31 ms | 0.9570 | 788 |
 
 **faiss-pq**
 
@@ -336,14 +336,14 @@ Corpus: `hf:KShivendu/dbpedia-entities-openai-1M` · docs: `100,000` · retrieva
 
 | Row | Peak RSS | Wall |
 | --- | --- | --- |
-| add n=1 | 1.8 GiB | 19 µs |
+| add n=1 | 1.8 GiB | 18 µs |
 | add n=100 | 1.81 GiB | 934 µs |
 | load | 1.8 GiB | 38.8 ms |
 | load → first search | 1.8 GiB | 3.04 ms |
-| mutate → save → reopen → first query | 1.96 GiB | 48.8 ms |
-| remove n=1 | 1.81 GiB | 3.88 µs |
+| mutate → save → reopen → first query | 1.96 GiB | 21.4 ms |
+| remove n=1 | 1.81 GiB | 3.4 µs |
 | remove n=100 | 1.81 GiB | 204 µs |
-| save | 1.73 GiB | 32.3 ms |
+| save | 1.73 GiB | 33.4 ms |
 
 ### `comparison-supertable-vector-writes`
 

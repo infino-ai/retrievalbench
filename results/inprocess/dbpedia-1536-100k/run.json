@@ -4,7 +4,7 @@
   "corpus": "hf:KShivendu/dbpedia-entities-openai-1M",
   "docs": 100000,
   "host": "Host: AMD EPYC 9V74 80-Core Processor \u00b7 8 logical cores \u00b7 63 GiB RAM \u00b7 linux/x86_64",
-  "retrievalbench_commit": "588215e3966ae7b89b3a6ddb713add937cca677d",
+  "retrievalbench_commit": "354141ad5425fcff5f9f74d0b93cd56b7f85201e",
   "dependencies": {
     "faiss": "0.13.0",
     "infino": "0.5.13 (daa572117f77)",
@@ -12,6 +12,6 @@
     "turbovec": "1.0.0 (ccab9f325e6c)"
   },
   "command": "XDG_CONFIG_HOME with 'vector: search_mode: flat_ivf' INFINO_BENCH_SUPERTABLE_DOCS=100000 cargo bench --features faiss --bench bench -- vector-codec corpus=hf:KShivendu/dbpedia-entities-openai-1M corpus-dir=/mnt/scratch/corpora (single-thread and box-threads) + table-writes",
-  "published_at": "2026-09-01T17:50:58.018428+00:00",
+  "published_at": "2026-09-01T17:58:01.260140+00:00",
   "dirty": false
 }
