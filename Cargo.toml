@@ -20,8 +20,8 @@ publish = false
 # and the local-table-through-`optimize()` builder + resident-blob
 # accounting this harness's infino arm drives. Each committed run's
 # `run.json` records the exact engine SHA it measured.
-infino-bench-utils = { git = "https://github.com/infino-ai/infino.git", rev = "6eadf7e8c89e90a486ac852f424610717dff1611" }
-infino = { git = "https://github.com/infino-ai/infino.git", rev = "6eadf7e8c89e90a486ac852f424610717dff1611", features = ["test-helpers"] }
+infino-bench-utils = { git = "https://github.com/infino-ai/infino.git", rev = "daa572117f7753d92c0f331bd819eb0001a90409" }
+infino = { git = "https://github.com/infino-ai/infino.git", rev = "daa572117f7753d92c0f331bd819eb0001a90409", features = ["test-helpers"] }
 tantivy = "0.26.1"
 # TurboQuant compressed flat index — pinned to the 1.0.0 release SHA so
 # measured numbers are attributable to exact code.
