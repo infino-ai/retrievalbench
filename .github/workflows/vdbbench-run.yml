@@ -102,7 +102,7 @@ on:
         type: string
       ef_sweep:
         required: false
-        default: ""
+        default: "112 128 192 256 384 512 768 1024 2048"
         description: "Space-separated hnsw_ivf serve-time beams (e.g. '128 256 512'). Each value is one bench run under a shared task label, so the viewer plots them as one recall/QPS curve. Empty = a single run at the stamped k->ef curve."
         type: string
       fts_dataset:
