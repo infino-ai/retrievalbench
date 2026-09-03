@@ -151,10 +151,14 @@ if [ "$BENCH" = "vector" ]; then
   # shows on qps/recall without hand-selecting a filter) and infino_vector_<date>
   # (a clean per-run snapshot, filterable to just infino). Same db_name in both,
   # so each renders as one Infino series with a point per ef.
-  python3 - "$RESULTS_LOCAL_DIR" "$TASK_LABEL" <<'PYMERGE'
+  python3 - "$RESULTS_LOCAL_DIR" "$TASK_LABEL" "$VECTOR_CASE" <<'PYMERGE'
 import glob, json, os, re, sys
 
-results_dir, base_label = sys.argv[1], sys.argv[2]
+results_dir, base_label, vector_case = sys.argv[1], sys.argv[2], sys.argv[3]
+# Case token keeps 1M and 10M in distinct files/run_ids under the same task
+# label — the bucket key is date+label+case, not just date+label, so a
+# same-day 1M run no longer overwrites the 10M curve (or vice versa).
+case_tok = re.sub(r"[^a-z0-9]", "", vector_case.lower())
 infino_dir = os.path.join(results_dir, "Infino")
 legs = sorted(glob.glob(os.path.join(infino_dir, f"result_*_{base_label}_ef*_infino.json")))
 if not legs:
@@ -175,9 +179,9 @@ for label in (base_label, f"infino_vector_{run_date}"):
     # Distinct run_id per file: the viewer groups result files by run_id and
     # MERGES any that share one (keeping only the first file's task_label), so a
     # shared run_id would collapse these two into one label and hide the other.
-    doc["run_id"] = f"{label}_{run_date}"
+    doc["run_id"] = f"{label}_{case_tok}_{run_date}"
     doc["results"] = entries
-    out = os.path.join(infino_dir, f"result_{run_date}_{label}_infino.json")
+    out = os.path.join(infino_dir, f"result_{run_date}_{label}_{case_tok}_infino.json")
     with open(out, "w") as fh:
         json.dump(doc, fh, indent=2)
     written.append(f"{os.path.basename(out)} [run_id={doc['run_id']} task_label={doc['task_label']} n={len(doc['results'])}]")
