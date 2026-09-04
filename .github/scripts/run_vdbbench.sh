@@ -97,6 +97,37 @@ fi
 DB_LABEL="${DB_LABEL:-${VM_SIZE:-unspecified}}"
 echo "task label: $TASK_LABEL | db label: $DB_LABEL"
 
+# Object store. Default (local) writes the catalog to the VM's local disk — the
+# resident-serving path. When STORE=azure the engine serves the corpus from an
+# object-store URI (BLOB_URI) with a local disk cache and credentials passed as
+# --storage-option pairs; this measures the object-storage serving path on the
+# same harness and hardware as the local one. The disk cache stays local either
+# way (the client keeps its bookkeeping off the object store).
+STORE_FLAGS=()
+case "${STORE:-local}" in
+  local)
+    echo "store: local"
+    ;;
+  azure)
+    : "${BLOB_URI:?STORE=azure needs BLOB_URI}"
+    : "${AZURE_STORAGE_ACCOUNT_NAME:?STORE=azure needs AZURE_STORAGE_ACCOUNT_NAME}"
+    : "${AZURE_STORAGE_ACCOUNT_KEY:?STORE=azure needs AZURE_STORAGE_ACCOUNT_KEY}"
+    STORE_FLAGS=(
+      --data-path "$BLOB_URI"
+      --cache-dir "$HOME/vdb_cache"
+      --storage-option "azure_storage_account_name=$AZURE_STORAGE_ACCOUNT_NAME"
+      --storage-option "azure_storage_account_key=$AZURE_STORAGE_ACCOUNT_KEY"
+    )
+    echo "store: azure ($BLOB_URI)"
+    ;;
+  *)
+    # s3/gcs object stores are not wired up yet — fail loudly rather than
+    # silently falling back to local (which would mislabel the result).
+    echo "::error::store='${STORE}' is not supported (only local|azure)"
+    exit 1
+    ;;
+esac
+
 if [ "$BENCH" = "vector" ]; then
   echo "----- VECTOR: $VECTOR_CASE n_cent=$N_CENT nprobe=$NPROBE rerank_mult=$RERANK_MULT" \
        "search_mode=${SEARCH_MODE:-client-default} ef_sweep=${EF_SWEEP:-none} -----"
@@ -141,6 +172,7 @@ if [ "$BENCH" = "vector" ]; then
       --num-concurrency "$NUM_CONC" \
       "${TUNING[@]}" \
       "${EF_FLAG[@]}" \
+      "${STORE_FLAGS[@]}" \
       --cache-budget-bytes "$CACHE_BUDGET_BYTES" \
       --task-label "$LEG_LABEL" \
       --db-label "$DB_LABEL" \
@@ -199,6 +231,7 @@ else
     --payload-profile "$PAYLOAD_PROFILE" \
     --k "$FTS_K" \
     --num-concurrency "$NUM_CONC" \
+    "${STORE_FLAGS[@]}" \
     --cache-budget-bytes "$CACHE_BUDGET_BYTES" \
     --task-label "$TASK_LABEL" \
     --db-label "$DB_LABEL" \

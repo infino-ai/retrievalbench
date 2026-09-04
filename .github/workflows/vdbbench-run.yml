@@ -15,6 +15,14 @@ on:
         required: false
         default: azure
         type: string
+      store:
+        required: false
+        default: local
+        type: string
+      blob_prefix:
+        required: false
+        default: ""
+        type: string
       vm_size:
         required: false
         default: ""
@@ -229,6 +237,40 @@ jobs:
           ssh $SSH_OPTS -i "$SSH_KEY" "${SSH_USER}@${VM_IP}" "mkdir -p /tmp/infino_wheel"
           scp $SSH_OPTS -i "$SSH_KEY" wheels/*.whl "${SSH_USER}@${VM_IP}:/tmp/infino_wheel/"
 
+      # store=azure: stand up a throwaway storage account with the CI's own
+      # federated identity (the same one that provisioned the VM), make a
+      # container, and read its key. The engine reaches Blob over HTTPS with just
+      # name+key — no Azure SDK on the VM. The account is deleted on teardown, so
+      # nothing (data or account) persists past the run.
+      - name: Provision Blob store
+        if: ${{ inputs.store == 'azure' }}
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.cloud }}" != "azure" ]; then
+            echo "::error::store=azure needs cloud=azure (got '${{ inputs.cloud }}'); s3/gcs object stores are not wired up"
+            exit 1
+          fi
+          ACCT="vdbb${GITHUB_RUN_ID}"          # <=24 lowercase alnum, globally unique
+          CONTAINER=bench
+          PREFIX="${{ inputs.blob_prefix }}"
+          [ -z "$PREFIX" ] && PREFIX="vec-${GITHUB_RUN_ID}"
+          echo "creating temp storage account $ACCT in $AZ_RG ($VM_LOCATION)"
+          az storage account create --name "$ACCT" --resource-group "$AZ_RG" \
+            --location "$VM_LOCATION" --sku Standard_LRS --kind StorageV2 \
+            --min-tls-version TLS1_2 --allow-blob-public-access false -o none
+          KEY=$(az storage account keys list --account-name "$ACCT" \
+            --resource-group "$AZ_RG" --query "[0].value" -o tsv)
+          echo "::add-mask::$KEY"
+          az storage container create --name "$CONTAINER" \
+            --account-name "$ACCT" --account-key "$KEY" -o none
+          {
+            echo "STORE=azure"
+            echo "BLOB_URI=az://${CONTAINER}/${PREFIX}"
+            echo "AZURE_STORAGE_ACCOUNT_NAME=$ACCT"
+            echo "AZURE_STORAGE_ACCOUNT_KEY=$KEY"
+            echo "BLOB_ACCOUNT=$ACCT"
+          } >> "$GITHUB_ENV"
+
       # VM-side script piped over SSH; inputs pass as env vars on the command line.
       - name: Run VectorDBBench (on VM)
         run: |
@@ -256,6 +298,10 @@ jobs:
              EF_SWEEP='${{ inputs.ef_sweep }}' \
              DB_LABEL='${{ inputs.db_label }}' \
              INFINO_BENCH_SERVE='${{ inputs.serve }}' \
+             STORE='${{ env.STORE }}' \
+             BLOB_URI='${{ env.BLOB_URI }}' \
+             AZURE_STORAGE_ACCOUNT_NAME='${{ env.AZURE_STORAGE_ACCOUNT_NAME }}' \
+             AZURE_STORAGE_ACCOUNT_KEY='${{ env.AZURE_STORAGE_ACCOUNT_KEY }}' \
              bash -s" < .github/scripts/run_vdbbench.sh 2>&1 | tee /tmp/vdbbench.log
 
       - name: Copy results back
@@ -353,3 +399,14 @@ jobs:
           op: teardown
           cloud: ${{ inputs.cloud }}
           name_prefix: vdbbench-${{ inputs.bench }}
+
+      # Delete the throwaway storage account (data and account) after the VM is
+      # gone. Runs on the re-login'd session above; only fires when store=azure
+      # actually provisioned one. || true so a delete hiccup never fails the run.
+      - name: Teardown Blob store
+        if: ${{ always() && env.BLOB_ACCOUNT != '' }}
+        run: |
+          set -euo pipefail
+          echo "deleting temp storage account $BLOB_ACCOUNT"
+          az storage account delete --name "$BLOB_ACCOUNT" \
+            --resource-group "$AZ_RG" --yes -o none || true

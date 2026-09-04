@@ -85,6 +85,17 @@ on:
         default: azure
         type: choice
         options: [azure, aws, gcp]
+      store:
+        description: "Corpus store. local = the VM's local disk (resident-serving path). azure = object storage (Azure Blob) — measures the object-storage serving path on the same box; a temp storage account + container is created for the run and deleted on teardown."
+        required: false
+        default: local
+        type: choice
+        options: [local, azure]
+      blob_prefix:
+        description: "Prefix under the temp container (store=azure). Empty = derived from the run id."
+        required: false
+        default: ""
+        type: string
       vm_size:
         description: "Instance type (cloud-specific; empty = per-cloud default)."
         required: false
@@ -165,6 +176,8 @@ jobs:
       infino_env: ${{ inputs.infino_env }}
       cache_budget_bytes: ${{ inputs.cache_budget_bytes }}
       cloud: ${{ inputs.cloud }}
+      store: ${{ inputs.store }}
+      blob_prefix: ${{ inputs.blob_prefix }}
       vm_size: ${{ inputs.vm_size }}
       disk_size_gb: ${{ inputs.disk_size_gb }}
       location: ${{ inputs.location }}
