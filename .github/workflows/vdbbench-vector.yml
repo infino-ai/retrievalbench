@@ -82,7 +82,7 @@ on:
       cloud:
         description: "Cloud to provision on."
         required: false
-        default: azure
+        default: gcp
         type: choice
         options: [azure, aws, gcp]
       store:
