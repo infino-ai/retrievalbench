@@ -111,7 +111,7 @@ jobs:
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
     steps:
       - name: Checkout (this repo, for composite actions)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # --- cloud auth (OIDC; one runs) ---
       - name: Azure login
@@ -149,7 +149,7 @@ jobs:
       # failure never leaves a VM billing. Runner glibc/arch must match the VM.
       - name: Checkout harness (runner, prebuilt)
         if: ${{ inputs.prebuilt }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ inputs.clickbench_repo }}
           ref: ${{ inputs.clickbench_ref }}

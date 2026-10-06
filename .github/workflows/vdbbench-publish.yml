@@ -28,7 +28,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout (this repo, for composite actions)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Whichever legs ran; a single-bench dispatch uploads only its own.
       - name: Download results
