@@ -2,147 +2,135 @@
 
 infino's ClickBench numbers against the published reference engines, on the ClickBench reference machine **c6a.4xlarge** at the full 100M-row scale.
 
-Across the full self-hosted ClickBench field on c6a.4xlarge, infino ranks **#21 of 94** engines by hot-run total, and beats every general-purpose engine reading Parquet except DuckDB and CedarDB. See the [full comparison](FULL_COMPARISON.md) for all 94.
+Across the full self-hosted ClickBench field on c6a.4xlarge, infino ranks **#35 of 126** engines by hot-run total. See the [full comparison](FULL_COMPARISON.md) for all 126.
 
-This README keeps the headline comparison against the two engines that matter most for us, DataFusion and ClickHouse. infino's result file is stored here; the reference numbers link to their source on upstream ClickBench.
+This README keeps the headline comparison against the two engines that matter most for us, DataFusion and ClickHouse. All numbers are from upstream [ClickBench](https://github.com/ClickHouse/ClickBench), where infino now has published results; each row links to its folder there, and the result files are mirrored under `results/`. Ranks use the **newest complete run per system**: each system's most recent upstream run with all 43 queries (hot = min of tries 2 and 3), applied to infino's row too. Snapshot: upstream [ClickBench](https://github.com/ClickHouse/ClickBench) at `6152b6b`.
 
 ## Results (c6a.4xlarge, 100M rows)
 
 | System | Cold sum | Cold geomean | Hot sum | Hot geomean |
 |---|--:|--:|--:|--:|
-| [**infino**](results/infino/c6a.4xlarge.json) | 603.36s * | 8.34s * | **35.66s** | 0.2953s |
-| [DataFusion (Parquet, single)](results/datafusion/c6a.4xlarge.json) | 185.82s | 1.22s | 45.92s | 0.3556s |
-| [ClickHouse (Parquet, single)](results/clickhouse-parquet/c6a.4xlarge.json) | 198.14s | 1.33s | 48.05s | 0.4264s |
-| [ClickHouse (native, MergeTree)](results/clickhouse/c6a.4xlarge.json) | 154.79s | 1.58s | 32.26s | 0.1306s |
+| [**infino**](https://github.com/ClickHouse/ClickBench/tree/main/infino) ([file](results/infino/c6a.4xlarge.json)) | 128.46s | 1.891s | **33.74s** | **0.2636s** |
+| [DataFusion (Parquet, single)](https://github.com/ClickHouse/ClickBench/tree/main/datafusion) ([file](results/datafusion/c6a.4xlarge.json)) | 182.91s | 1.169s | 45.57s | 0.3558s |
+| [ClickHouse (Parquet, single)](https://github.com/ClickHouse/ClickBench/tree/main/clickhouse-parquet) ([file](results/clickhouse-parquet/c6a.4xlarge.json)) | 127.72s | 1.247s | 28.39s | 0.3218s |
+| [ClickHouse (native, MergeTree)](https://github.com/ClickHouse/ClickBench/tree/main/clickhouse) ([file](results/clickhouse/c6a.4xlarge.json)) | 106.08s | 1.004s | 17.44s | 0.1039s |
 
-On hot, infino beats DataFusion and ClickHouse-on-Parquet. It trails ClickHouse's native MergeTree, which is a different substrate (ClickHouse ingests into its own format rather than reading Parquet).
+On hot, infino beats DataFusion on both total (33.74s vs 45.57s) and geomean (0.2636 vs 0.3558). Against ClickHouse-on-Parquet it trails on total (33.74s vs 28.39s) but leads on geomean (0.2636 vs 0.3218) — one slow query weighs on infino's total while its per-query distribution is tighter. ClickHouse's native MergeTree is faster on both, on a different substrate (it ingests into its own format rather than reading Parquet).
+
+On cold, infino's total is competitive — close to ClickHouse-on-Parquet (128.46s vs 127.72s) and well ahead of DataFusion (182.91s) — but its cold geomean is the highest of the four (1.891s against 1.004s-1.247s): a few slow cold queries weigh on the per-query figure even though the total holds up.
 
 ## The leaderboard machine (c8g.metal-48xl, 100M rows)
 
-The numbers quoted off the ClickBench homepage come from the largest machine, **c8g.metal-48xl** (Graviton4, 192 vCPU), not the c6a.4xlarge reference above. infino now has a result there too: **hot sum 6.45s, geomean 0.090** ([result file](results/infino/c8g.metal-48xl.json)), the fastest of five clean board-standard three-try sweeps on an idle box. Full detail and the AMD c7a.metal number are in [MACHINE_SCALING.md](MACHINE_SCALING.md).
+The numbers quoted off the ClickBench homepage come from the largest machine, **c8g.metal-48xl** (Graviton4, 192 vCPU), not the c6a.4xlarge reference above. infino's result there: **hot sum 6.04s, geomean 0.0837** ([result file](results/infino/c8g.metal-48xl.json)).
 
-Full field on this machine, best hot sum per system (60 systems). infino ranks **#17**, ahead of every DataFusion build (including the Vortex-partitioned one) and every ClickHouse-on-Parquet variant; everything ahead is a native-format or in-memory engine, or a DuckDB datalake variant.
+Full field on this machine, best hot sum per system (86 systems). infino ranks **#19**, ahead of every DataFusion build and every ClickHouse-on-Parquet variant. Ahead of it sit the native-format and in-memory engines, plus a handful of newer Parquet/dataframe readers.
 
 | # | System | Hot sum |
 |--:|---|--:|
-| 1 | umbra | 1.61s |
-| 2 | cedardb | 2.80s |
-| 3 | duckdb | 3.01s |
-| 4 | gizmosql | 3.18s |
-| 5 | clickhouse | 3.69s |
-| 6 | duckdb-memory | 3.72s |
-| 7 | clickhouse-web | 3.84s |
-| 8 | pg_clickhouse | 4.00s |
-| 9 | firebolt | 4.48s |
-| 10 | polars-dataframe | 4.73s |
-| 11 | starrocks | 5.31s |
-| 12 | duckdb-parquet-partitioned | 5.42s |
-| 13 | arc | 5.55s |
-| 14 | polars | 5.91s |
-| 15 | duckdb-parquet | 6.19s |
-| 16 | duckdb-datalake | 6.41s |
-| **17** | **infino** | **6.45s** |
-| 18 | duckdb-datalake-partitioned | 6.52s |
-| 19 | datafusion-vortex-partitioned | 6.60s |
-| 20 | duckdb-dataframe | 7.02s |
-| 21 | datafusion-partitioned | 7.27s |
-| 22 | chdb | 8.06s |
-| 23 | datafusion | 8.54s |
-| 24 | clickhouse-datalake-partitioned | 8.73s |
-| 25 | clickhouse-parquet-partitioned | 8.93s |
-| 26 | cedardb-parquet | 9.79s |
-| 27 | clickhouse-parquet | 10.62s |
-| 28 | clickhouse-datalake | 13.35s |
-| 29 | sail | 13.57s |
-| 30 | chdb-parquet-partitioned | 13.99s |
-| 31 | sail-partitioned | 14.15s |
-| 32 | chdb-dataframe | 15.57s |
-| 33 | victorialogs | 18.17s |
-| 34 | firebolt-parquet-partitioned | 18.58s |
-| 35 | pg_duckdb-parquet | 21.70s |
-| 36 | duckdb-vortex | 29.08s |
-| 37 | datafusion-vortex | 29.84s |
-| 38 | daft-parquet | 31.11s |
-| 39 | bemidb | 35.78s |
-| 40 | daft-parquet-partitioned | 44.00s |
-| 41 | glaredb-partitioned | 44.22s |
-| 42 | glaredb | 46.36s |
-| 43 | spark-comet | 61.04s |
-| 44 | gendb | 70.06s |
-| 45 | trino-partitioned | 85.23s |
-| 46 | trino | 90.61s |
-| 47 | trino-datalake-partitioned | 97.42s |
-| 48 | trino-datalake | 105.07s |
-| 49 | firebolt-parquet | 114.44s |
-| 50 | presto-partitioned | 122.40s |
-| 51 | cloudberry | 127.81s |
-| 52 | warehousepg | 134.12s |
-| 53 | presto-datalake-partitioned | 136.56s |
-| 54 | presto | 152.19s |
-| 55 | presto-datalake | 159.73s |
-| 56 | spark | 300.89s |
-| 57 | timescaledb | 495.27s |
-| 58 | cratedb | 693.13s |
-| 59 | greenplum | 738.17s |
-| 60 | bqn | 1447.20s |
+| 1 | [elosdb](https://github.com/ClickHouse/ClickBench/tree/main/elosdb) | 0.87s |
+| 2 | [Pivotlake (Parquet, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/pivot-parquet-partitioned) | 1.03s |
+| 3 | [intent-gizmosql](https://github.com/ClickHouse/ClickBench/tree/main/intent-gizmosql) | 1.04s |
+| 4 | [Pivotlake (Parquet)](https://github.com/ClickHouse/ClickBench/tree/main/pivot-parquet) | 1.05s |
+| 5 | [Umbra](https://github.com/ClickHouse/ClickBench/tree/main/umbra) | 1.17s |
+| 6 | [CedarDB](https://github.com/ClickHouse/ClickBench/tree/main/cedardb) | 2.38s |
+| 7 | [Firebolt](https://github.com/ClickHouse/ClickBench/tree/main/firebolt) | 2.66s |
+| 8 | [Rayforce](https://github.com/ClickHouse/ClickBench/tree/main/rayforce) | 2.67s |
+| 9 | [ClickHouse](https://github.com/ClickHouse/ClickBench/tree/main/clickhouse) | 2.67s |
+| 10 | [ClickHouse (web)](https://github.com/ClickHouse/ClickBench/tree/main/clickhouse-web) | 2.72s |
+| 11 | [chDB (DataFrame)](https://github.com/ClickHouse/ClickBench/tree/main/chdb-dataframe) | 2.77s |
+| 12 | [GizmoSQL](https://github.com/ClickHouse/ClickBench/tree/main/gizmosql) | 3.24s |
+| 13 | [Umbra (Parquet)](https://github.com/ClickHouse/ClickBench/tree/main/umbra-parquet) | 3.24s |
+| 14 | [Umbra (Parquet, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/umbra-parquet-partitioned) | 3.52s |
+| 15 | [DuckDB (memory)](https://github.com/ClickHouse/ClickBench/tree/main/duckdb-memory) | 3.72s |
+| 16 | [pg_clickhouse](https://github.com/ClickHouse/ClickBench/tree/main/pg_clickhouse) | 4.49s |
+| 17 | [Polars (DataFrame)](https://github.com/ClickHouse/ClickBench/tree/main/polars-dataframe) | 4.96s |
+| 18 | [StarRocks](https://github.com/ClickHouse/ClickBench/tree/main/starrocks) | 5.84s |
+| **19** | [**infino**](results/infino/c8g.metal-48xl.json) | **6.04s** |
+| 20 | [Arc](https://github.com/ClickHouse/ClickBench/tree/main/arc) | 6.79s |
+| 21 | [ClickHouse (Parquet, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/clickhouse-parquet-partitioned) | 6.93s |
+| 22 | [Polars (Parquet)](https://github.com/ClickHouse/ClickBench/tree/main/polars) | 7.00s |
+| 23 | [DataFusion (Parquet, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/datafusion-partitioned) | 7.09s |
+| 24 | [chDB](https://github.com/ClickHouse/ClickBench/tree/main/chdb) | 7.19s |
+| 25 | [chDB (Parquet, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/chdb-parquet-partitioned) | 8.39s |
+| 26 | [DataFusion (Parquet, single)](https://github.com/ClickHouse/ClickBench/tree/main/datafusion) | 8.50s |
+| 27 | [QuestDB](https://github.com/ClickHouse/ClickBench/tree/main/questdb) | 9.60s |
+| 28 | [DataFusion (Vortex, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/datafusion-vortex-partitioned) | 9.81s |
+| 29 | [Sail (Parquet)](https://github.com/ClickHouse/ClickBench/tree/main/sail) | 9.89s |
+| 30 | [CedarDB (Parquet)](https://github.com/ClickHouse/ClickBench/tree/main/cedardb-parquet) | 10.12s |
+| 31 | [ScramDB](https://github.com/ClickHouse/ClickBench/tree/main/scramdb) | 10.55s |
+| 32 | [Sail (Parquet, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/sail-partitioned) | 10.61s |
+| 33 | [ClickHouse (Parquet, single)](https://github.com/ClickHouse/ClickBench/tree/main/clickhouse-parquet) | 10.85s |
+| 34 | [ClickHouse (data lake, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/clickhouse-datalake-partitioned) | 11.24s |
+| 35 | [DuckDB](https://github.com/ClickHouse/ClickBench/tree/main/duckdb) | 11.29s |
+| 36 | [DuckDB (Parquet, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/duckdb-parquet-partitioned) | 11.47s |
+| 37 | [Spice.ai OSS (Parquet, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/spiceai-parquet-partitioned) | 11.82s |
+| 38 | [Spice.ai OSS (Parquet, single)](https://github.com/ClickHouse/ClickBench/tree/main/spiceai-parquet) | 11.89s |
+| 39 | [DuckDB (Parquet, single)](https://github.com/ClickHouse/ClickBench/tree/main/duckdb-parquet) | 12.22s |
+| 40 | [ClickHouse (data lake, single)](https://github.com/ClickHouse/ClickBench/tree/main/clickhouse-datalake) | 13.39s |
+| 41 | [Opteryx](https://github.com/ClickHouse/ClickBench/tree/main/opteryx-skene) | 17.28s |
+| 42 | [VictoriaLogs](https://github.com/ClickHouse/ClickBench/tree/main/victorialogs) | 18.17s |
+| 43 | [DuckDB (Vortex, single, load threads=2)](https://github.com/ClickHouse/ClickBench/tree/main/duckdb-vortex-tuned) | 20.06s |
+| 44 | [Firebolt (Parquet, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/firebolt-parquet-partitioned) | 20.66s |
+| 45 | [pg_duckdb (Parquet)](https://github.com/ClickHouse/ClickBench/tree/main/pg_duckdb-parquet) | 21.70s |
+| 46 | [StarRocks (Parquet, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/starrocks-parquet-partitioned) | 23.64s |
+| 47 | [StarRocks (Parquet, single)](https://github.com/ClickHouse/ClickBench/tree/main/starrocks-parquet) | 24.70s |
+| 48 | [Opteryx (Parquet, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/opteryx) | 29.07s |
+| 49 | [DataFusion (Vortex, single)](https://github.com/ClickHouse/ClickBench/tree/main/datafusion-vortex) | 29.71s |
+| 50 | [Velox (Axiom)](https://github.com/ClickHouse/ClickBench/tree/main/velox) | 31.97s |
+| 51 | [Ravel](https://github.com/ClickHouse/ClickBench/tree/main/ravel) | 34.62s |
+| 52 | [BemiDB](https://github.com/ClickHouse/ClickBench/tree/main/bemidb) | 35.78s |
+| 53 | [DuckDB (Vortex, single)](https://github.com/ClickHouse/ClickBench/tree/main/duckdb-vortex) | 37.40s |
+| 54 | [Daft (Parquet, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/daft-parquet-partitioned) | 43.05s |
+| 55 | [DuckDB (data lake, single)](https://github.com/ClickHouse/ClickBench/tree/main/duckdb-datalake) | 47.06s |
+| 56 | [GlareDB (Parquet, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/glaredb-partitioned) | 47.42s |
+| 57 | [GlareDB (Parquet, single)](https://github.com/ClickHouse/ClickBench/tree/main/glaredb) | 49.03s |
+| 58 | [DuckDB (data lake, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/duckdb-datalake-partitioned) | 51.56s |
+| 59 | [GenDB](https://github.com/ClickHouse/ClickBench/tree/main/gendb) | 70.06s |
+| 60 | [Daft (Parquet, single)](https://github.com/ClickHouse/ClickBench/tree/main/daft-parquet) | 87.38s |
+| 61 | [Trino (Parquet, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/trino-partitioned) | 96.19s |
+| 62 | [Trino (Parquet, single)](https://github.com/ClickHouse/ClickBench/tree/main/trino) | 100.17s |
+| 63 | [Pinot](https://github.com/ClickHouse/ClickBench/tree/main/pinot) | 101.29s |
+| 64 | [SlateDB](https://github.com/ClickHouse/ClickBench/tree/main/slatedb) | 105.57s |
+| 65 | [Pinot (with star-tree index)](https://github.com/ClickHouse/ClickBench/tree/main/pinot-tuned) | 107.27s |
+| 66 | [Cloudberry](https://github.com/ClickHouse/ClickBench/tree/main/cloudberry) | 127.80s |
+| 67 | [Presto (Parquet, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/presto-partitioned) | 131.02s |
+| 68 | [WarehousePG](https://github.com/ClickHouse/ClickBench/tree/main/warehousepg) | 134.12s |
+| 69 | [Presto (data lake, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/presto-datalake-partitioned) | 143.47s |
+| 70 | [Presto (Parquet, single)](https://github.com/ClickHouse/ClickBench/tree/main/presto) | 156.94s |
+| 71 | [Trino (data lake, partitioned)](https://github.com/ClickHouse/ClickBench/tree/main/trino-datalake-partitioned) | 159.64s |
+| 72 | [Presto (data lake, single)](https://github.com/ClickHouse/ClickBench/tree/main/presto-datalake) | 159.73s |
+| 73 | [Trino (data lake, single)](https://github.com/ClickHouse/ClickBench/tree/main/trino-datalake) | 179.43s |
+| 74 | [Firebolt (Parquet)](https://github.com/ClickHouse/ClickBench/tree/main/firebolt-parquet) | 208.34s |
+| 75 | [openGauss](https://github.com/ClickHouse/ClickBench/tree/main/opengauss) | 225.24s |
+| 76 | [Spark (Comet)](https://github.com/ClickHouse/ClickBench/tree/main/spark-comet) | 261.01s |
+| 77 | [Spark](https://github.com/ClickHouse/ClickBench/tree/main/spark) | 300.89s |
+| 78 | [TimescaleDB](https://github.com/ClickHouse/ClickBench/tree/main/timescaledb) | 495.27s |
+| 79 | [CrateDB](https://github.com/ClickHouse/ClickBench/tree/main/cratedb) | 693.13s |
+| 80 | [MariaDB ColumnStore](https://github.com/ClickHouse/ClickBench/tree/main/mariadb-columnstore) | 701.44s |
+| 81 | [PostgreSQL](https://github.com/ClickHouse/ClickBench/tree/main/postgresql) | 715.83s |
+| 82 | [Greenplum](https://github.com/ClickHouse/ClickBench/tree/main/greenplum) | 743.99s |
+| 83 | [ParadeDB](https://github.com/ClickHouse/ClickBench/tree/main/paradedb) | 850.54s |
+| 84 | [pandas](https://github.com/ClickHouse/ClickBench/tree/main/pandas) | 1418.23s |
+| 85 | [BQN](https://github.com/ClickHouse/ClickBench/tree/main/bqn) | 1447.20s |
+| 86 | [DuckDB (DataFrame)](https://github.com/ClickHouse/ClickBench/tree/main/duckdb-dataframe) | 5005.50s |
 
-Reference rows are best-per-system from upstream ClickBench's `c8g.metal-48xl` results; the infino row is ours. Managed warehouses (Snowflake, Databricks, BigQuery, Redshift) are excluded because they do not run on a fixed instance.
+Managed warehouses (Snowflake, Databricks, BigQuery, Redshift) are excluded because they do not run on a fixed instance.
 
 ### How ClickBench measures
 
 Each query is run three times. **Cold** is the first run (`t1`); **hot** is the best of the warm runs (`min(t2, t3)`). **Sum** is the total across all 43 queries; **geomean** is the geometric mean, so no single slow query dominates. Lower is better everywhere.
 
-### \* Ignore infino's cold numbers for now
-
-infino's cold figures are preliminary and should be disregarded at this stage:
-
-1. **Not measured the same way.** infino's cold was taken with the OS page cache dropped before every query, so each `t1` is a true cold-storage read. The upstream reference cold numbers run against a warm OS cache (data already resident from load). The two are not comparable.
-2. **Cold path still improving.** Cross-process cache reuse landed (a fresh process rebuilds its cache index from files a prior process left on disk instead of re-fetching from source) and already cut cold sharply: cold sum from 926s to 610s, cold geomean from 20.8s to 8.3s between runs. It is still an active optimization target, so the numbers will keep moving.
-
-Hot is the comparable, meaningful metric today.
-
-## Queries
-
-The exact queries and harness used for the infino run live in our ClickBench fork on the [`add-infino`](https://github.com/infino-ai/clickbench/tree/add-infino) branch:
-
-- infino: https://github.com/infino-ai/clickbench/blob/add-infino/infino/queries.sql
-- DataFusion: https://github.com/infino-ai/clickbench/blob/add-infino/datafusion/queries.sql
-- ClickHouse: https://github.com/infino-ai/clickbench/blob/add-infino/clickhouse/queries.sql
-
-The reference engines' query files are unchanged from upstream ClickBench; only the infino system directory is ours.
-
-## Correctness
-
-The infino numbers are on verified-correct results. All 43 infino query outputs were row-diffed against DataFusion over the same 100M-row Parquet:
-
-- **34 of 43 are bit-identical.**
-- The other 9 differ only for benign reasons: floating-point summation order in an `AVG`; infino's `SELECT *` exposing its internal `_id` column; and queries that are inherently non-deterministic (a `LIMIT` with no total `ORDER BY`, or ties on a non-unique sort key, where any engine may return a different valid set of rows).
-
-No query returns a wrong computation.
-
 ## Sources
 
-infino's JSON is from our `clickbench-cloud` run on 2026-07-21: infino `main` (commit `aa3a6247`), AWS c6a.4xlarge, 100M rows, 32 GiB disk cache, portable build (no `target-cpu`) with fat LTO and `codegen-units = 1`, matching DataFusion's build recipe.
+All numbers are from upstream [ClickBench](https://github.com/ClickHouse/ClickBench), snapshot `6152b6b`. The rows mirrored here, with the upstream run date and the version measured:
 
-Reference numbers are from upstream [ClickBench](https://github.com/ClickHouse/ClickBench). The three committed here are copied verbatim from:
+- infino: [`infino/results/20260828/c6a.4xlarge.json`](https://github.com/ClickHouse/ClickBench/blob/main/infino/results/20260828/c6a.4xlarge.json) and [`infino/results/20260829/c8g.metal-48xl.json`](https://github.com/ClickHouse/ClickBench/blob/main/infino/results/20260829/c8g.metal-48xl.json) — infino **0.5.10**, taken 2026-08-28 (c6a) / 2026-08-29 (c8g).
+- DataFusion (Parquet, single): [`datafusion/results/20260820/c6a.4xlarge.json`](https://github.com/ClickHouse/ClickBench/blob/main/datafusion/results/20260820/c6a.4xlarge.json)
+- ClickHouse (Parquet, single): [`clickhouse-parquet/results/20261007/c6a.4xlarge.json`](https://github.com/ClickHouse/ClickBench/blob/main/clickhouse-parquet/results/20261007/c6a.4xlarge.json)
+- ClickHouse (native): [`clickhouse/results/20261007/c6a.4xlarge.json`](https://github.com/ClickHouse/ClickBench/blob/main/clickhouse/results/20261007/c6a.4xlarge.json)
 
-- DataFusion: https://github.com/ClickHouse/ClickBench/blob/main/datafusion/results/20260629/c6a.4xlarge.json
-- ClickHouse (Parquet): https://github.com/ClickHouse/ClickBench/blob/main/clickhouse-parquet/results/20260624/c6a.4xlarge.json
-- ClickHouse (native): https://github.com/ClickHouse/ClickBench/blob/main/clickhouse/results/20260624/c6a.4xlarge.json
-
-The rest of the field is linked from [FULL_COMPARISON.md](FULL_COMPARISON.md) rather than copied in. Managed cloud warehouses (Snowflake, Databricks, BigQuery, Redshift) are excluded because they do not run on c6a.4xlarge.
+Managed cloud warehouses (Snowflake, Databricks, BigQuery, Redshift) are excluded because they do not run on c6a.4xlarge.
 
 ## Updating
 
-These files are meant to be refreshed programmatically. From a
-`clickbench-cloud` run-log artifact:
-
-```sh
-python3 scripts/ingest_clickbench_log.py \
-  --log /tmp/clickbench.log \
-  --machine c8g.metal-48xl \
-  --infino-ref <commit-sha> \
-  --out clickbench/results/infino/c8g.metal-48xl.json
-```
-
-Reference numbers are re-read from upstream ClickBench.
+Numbers are refreshed by re-reading upstream [ClickBench](https://github.com/ClickHouse/ClickBench) at a pinned commit: for each system the newest `results/<date>/<machine>.json` with all 43 queries, hot = min(t2, t3), ranked by hot sum.
