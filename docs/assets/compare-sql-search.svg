@@ -12,11 +12,11 @@
 <text x="648.3" y="190.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#5E5749" text-anchor="middle">1000</text>
 <text x="26.0" y="190.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" fill="#5E5749">log scale</text>
 <text x="218.0" y="78.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" fill="#17130F" font-weight="600" text-anchor="end">Infino</text>
-<rect x="232" y="70" width="153.2" height="9" rx="1" fill="#D6400F"/>
-<text x="854.0" y="78.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#17130F" font-weight="600" text-anchor="end">12.7</text>
-<text x="218.0" y="106.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" fill="#5E5749" text-anchor="end">ParadeDB</text>
-<rect x="232" y="98" width="181.2" height="9" rx="1" fill="#B7B4AB"/>
-<text x="854.0" y="106.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#5E5749" font-weight="600" text-anchor="end">20.2</text>
+<rect x="232" y="70" width="146.7" height="9" rx="1" fill="#D6400F"/>
+<text x="854.0" y="78.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#17130F" font-weight="600" text-anchor="end">11.4</text>
+<text x="218.0" y="106.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" fill="#5E5749" text-anchor="end">ParadeDB (partitioned)</text>
+<rect x="232" y="98" width="183.2" height="9" rx="1" fill="#B7B4AB"/>
+<text x="854.0" y="106.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#5E5749" font-weight="600" text-anchor="end">20.9</text>
 <text x="218.0" y="134.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" fill="#5E5749" text-anchor="end">Elasticsearch</text>
 <rect x="232" y="126" width="309.9" height="9" rx="1" fill="#B7B4AB"/>
 <text x="854.0" y="134.0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" fill="#5E5749" font-weight="600" text-anchor="end">171.1</text>

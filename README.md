@@ -77,10 +77,14 @@ init_bench
 
 ![SQL vs search engines](docs/assets/compare-sql-search.svg)
 
-Runs through [our port](https://github.com/infino-ai/clickbench/tree/add-infino/infino)
-of the public [ClickBench](https://benchmark.clickhouse.com/) suite.
-Headline on c8g.metal-48xl: hot sum **6.45 s**, geomean **0.090** — #17 of
-60 systems. Details and per-machine results: [`clickbench/`](clickbench/README.md).
+infino is on the public [ClickBench](https://benchmark.clickhouse.com/) board,
+measured by ClickBench's own harness from the
+[`infino/`](https://github.com/ClickHouse/ClickBench/tree/main/infino) folder
+upstream. On the board (2026-10-20, infino 0.11.3): **#1 among
+search engines**, ahead of every Snowflake and Databricks configuration on
+combined and hot, top 6% on storage size, top 11% on hot runs and top 16%
+overall. Details, the head-to-head against DataFusion and ClickHouse, and
+per-machine results: [`clickbench/`](clickbench/README.md).
 
 ## Full-text at Wikipedia scale
 

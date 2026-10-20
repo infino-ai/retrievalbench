@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Turn a clickbench-cloud run log into clickbench/results/infino/<machine>.json.
+"""Turn a clickbench-cloud run log into a ClickBench-format result JSON.
 
 The workflow tees the VM sweep to /tmp/clickbench.log. Each query line is:
 
@@ -12,7 +12,7 @@ Usage:
   scripts/ingest_clickbench_log.py \\
       --log /tmp/clickbench.log \\
       --machine c8g.metal-48xl \\
-      --out clickbench/results/infino/c8g.metal-48xl.json
+      --out /tmp/clickbench-result.json
 """
 
 from __future__ import annotations

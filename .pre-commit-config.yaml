@@ -16,13 +16,13 @@ repos:
       - id: check-yaml
         args: [--allow-multiple-documents]
       - id: mixed-line-ending
-      # Published results are written by scripts/publish_inprocess.py and by
-      # the ClickBench runs, and the license texts are reproduced verbatim from
-      # upstream. Both need to keep their exact bytes.
+      # Published results are written by scripts/publish_inprocess.py, and the
+      # license texts are reproduced verbatim from upstream. Both need to keep
+      # their exact bytes.
       - id: end-of-file-fixer
-        exclude: '^(results/|clickbench/results/|LICENSE)'
+        exclude: '^(results/|LICENSE)'
       - id: trailing-whitespace
-        exclude: '^(results/|clickbench/results/|LICENSE)'
+        exclude: '^(results/|LICENSE)'
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.12
     hooks:
