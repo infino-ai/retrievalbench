@@ -1,0 +1,23 @@
+[package]
+name = "idbench"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Generation, storage and lookup cost of document id schemes: auto-increment, UUIDv4, UUIDv7, ULID, 64-bit Snowflake, and Infino's 128-bit Snowflake"
+
+[dependencies]
+# The engine itself, from main. `test-helpers` makes its superfile builder,
+# reader and id generator reachable from outside the crate.
+infino = { git = "https://github.com/infino-ai/infino", rev = "c5a80fa9", features = ["test-helpers"] }
+arrow-array = "58"
+arrow-schema = "58"
+bytes = "1"
+ferroid = { version = "=2.0.0", default-features = false, features = ["std", "alloc", "snowflake", "basic"] }
+parquet = { version = "58", default-features = false, features = ["arrow", "zstd"] }
+rand = "0.9"
+ulid = "1"
+uuid = { version = "1", features = ["v4", "v7", "fast-rng"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

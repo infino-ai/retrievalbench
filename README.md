@@ -13,6 +13,7 @@
 | [Vector databases](#vector-databases) | VectorDBBench's bundled peers | 1M / 10M | [live viewer](https://vdbbench-viewer-q6unoyyhua-uc.a.run.app) |
 | [SQL on ClickBench](#sql-on-clickbench) | the public leaderboard | 100M rows | [`clickbench/`](clickbench/README.md) |
 | [Full-text at Wikipedia scale](#full-text-at-wikipedia-scale) | Tantivy, Lucene, … | fixed Wikipedia corpus | [`search-benchmark/`](search-benchmark/README.md) |
+| [Document ids](#document-ids) | auto-increment, UUIDv4, UUIDv7, ULID, Snowflake | 5M ids per writer, 1M-row superfile, 10M-row table | [`idbench/`](idbench/README.md) |
 
 ## Embedded vector libraries
 
@@ -96,6 +97,15 @@ single-threaded, full-Wikipedia, HTTP-timed, so not comparable to the
 in-process tables. See [`search-benchmark/README.md`](search-benchmark/README.md).
 
 
+## Document ids
+
+What an id scheme costs a search engine to mint, store and look up:
+auto-increment, UUIDv4, UUIDv7, ULID and 64-bit Snowflake against Infino's
+128-bit `_id`, all through Infino's own superfile builder and reader, so only
+the ids differ. A standalone crate, pinned to an Infino commit; its
+[README](idbench/README.md) gives the numbers and the commit, date and machine
+they were measured on.
+
 ## Hardware
 
 | Suite | Machine |
@@ -104,6 +114,7 @@ in-process tables. See [`search-benchmark/README.md`](search-benchmark/README.md
 | Vector databases | cloud VM, instance type recorded per run |
 | ClickBench | `c6a.4xlarge` (reference) and `c8g.metal-48xl` (leaderboard) |
 | Full-text | AWS `c7i.2xlarge` |
+| Document ids | GCP `c3-highcpu-8`, recorded in each `idbench/results/` file |
 
 ## Contributing
 
@@ -126,8 +137,8 @@ This repository is dual-licensed:
 
 | What | License |
 |---|---|
-| Harness code — `benches/`, `scripts/`, `annbench/`, `vdbbench-viewer/`, `.github/` | [Apache-2.0](LICENSE) |
-| Published results and figures — `results/`, `docs/assets/`, the tables above | [CC BY 4.0](LICENSE-CC-BY-4.0) |
+| Harness code — `benches/`, `scripts/`, `annbench/`, `vdbbench-viewer/`, `idbench/src/`, `.github/` | [Apache-2.0](LICENSE) |
+| Published results and figures — `results/`, `idbench/results/`, `docs/assets/`, the tables above | [CC BY 4.0](LICENSE-CC-BY-4.0) |
 
 So you can reuse the harness under Apache-2.0, and you can quote, chart, or
 republish our numbers anywhere — including in a comparison that disagrees with
