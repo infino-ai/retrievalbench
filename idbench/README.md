@@ -2,14 +2,16 @@
 
 How much a document id scheme costs a search engine, i.e. what it costs to mint, store and look up an id. The bench compares six schemes:
 
-| scheme | layout |
-|---|---|
-| auto-increment | one counter shared by every writer (an atomic across threads) |
-| UUIDv4 | 122 random bits |
-| UUIDv7 | 48-bit ms timestamp, then counter and random bits |
-| ULID | 48-bit ms timestamp, then 80 random bits |
-| Snowflake-64 | Twitter's layout: 41-bit ms timestamp, 10-bit machine id, 12-bit sequence |
-| Infino-128 | Infino's `_id`: 64-bit ms timestamp, 40-bit random writer id, 24-bit sequence |
+| scheme | layout | how the bench mints it |
+|---|---|---|
+| auto-increment | one counter shared by every writer | an atomic `fetch_add` per id, or one block per batch |
+| UUIDv4 | 122 random bits | `Uuid::new_v4` with `fast-rng`, or the random bytes for a whole batch at once |
+| UUIDv7 | 48-bit ms timestamp, then counter and random bits | `Uuid::now_v7` (the crate's default, one context per process behind a lock), or a `ContextV7` per writer |
+| ULID | 48-bit ms timestamp, then 80 random bits | `Ulid::new`, or the crate's monotonic `Generator` per writer |
+| Snowflake-64 | Twitter's layout: 41-bit ms timestamp, 10-bit machine id, 12-bit sequence | ferroid's `BasicSnowflakeGenerator`, one machine id per writer |
+| Infino-128 | Infino's `_id`: 64-bit ms timestamp, 40-bit random writer id, 24-bit sequence | `IdGenerator::next_id`, or `reserve_range` per batch as an append does |
+
+Each scheme is minted one id at a time and, where the scheme allows it, in batches of 1,024 in its fastest form: a block from the counter, the random bytes for the batch at once, one clock read per batch. Snowflake-64 has no batched row, since its 12-bit sequence caps a writer at 4,096 ids per millisecond, which it already reaches one id at a time. A test checks that every minter yields distinct ids, in increasing order for every scheme that orders them.
 
 Everything Infino-specific is the engine's own code, at the commit pinned in `Cargo.toml`. Ids are minted by its `IdGenerator`, every superfile is built by its `SuperfileBuilder`, and hits are resolved to ids by its `SuperfileReader`. The other schemes' ids go through the same builder and reader, so the only thing that differs between the rows of two tables is the id.
 

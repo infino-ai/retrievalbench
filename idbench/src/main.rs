@@ -6,8 +6,11 @@
 //
 //   auto-increment  one shared counter (an AtomicU64 across threads)
 //   UUIDv4          122 random bits
-//   UUIDv7          48-bit ms timestamp + counter/random bits
-//   ULID            48-bit ms timestamp + 80 random bits
+//   UUIDv7          48-bit ms timestamp + counter/random bits, through the
+//                   uuid crate's default `now_v7` and through a ContextV7
+//                   per writer
+//   ULID            48-bit ms timestamp + 80 random bits, through `Ulid::new`
+//                   and through the ulid crate's monotonic Generator
 //   Snowflake-64    Twitter layout: 41-bit ms timestamp, 10-bit machine, 12-bit sequence
 //   Infino-128      64-bit ms timestamp, 40-bit random worker, 24-bit sequence
 //
@@ -19,18 +22,23 @@
 // schemes' ids go through the same builder and reader, so the only thing
 // that differs between rows of a table is the id.
 //
+// Each scheme is minted one id at a time, and in batches of 1024 in the
+// fastest form that scheme allows: a block of numbers from the counter,
+// the random bytes for the whole batch at once, one clock read per batch.
+//
 // Run:  cargo run --release            (a few minutes on 8 cores, after the build)
 //       cargo run --release -- quick   (smaller sizes, for a smoke test)
 //       cargo run --release -- mint    (only the minting tables)
 
 use std::{
+    cell::RefCell,
     hint::black_box,
     sync::{
         Arc, Barrier, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     thread,
-    time::Instant,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use arrow_array::{Decimal128Array, LargeStringArray, RecordBatch};
@@ -57,24 +65,40 @@ use parquet::{
     },
     file::metadata::PageIndexPolicy,
 };
-use rand::Rng;
+use rand::{Rng, RngCore};
+use uuid::{ContextV7, Timestamp, Uuid};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Scheme {
     AutoInc,
     UuidV4,
     UuidV7,
+    UuidV7Ctx,
     Ulid,
+    UlidMono,
     Snowflake64,
     Infino128,
 }
 
-const SCHEMES: [Scheme; 6] = [
+const SCHEMES: [Scheme; 8] = [
     Scheme::AutoInc,
     Scheme::UuidV4,
     Scheme::UuidV7,
+    Scheme::UuidV7Ctx,
     Scheme::Ulid,
+    Scheme::UlidMono,
     Scheme::Snowflake64,
+    Scheme::Infino128,
+];
+
+/// The schemes that have a batched form. Snowflake-64 has none worth
+/// measuring: its 12-bit sequence caps a writer at 4096 ids per ms, which
+/// it already reaches one id at a time.
+const BATCHED: [Scheme; 5] = [
+    Scheme::AutoInc,
+    Scheme::UuidV4,
+    Scheme::UuidV7Ctx,
+    Scheme::UlidMono,
     Scheme::Infino128,
 ];
 
@@ -83,8 +107,10 @@ impl Scheme {
         match self {
             Scheme::AutoInc => "auto-increment",
             Scheme::UuidV4 => "UUIDv4",
-            Scheme::UuidV7 => "UUIDv7",
-            Scheme::Ulid => "ULID",
+            Scheme::UuidV7 => "UUIDv7 (`now_v7`)",
+            Scheme::UuidV7Ctx => "UUIDv7, a ContextV7 per writer",
+            Scheme::Ulid => "ULID (`Ulid::new`)",
+            Scheme::UlidMono => "ULID, monotonic Generator per writer",
             Scheme::Snowflake64 => "Snowflake-64",
             Scheme::Infino128 => "Infino-128",
         }
@@ -103,7 +129,9 @@ enum Minter {
     AutoInc(Arc<AtomicU64>),
     UuidV4,
     UuidV7,
+    UuidV7Ctx(ContextV7),
     Ulid,
+    UlidMono(RefCell<ulid::Generator>),
     Snowflake64(BasicSnowflakeGenerator<SnowflakeTwitterId, MonotonicClock>),
     Infino128(IdGenerator),
 }
@@ -119,7 +147,9 @@ impl Minter {
             Scheme::AutoInc => Minter::AutoInc(counter.clone()),
             Scheme::UuidV4 => Minter::UuidV4,
             Scheme::UuidV7 => Minter::UuidV7,
+            Scheme::UuidV7Ctx => Minter::UuidV7Ctx(ContextV7::new()),
             Scheme::Ulid => Minter::Ulid,
+            Scheme::UlidMono => Minter::UlidMono(RefCell::new(ulid::Generator::new())),
             Scheme::Snowflake64 => Minter::Snowflake64(BasicSnowflakeGenerator::new(
                 writer & 0x3ff,
                 MonotonicClock::<1>::with_epoch(TWITTER_EPOCH),
@@ -132,9 +162,11 @@ impl Minter {
     fn next(&self) -> u128 {
         match self {
             Minter::AutoInc(c) => c.fetch_add(1, Ordering::Relaxed) as u128,
-            Minter::UuidV4 => uuid::Uuid::new_v4().as_u128(),
-            Minter::UuidV7 => uuid::Uuid::now_v7().as_u128(),
+            Minter::UuidV4 => Uuid::new_v4().as_u128(),
+            Minter::UuidV7 => Uuid::now_v7().as_u128(),
+            Minter::UuidV7Ctx(c) => Uuid::new_v7(Timestamp::now(c)).as_u128(),
             Minter::Ulid => ulid::Ulid::new().0,
+            Minter::UlidMono(g) => g.borrow_mut().generate().expect("ulid overflow").0,
             Minter::Snowflake64(g) => g.next_id(|_| std::hint::spin_loop()).to_raw() as u128,
             Minter::Infino128(g) => g.next_id() as u128,
         }
@@ -172,37 +204,95 @@ fn mint_rate(s: Scheme, threads: usize, per_thread: usize) -> f64 {
     (threads * per_thread) as f64 / secs
 }
 
-/// Ids for `n` rows the way the engine's append reserves them: one call to
-/// `reserve_range`, which returns contiguous spans, expanded into `buf`.
-fn reserve_into(g: &IdGenerator, n: usize, buf: &mut Vec<i128>) {
-    let spans = g.reserve_range(n);
-    expand(&spans, buf);
-}
-
 fn expand(spans: &[(i128, i128)], buf: &mut Vec<i128>) {
     buf.clear();
     for &(first, last) in spans {
-        let len = (last - first) as usize + 1;
-        buf.extend((0..len).map(|i| first + i as i128));
+        buf.extend(first..=last);
     }
 }
 
-/// Infino's append path: each writer has its own generator and reserves
-/// ids for `batch` rows at a time.
-fn mint_rate_infino_batched(threads: usize, per_thread: usize, batch: usize) -> f64 {
+/// One writer's source of batches, in the fastest form each scheme allows.
+enum BatchMinter {
+    /// A block of `n` numbers from the shared counter, as a database
+    /// sequence with a cache hands them out.
+    AutoInc(Arc<AtomicU64>),
+    /// The random bytes for the whole batch drawn at once, from the same
+    /// thread-local generator `Uuid::new_v4` uses.
+    UuidV4(Vec<u8>),
+    /// One clock read per batch; the context's counter orders the batch.
+    UuidV7(ContextV7),
+    /// One clock read per batch; within a millisecond the generator
+    /// increments the previous id instead of drawing random bits.
+    Ulid(ulid::Generator),
+    /// `reserve_range` and expand, as the engine's append does.
+    Infino(IdGenerator, Vec<i128>),
+}
+
+impl BatchMinter {
+    fn new(s: Scheme, counter: &Arc<AtomicU64>) -> Self {
+        match s {
+            Scheme::AutoInc => BatchMinter::AutoInc(counter.clone()),
+            Scheme::UuidV4 => BatchMinter::UuidV4(Vec::new()),
+            Scheme::UuidV7Ctx => BatchMinter::UuidV7(ContextV7::new()),
+            Scheme::UlidMono => BatchMinter::Ulid(ulid::Generator::new()),
+            Scheme::Infino128 => BatchMinter::Infino(IdGenerator::new(), Vec::new()),
+            _ => unreachable!("{s:?} has no batched form"),
+        }
+    }
+
+    fn fill(&mut self, n: usize, buf: &mut Vec<u128>) {
+        buf.clear();
+        match self {
+            BatchMinter::AutoInc(c) => {
+                let first = c.fetch_add(n as u64, Ordering::Relaxed);
+                buf.extend((first..first + n as u64).map(u128::from));
+            }
+            BatchMinter::UuidV4(bytes) => {
+                bytes.resize(n * 16, 0);
+                rand::rng().fill_bytes(bytes);
+                // The version and variant bits, set as `Uuid::new_v4` sets them.
+                buf.extend(bytes.chunks_exact(16).map(|b| {
+                    u128::from_ne_bytes(b.try_into().unwrap()) & 0xFFFFFFFFFFFF4FFFBFFFFFFFFFFFFFFF
+                        | 0x40008000000000000000
+                }));
+            }
+            BatchMinter::UuidV7(ctx) => {
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+                let (secs, nanos) = (now.as_secs(), now.subsec_nanos());
+                buf.extend(
+                    (0..n)
+                        .map(|_| Uuid::new_v7(Timestamp::from_unix(&*ctx, secs, nanos)).as_u128()),
+                );
+            }
+            BatchMinter::Ulid(g) => {
+                let now = SystemTime::now();
+                buf.extend((0..n).map(|_| g.generate_from_datetime(now).expect("ulid overflow").0));
+            }
+            BatchMinter::Infino(g, ids) => {
+                expand(&g.reserve_range(n), ids);
+                buf.extend(ids.iter().map(|&id| id as u128));
+            }
+        }
+    }
+}
+
+/// Ids per second, minted by `threads` writers in batches of `batch`.
+fn mint_rate_batched(s: Scheme, threads: usize, per_thread: usize, batch: usize) -> f64 {
+    let counter = Arc::new(AtomicU64::new(0));
     let barrier = Arc::new(Barrier::new(threads + 1));
     let handles: Vec<_> = (0..threads)
         .map(|_| {
+            let counter = counter.clone();
             let barrier = barrier.clone();
             thread::spawn(move || {
-                let g = IdGenerator::new();
-                g.next_id(); // start the clock's ticker before timing
-                let mut buf: Vec<i128> = Vec::with_capacity(batch);
+                let mut m = BatchMinter::new(s, &counter);
+                let mut buf: Vec<u128> = Vec::with_capacity(batch);
+                m.fill(1, &mut buf); // start any clock ticker before timing
                 barrier.wait();
                 let mut left = per_thread;
                 while left > 0 {
                     let n = left.min(batch);
-                    reserve_into(&g, n, &mut buf);
+                    m.fill(n, &mut buf);
                     black_box(&buf);
                     left -= n;
                 }
@@ -416,7 +506,7 @@ fn main() {
     println!("cpus: {threads}, ids per thread: {per_thread}, median of {reps} runs\n");
 
     // 1. Minting.
-    println!("## Minting\n");
+    println!("## Minting one id at a time\n");
     println!("| scheme | 1 writer | {threads} writers | ns per id, 1 writer |");
     println!("|---|---:|---:|---:|");
     for s in SCHEMES {
@@ -434,22 +524,33 @@ fn main() {
             1e9 / one
         );
     }
-    let one = median(
-        (0..reps)
-            .map(|_| mint_rate_infino_batched(1, per_thread, 1024))
-            .collect(),
-    );
-    let many = median(
-        (0..reps)
-            .map(|_| mint_rate_infino_batched(threads, per_thread, 1024))
-            .collect(),
-    );
-    println!(
-        "| Infino-128, batches of 1024 ids (the append path) | {} | {} | {:.2} |",
-        fmt_rate(one),
-        fmt_rate(many),
-        1e9 / one
-    );
+
+    println!("\n## Minting in batches of 1024\n");
+    println!("| scheme | 1 writer | {threads} writers | ns per id, 1 writer |");
+    println!("|---|---:|---:|---:|");
+    for s in BATCHED {
+        let one = median(
+            (0..reps)
+                .map(|_| mint_rate_batched(s, 1, per_thread, 1024))
+                .collect(),
+        );
+        let many = median(
+            (0..reps)
+                .map(|_| mint_rate_batched(s, threads, per_thread, 1024))
+                .collect(),
+        );
+        println!(
+            "| {} | {} | {} | {:.2} |",
+            s.name(),
+            fmt_rate(one),
+            fmt_rate(many),
+            1e9 / one
+        );
+    }
+
+    println!("\n## One Infino-128 generator shared by {threads} threads\n");
+    println!("| lock taken | ids per second |");
+    println!("|---|---:|");
     for batch in [1usize, 1024] {
         let many = median(
             (0..reps)
@@ -457,11 +558,11 @@ fn main() {
                 .collect(),
         );
         println!(
-            "| Infino-128, one shared generator, lock per {} | | {} | |",
+            "| {} | {} |",
             if batch == 1 {
-                "id".to_string()
+                "for every id".to_string()
             } else {
-                format!("{batch} ids")
+                format!("once per {batch} ids")
             },
             fmt_rate(many)
         );
@@ -617,6 +718,44 @@ fn main() {
                 s.name(),
                 scanned as f64 / targets.len() as f64
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+
+    /// Every way the bench mints ids yields distinct ids, and every
+    /// time-ordered scheme yields them in increasing order, so no row of a
+    /// table is fast because it cut a corner.
+    #[test]
+    fn every_minter_yields_distinct_ids_in_order_where_the_scheme_orders_them() {
+        let counter = Arc::new(AtomicU64::new(0));
+        let ordered = |s: Scheme| !matches!(s, Scheme::UuidV4);
+        for s in SCHEMES {
+            let m = Minter::new(s, &counter, 1);
+            let ids: Vec<u128> = (0..20_000).map(|_| m.next()).collect();
+            assert_eq!(ids.iter().collect::<HashSet<_>>().len(), ids.len(), "{s:?}");
+            if ordered(s) && s != Scheme::Ulid {
+                assert!(ids.windows(2).all(|w| w[0] < w[1]), "{s:?} one at a time");
+            }
+        }
+        for s in BATCHED {
+            let mut m = BatchMinter::new(s, &counter);
+            let mut ids = Vec::new();
+            let mut buf = Vec::new();
+            for _ in 0..20 {
+                m.fill(1024, &mut buf);
+                assert_eq!(buf.len(), 1024, "{s:?}");
+                ids.extend_from_slice(&buf);
+            }
+            assert_eq!(ids.iter().collect::<HashSet<_>>().len(), ids.len(), "{s:?}");
+            if ordered(s) {
+                assert!(ids.windows(2).all(|w| w[0] < w[1]), "{s:?} in batches");
+            }
         }
     }
 }
