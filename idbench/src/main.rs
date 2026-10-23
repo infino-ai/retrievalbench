@@ -224,8 +224,9 @@ enum BatchMinter {
     /// One clock read per batch; within a millisecond the generator
     /// increments the previous id instead of drawing random bits.
     Ulid(ulid::Generator),
-    /// `reserve_range` and expand, as the engine's append does.
-    Infino(IdGenerator, Vec<i128>),
+    /// `reserve_range`, then each span filled in as the engine's append
+    /// does, straight into the batch's buffer like the counter's block.
+    Infino(IdGenerator),
 }
 
 impl BatchMinter {
@@ -235,7 +236,7 @@ impl BatchMinter {
             Scheme::UuidV4 => BatchMinter::UuidV4(Vec::new()),
             Scheme::UuidV7Ctx => BatchMinter::UuidV7(ContextV7::new()),
             Scheme::UlidMono => BatchMinter::Ulid(ulid::Generator::new()),
-            Scheme::Infino128 => BatchMinter::Infino(IdGenerator::new(), Vec::new()),
+            Scheme::Infino128 => BatchMinter::Infino(IdGenerator::new()),
             _ => unreachable!("{s:?} has no batched form"),
         }
     }
@@ -268,9 +269,11 @@ impl BatchMinter {
                 let now = SystemTime::now();
                 buf.extend((0..n).map(|_| g.generate_from_datetime(now).expect("ulid overflow").0));
             }
-            BatchMinter::Infino(g, ids) => {
-                expand(&g.reserve_range(n), ids);
-                buf.extend(ids.iter().map(|&id| id as u128));
+            BatchMinter::Infino(g) => {
+                for (first, last) in g.reserve_range(n) {
+                    let len = (last - first) as usize + 1;
+                    buf.extend((0..len).map(|i| (first + i as i128) as u128));
+                }
             }
         }
     }
