@@ -13,6 +13,8 @@ How much a document id scheme costs a search engine, i.e. what it costs to mint,
 
 Each scheme is minted one id at a time and, where the scheme allows it, in batches of 1,024 in its fastest form: a block from the counter, the random bytes for the batch at once, one clock read per batch. Snowflake-64 has no batched row, since its 12-bit sequence caps a writer at 4,096 ids per millisecond, which it already reaches one id at a time. A test checks that every minter yields distinct ids, in increasing order for every scheme that orders them.
 
+In the batch table, auto-increment is the baseline: a writer takes a block of 1,024 numbers from one shared counter with a single atomic add and fills it in, so an id is just the next number. It is as cheap as minting gets, but every writer shares the counter, which across machines means a coordinator. The other rows show how close each scheme gets to it without that coordination.
+
 Everything Infino-specific is the engine's own code, at the commit pinned in `Cargo.toml`. Ids are minted by its `IdGenerator`, every superfile is built by its `SuperfileBuilder`, and hits are resolved to ids by its `SuperfileReader`. The other schemes' ids go through the same builder and reader, so the only thing that differs between the rows of two tables is the id.
 
 ## Numbers as of Infino `c5a80fa9`, 23 Oct 2026
