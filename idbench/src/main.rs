@@ -174,9 +174,8 @@ fn mint_rate(s: Scheme, threads: usize, per_thread: usize) -> f64 {
 
 /// Ids for `n` rows the way the engine's append reserves them: one call to
 /// `reserve_range`, which returns contiguous spans, expanded into `buf`.
-/// (`try_into` because older engine versions take the count as `u32`.)
 fn reserve_into(g: &IdGenerator, n: usize, buf: &mut Vec<i128>) {
-    let spans = g.reserve_range(n.try_into().unwrap());
+    let spans = g.reserve_range(n);
     expand(&spans, buf);
 }
 
@@ -236,7 +235,7 @@ fn mint_rate_infino_shared(threads: usize, per_thread: usize, batch: usize) -> f
                 let mut left = per_thread;
                 while left > 0 {
                     let n = left.min(batch);
-                    let spans = g.lock().unwrap().reserve_range(n.try_into().unwrap());
+                    let spans = g.lock().unwrap().reserve_range(n);
                     expand(&spans, &mut buf);
                     black_box(&buf);
                     left -= n;

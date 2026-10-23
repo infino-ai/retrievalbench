@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Run idbench and write its tables to results/<date>-<machine>.md, stamped
 # with what produced them: the machine, the toolchain, the exact Infino
-# commit, this repository's commit, and the load on the machine before and
-# after the run.
+# commit, this repository's commit, and the machine's load average when the
+# run started.
 #
 #   ./run.sh <machine>        e.g. ./run.sh gcp-c3-highcpu-8
 #
@@ -36,7 +36,6 @@ out=results/$(date -u +%Y-%m-%d)-$machine.md
 load_before=$(load)
 started=$(date -u '+%Y-%m-%d %H:%M UTC')
 tables=$(./target/release/idbench | tail -n +2)
-load_after=$(load)
 
 {
     echo "# idbench results, $machine"
@@ -52,7 +51,7 @@ load_after=$(load)
     echo "| infino | \`$infino\` |"
     echo "| retrievalbench | \`$(git rev-parse HEAD)\` |"
     echo "| command | \`./run.sh $machine\` |"
-    echo "| load average before / after | $load_before / $load_after |"
+    echo "| load average at start (1, 5, 15 min) | $load_before |"
     echo "$tables"
 } > "$out"
 echo "wrote $out"
