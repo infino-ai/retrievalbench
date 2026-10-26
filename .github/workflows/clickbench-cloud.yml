@@ -350,7 +350,7 @@ jobs:
 
       - name: Upload full log
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: clickbench-log
           path: /tmp/clickbench.log
@@ -358,7 +358,7 @@ jobs:
 
       - name: Upload ingested result JSON
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: clickbench-result
           path: /tmp/clickbench-result.json
