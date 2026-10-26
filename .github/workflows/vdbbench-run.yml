@@ -146,7 +146,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout infino
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ inputs.infino_repo }}
           ref: ${{ inputs.infino_ref }}
@@ -180,7 +180,7 @@ jobs:
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
     steps:
       - name: Checkout (this repo, for composite actions)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Cloud login
         uses: ./.github/actions/cloud-login
