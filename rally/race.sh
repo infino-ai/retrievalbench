@@ -58,6 +58,11 @@ echo "race $NAME -> $TARGET ($DATABASE_TYPE $DIST_VERSION), track $TRACK"
 set +e
 "$ESRALLY" "${args[@]}" 2>&1 | tee "$OUT/rally-$NAME.log"
 status=${PIPESTATUS[0]}
+# What the engine answered to each of the track's searches, over the data the race left
+# (answers.py), with the Python of the Rally install, which renders the track as Rally does.
+RALLY_PYTHON=${RALLY_PYTHON:-$(dirname "$(command -v "$ESRALLY")")/python}
+"$RALLY_PYTHON" "$(dirname "$0")/answers.py" "${RALLY_HOME:-$HOME}/.rally/rally.ini" \
+  "$TRACK" "$TRACK_PARAMS" "$TARGET" "$OUT/answers-$NAME.json" 2>&1 | tee -a "$OUT/rally-$NAME.log"
 set -e
 echo "race $NAME exit $status"
 exit "$status"

@@ -5,6 +5,8 @@ and any track: every task the track ran gets its own rows, not only the `nested`
 
 Reads, from the run directory, per engine <name>:
   rally-<name>.csv     Rally's CSV report (Metric, Task, Value, Unit)
+  answers-<name>.json  what the engine answered to each of the track's searches (answers.py),
+                       checked against stock OpenSearch's answers
   storage-<name>.txt   bytes of the engine's data directory, measured on its VM; Rally's
                        store size comes from the index stats, which leave out the Infino
                        table, so this is the number to compare
@@ -45,6 +47,11 @@ SEARCH_METRICS = [
 ADMIN_TASK_PREFIXES = ("delete-index", "create-index", "check-cluster-health", "refresh",
                        "force-merge", "wait-until", "put-settings", "cluster-health")
 BYTES_PER_GB = 1024 ** 3
+# How far two engines' numbers in an answer may be apart, relative to the larger, and agree
+# (a float sum or average added up in another order).
+ANSWER_TOLERANCE = 1e-6
+# The engine the others' answers are checked against, when it ran.
+ANSWER_REFERENCE = "opensearch"
 SAMPLE_INTERVAL_SECS = 5
 SECS_PER_HOUR = 3600
 # Report layout: the narrowest value column, the unit column, and the space between columns.
@@ -94,6 +101,48 @@ def read_text(path):
             return f.read().strip()
     except FileNotFoundError:
         return None
+
+
+def read_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def same(a, b):
+    """Whether two recorded answers agree: numbers to a relative ANSWER_TOLERANCE, all else exactly."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return a == b or abs(a - b) <= ANSWER_TOLERANCE * max(abs(a), abs(b))
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(same(x, y) for x, y in zip(a, b))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(same(a[k], b[k]) for k in a)
+    return a == b
+
+
+def answer_difference(ref, other):
+    """How one engine's recorded answer to a search differs from the reference's; None when it agrees."""
+    if "error" in ref or "error" in other:
+        return None if same(ref.get("error"), other.get("error")) else f"error {ref.get('error')} vs {other.get('error')}"
+    parts = []
+    if not same(ref.get("total"), other.get("total")):
+        parts.append(f"total hits {ref.get('total')} vs {other.get('total')}")
+    rs, os_ = ref.get("sort"), other.get("sort")
+    if not same(rs, os_):
+        # The requested sort values the same, each hit carrying more after them (a tie-breaker the
+        # reference does not return), is a difference in the response's shape, not in its order.
+        extra = (isinstance(rs, list) and isinstance(os_, list) and len(rs) == len(os_)
+                 and all(isinstance(a, list) and isinstance(b, list) and len(b) > len(a) and same(a, b[:len(a)])
+                         for a, b in zip(rs, os_)))
+        parts.append("the same sort values, each hit with extra ones after them" if extra
+                     else "the page's sort values differ")
+    if not same(ref.get("aggs"), other.get("aggs")):
+        parts.append("aggregations differ")
+    return "; ".join(parts) or None
 
 
 def num(v):
@@ -160,6 +209,37 @@ def main():
         m = machines[e]
         out.append(f"  {e}: " + (f"{m['engine']} {m['version']}, {m['cpu_model']}, {m['cpu_cores']} cores, "
                                  f"{m['memory_gb']} GB" if m else "machine not recorded"))
+
+    # Whether every engine answered each search as the reference did: speed means nothing
+    # for a wrong answer, so this comes first.
+    answers = {e: read_json(os.path.join(run, f"answers-{e}.json")) for e in engines}
+    ref = ANSWER_REFERENCE if answers.get(ANSWER_REFERENCE) else next((e for e in engines if answers[e]), None)
+    answer_diffs = {}
+    out.append("")
+    if ref is None:
+        out.append("Answers: none recorded")
+    else:
+        title = f"Answers (each search sent once after its race, against {ref}'s)"
+        out.append(title)
+        out.append("=" * len(title))
+        for e in engines:
+            if e == ref:
+                continue
+            if not answers[e]:
+                out.append(f"  {e}: no answers recorded")
+                continue
+            diffs = {}
+            for op, a in sorted(answers[ref].items()):
+                b = answers[e].get(op)
+                what = "not recorded" if b is None else answer_difference(a, b)
+                if what:
+                    diffs[op] = what
+            answer_diffs[e] = diffs
+            total = len(answers[ref])
+            out.append(f"  {e}: " + (f"the same answers to all {total} searches" if not diffs
+                                     else f"{len(diffs)} of {total} searches answered differently"))
+            for op, what in diffs.items():
+                out.append(f"    {op}: {what}")
 
     table(out, "Ingest (index-append)",
           [(metric, unit, {e: data[e].get((metric, INGEST_TASK)) for e in engines}, better)
@@ -234,6 +314,7 @@ def main():
     with open(os.path.join(run, "comparison.json"), "w") as f:
         json.dump({"engines": engines, "machines": machines, "storage_bytes": storage, "resources": resources,
                    "tasks_with_errors": errored,
+                   "answer_reference": ref, "answers_differing": answer_diffs,
                    "metrics": {e: {f"{m}|{t}": v for (m, t), v in data[e].items()} for e in engines}},
                   f, indent=2)
     sys.stdout.write(text)

@@ -16,6 +16,7 @@ size. `gcloud` replaces Terraform, and the plugin is added as an engine.
 | `engine-setup.sh` | each engine VM | puts the data on the local SSDs, installs the engine from its release tarball (and the plugin, bridge library and `infino.yaml` for the Infino engines), starts it on :9200 |
 | `runner-setup.sh` | the runner VM | installs the infinohq Rally fork (branch `fork`) on the local SSD |
 | `race.sh` | the runner, or your machine | one `esrally race` against one engine, as the AWS harness ran it |
+| `answers.py` | the runner, or your machine | after a race, each of the track's searches sent once to the engine, its answer recorded |
 | `sampler.py` | each engine VM | CPU and memory samples every 5 s during the race |
 | `compare.py` | your machine or CI | the comparison report (`comparison.txt`, `comparison.json`) |
 | `local.sh` | your machine | races engines that are already running, then compares them |
@@ -128,6 +129,7 @@ failure or Ctrl-C) unless `KEEP=1`. Their names start with `rally-` and they car
 `rally/results/<run>/` holds, per engine:
 
 - Rally's CSV report and log;
+- its answers to the track's searches (`answers-<engine>.json`);
 - the CPU and memory samples;
 - the engine machine;
 - the bytes of its data directory, and its `_cat/indices`.
@@ -137,6 +139,13 @@ It also holds `run.txt` (the run's settings), the setup logs, and `comparison.tx
 
 The comparison has:
 
+- **Answers**, first: Rally times each request and counts it a success whatever it returns,
+  so after each race `answers.py` sends each of the track's searches to the engine once and
+  records the exact total, the page's sort values and every aggregation. Every engine is
+  checked against stock OpenSearch, search by search. A search answered differently names
+  what differs: the total, the sort values (or the same values with extra ones after them,
+  a tie-breaker stock does not return), or the aggregations. A row of speed for a search
+  answered wrongly measures nothing.
 - **Ingest** (`index-append`): min, median and max throughput; p50, p90, p99 latency.
 - **Search**: for every task the track ran, mean throughput, p50 / p90 / p99 service time and
   error rate. Test mode runs too few iterations for percentiles below the 100th, so its

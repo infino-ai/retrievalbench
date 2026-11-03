@@ -191,7 +191,7 @@ done
 echo "VMs up: $(for vm in "${VMS[@]}"; do printf '%s=%s ' "$vm" "${EXT_IP[$vm]}"; done)"
 
 # 2. Engines and Rally.
-put "$RUNNER_VM" "$HERE/runner-setup.sh" "$HERE/race.sh"
+put "$RUNNER_VM" "$HERE/runner-setup.sh" "$HERE/race.sh" "$HERE/answers.py"
 on "$RUNNER_VM" bash bench/runner-setup.sh > "$OUT/setup-runner.log" 2>&1 &
 pids=($!)
 for e in "${ENGINE_LIST[@]}"; do
@@ -255,6 +255,7 @@ race_one() {
   get "$vm" /mnt/data/machine.json "$OUT/machine-$e.json" || true
   get "$RUNNER_VM" "/mnt/rally/results/rally-$e.csv" "$OUT/rally-$e.csv" || echo "[$e] no Rally report"
   get "$RUNNER_VM" "/mnt/rally/results/rally-$e.log" "$OUT/rally-$e.log" || true
+  get "$RUNNER_VM" "/mnt/rally/results/answers-$e.json" "$OUT/answers-$e.json" || echo "[$e] no answers recorded"
   echo "[$e] race exit $status"
 }
 
