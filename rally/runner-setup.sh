@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # Runs on the Rally runner VM (as the admin user, with sudo): puts Rally's track data on the
-# local SSD and installs Infino's Rally fork (infinohq/rally, branch `fork`), which adds the
-# `database_type` client option for OpenSearch and Elasticsearch targets. The config is the
-# one the AWS harness wrote.
+# local SSD and installs the Rally fork RALLY_REPO (branch `fork`), which adds the
+# `database_type` client option for OpenSearch and Elasticsearch targets.
 # Usage: runner-setup.sh
 set -euo pipefail
 
 RALLY=/mnt/rally
 LOCAL_SSD=/dev/disk/by-id/google-local-nvme-ssd-0
-RALLY_REPO=${RALLY_REPO:-https://github.com/infinohq/rally.git}
+RALLY_REPO=${RALLY_REPO:?set RALLY_REPO, the clone URL of the Rally fork}
 RALLY_BRANCH=${RALLY_BRANCH:-fork}
 
 sudo DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null

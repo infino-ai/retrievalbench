@@ -33,8 +33,8 @@ HEALTH_TRIES=900
 sudo DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y curl jq python3 mdadm >/dev/null
 
-# The engine's data, logs and install go on the local NVMe SSDs, as the AWS harness put them
-# on the i3en instance store; several SSDs are striped into one volume.
+# The engine's data, logs and install go on the local NVMe SSDs; several SSDs are striped
+# into one volume.
 mapfile -t SSDS < <(ls $LOCAL_SSD_GLOB 2>/dev/null || true)
 sudo mkdir -p "$DATA"
 if [ "${#SSDS[@]}" -gt 1 ]; then
@@ -66,7 +66,7 @@ tar -xzf "$DATA/dist/engine.tar.gz" -C "$DATA/engine" --strip-components=1
 HOME_DIR=$DATA/engine
 CONF=$HOME_DIR/config
 
-# The settings the AWS harness's containers ran with: single node, the heap locked in memory.
+# Single node, the heap locked in memory.
 {
   echo "discovery.type: single-node"
   echo "network.host: 0.0.0.0"
@@ -116,7 +116,7 @@ if [ "$ENGINE" = opensearch-infino-proxy ]; then
   printf '%s' "$INFINO_API_KEY" | "$HOME_DIR/bin/opensearch-keystore" add --stdin --force infino.platform.api_key
 fi
 
-# The limits the AWS harness's containers had (memlock unlimited for bootstrap.memory_lock,
+# The limits the engine runs with (memlock unlimited for bootstrap.memory_lock,
 # nofile 65536), raised on this shell so the engine inherits them.
 sudo prlimit --pid $$ --memlock=unlimited:unlimited --nofile=$NOFILE:$NOFILE
 "$HOME_DIR/bin/$BIN" -d -p "$DATA/engine.pid" </dev/null >/dev/null 2>&1

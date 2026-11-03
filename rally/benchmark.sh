@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# The Rally head-to-head on Google Cloud: one VM per engine and one Rally runner, the shape
-# of the infinohq AWS Rally harness (utils/perf-test-scripts/rally in infinohq/infino), with
-# gcloud in place of Terraform and the engines run from their release tarballs.
+# The Rally head-to-head on Google Cloud: one VM per engine and one Rally runner, the engines
+# run from their release tarballs.
 #
 #   1. create the VMs (labelled, with a per-run SSH key and one firewall rule per VM)
 #   2. install and start each engine (engine-setup.sh) and Rally (runner-setup.sh)
@@ -24,8 +23,7 @@ NETWORK=${NETWORK:-default}
 SUBNET=${SUBNET:-}
 VM_SA=${VM_SA:-}
 ENGINES=${ENGINES:-elasticsearch,opensearch,opensearch-infino}
-# n2-highmem-4 (4 vCPU, 32 GB) is the i3en.xlarge the AWS harness ran engines and the runner
-# on; each local SSD is 375 GB of NVMe.
+# n2-highmem-4: 4 vCPU, 32 GB; each local SSD is 375 GB of NVMe.
 ENGINE_MACHINE=${ENGINE_MACHINE:-n2-highmem-4}
 RUNNER_MACHINE=${RUNNER_MACHINE:-n2-highmem-4}
 ENGINE_SSDS=${ENGINE_SSDS:-1}
@@ -33,12 +31,12 @@ RUNNER_SSDS=${RUNNER_SSDS:-1}
 IMAGE_FAMILY=${IMAGE_FAMILY:-ubuntu-2404-lts-amd64}
 ES_VERSION=${ES_VERSION:-9.1.3}
 OS_VERSION=${OS_VERSION:-3.9.0}
-# Rally's --distribution-version: the AWS harness passed the Elasticsearch version for every
-# engine, which picks the track revision all engines run.
+# Rally's --distribution-version: the Elasticsearch version for every engine, which picks the
+# track revision all engines run.
 RALLY_DISTRIBUTION_VERSION=${RALLY_DISTRIBUTION_VERSION:-$ES_VERSION}
 HEAP_GB=${HEAP_GB:-16}
 
-# The AWS harness's workload knobs and defaults; unset knobs keep the track's own default.
+# The workload knobs; unset knobs keep the track's own default.
 TRACK=${TRACK:-nested}
 CHALLENGE=${CHALLENGE:-}
 TRACK_REPOSITORY=${TRACK_REPOSITORY:-}
@@ -48,15 +46,17 @@ BULK_INDEXING_CLIENTS=${BULK_INDEXING_CLIENTS:-8}
 BULK_SIZE=${BULK_SIZE:-}
 TARGET_THROUGHPUT=${TARGET_THROUGHPUT:-}
 EXCLUDE_TASKS=${EXCLUDE_TASKS:-indices-stats}
-# Tasks only the Infino engines skip, as the AWS harness skipped inner-hits queries for its
-# Infino arm; a skipped task is left out of every engine's comparison.
+# Tasks only the Infino engines skip (queries the plugin refuses); a skipped task is left out
+# of every engine's comparison.
 INFINO_EXCLUDE_TASKS=${INFINO_EXCLUDE_TASKS:-}
 INCLUDE_TASKS=${INCLUDE_TASKS:-}
 TEST_MODE=${TEST_MODE:-0}
 # Sequential races leave each engine the runner's whole CPU and network; PARALLEL=1 races all
-# engines at once, as the AWS harness did.
+# engines at once.
 PARALLEL=${PARALLEL:-0}
 
+# The clone URL of the Rally fork with the database_type client option (branch `fork`).
+RALLY_REPO=${RALLY_REPO:-}
 PLUGIN_ZIP=${PLUGIN_ZIP:-}
 BRIDGE_LIB=${BRIDGE_LIB:-}
 INFINO_YAML=${INFINO_YAML:-}
@@ -77,6 +77,7 @@ SSH_TRIES=60
 SSH_WAIT_SECS=5
 
 : "${PROJECT:?set PROJECT, or a default project in gcloud}"
+: "${RALLY_REPO:?set RALLY_REPO, the clone URL of the Rally fork}"
 IFS=',' read -r -a ENGINE_LIST <<< "$ENGINES"
 for e in "${ENGINE_LIST[@]}"; do
   case "$e" in
@@ -192,7 +193,7 @@ echo "VMs up: $(for vm in "${VMS[@]}"; do printf '%s=%s ' "$vm" "${EXT_IP[$vm]}"
 
 # 2. Engines and Rally.
 put "$RUNNER_VM" "$HERE/runner-setup.sh" "$HERE/race.sh" "$HERE/answers.py"
-on "$RUNNER_VM" bash bench/runner-setup.sh > "$OUT/setup-runner.log" 2>&1 &
+on "$RUNNER_VM" "RALLY_REPO=$(printf %q "$RALLY_REPO") bash bench/runner-setup.sh" >"$OUT/setup-runner.log" 2>&1 &
 pids=($!)
 for e in "${ENGINE_LIST[@]}"; do
   vm=${VM_OF[$e]}

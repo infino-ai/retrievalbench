@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare one benchmark run's engines side by side: ingest, every search task, storage and
-resource use. A port of the infinohq harness's compare-results.sh, for any set of engines
-and any track: every task the track ran gets its own rows, not only the `nested` track's.
+resource use, for any set of engines and any track: every task the track ran gets its own
+rows.
 
 Reads, from the run directory, per engine <name>:
   rally-<name>.csv     Rally's CSV report (Metric, Task, Value, Unit)
@@ -25,7 +25,7 @@ import os
 import sys
 
 INGEST_TASK = "index-append"
-# The AWS harness's ingest rows.
+# The ingest rows.
 INGEST_METRICS = [
     ("Min Throughput", "docs/s", "higher"),
     ("Median Throughput", "docs/s", "higher"),
@@ -34,8 +34,7 @@ INGEST_METRICS = [
     ("90th percentile latency", "ms", "lower"),
     ("99th percentile latency", "ms", "lower"),
 ]
-# The AWS harness's search rows (it reported them for randomized-term-queries only), for every
-# task, with each task's error rate.
+# The search rows, for every task, with each task's error rate.
 SEARCH_METRICS = [
     ("Mean Throughput", "ops/s", "higher"),
     ("50th percentile service time", "ms", "lower"),
@@ -127,6 +126,11 @@ def same(a, b):
 def answer_difference(ref, other):
     """How one engine's recorded answer to a search differs from the reference's; None when it agrees."""
     if "error" in ref or "error" in other:
+        # Two refusals with the same HTTP status agree; a request that reached no engine at all
+        # (a connection error) agrees with nothing, the reference's own included.
+        unreached = [a.get("error") for a in (ref, other) if isinstance(a.get("error"), str)]
+        if unreached:
+            return f"not answered: {unreached[0]}"
         return None if same(ref.get("error"), other.get("error")) else f"error {ref.get('error')} vs {other.get('error')}"
     parts = []
     if not same(ref.get("total"), other.get("total")):
@@ -284,7 +288,7 @@ def main():
              "lower"),
         ], engines)
 
-    # The AWS harness's performance summary, pair by pair: positive is the first engine ahead.
+    # Each engine against each other: positive is the first engine ahead.
     # A task either engine answered with errors is left out.
     out.append("")
     out.append("Pairwise (positive: the first engine is ahead; tasks with errors left out)")

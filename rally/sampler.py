@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Sample the engine VM's CPU and the engine process's memory until a stop file appears, one
-JSON line per sample, as the AWS harness's monitor-benchmarks.sh recorded them:
+JSON line per sample:
   secs          the seconds this sample covers
   cpu_percent  the whole machine's busy CPU since the last sample, 0-100 over all cores
-                (from /proc/stat, as the AWS harness measured it)
+                (from /proc/stat)
   process_cores the engine process's CPU since the last sample, in cores; the Infino bridge
                 runs inside the JVM process, so its native threads are counted with it
-  db_rss_mb     the engine process's resident memory (the AWS harness summed its Docker
-                containers' memory, which was this process)
+  db_rss_mb     the engine process's resident memory
   db_vms_mb     the engine process's virtual memory
 compare.py reads these lines.
 
@@ -21,8 +20,8 @@ import time
 DEFAULT_INTERVAL_SECS = 5.0
 # The user and system CPU times in /proc/<pid>/stat, after the command name.
 UTIME_FIELD, STIME_FIELD = 11, 12
-# The `cpu` line of /proc/stat, after the label: the AWS harness summed the first seven
-# columns (user through softirq) as the total and took the fourth (idle) as idle.
+# The `cpu` line of /proc/stat, after the label: the first seven columns (user through
+# softirq) are the total, the fourth idle.
 TOTAL_FIELDS = 7
 IDLE_FIELD = 3
 

@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# One Rally race against one engine, as the AWS harness ran it (run-benchmarks.sh): the
+# One Rally race against one engine: the
 # benchmark-only pipeline (no cluster provisioning), the track's own data and operations,
 # --on-error=continue so a refused task does not stop the rest, and a CSV report. Used on
 # the runner VM by benchmark.sh, and on your own machine by local.sh.
 #
 # Usage: race.sh <name> <host:port> <database type> <distribution version> <out dir>
 #   database type: elasticsearch | opensearch (the fork's database_type client option)
-#   distribution version: Rally picks the track's revision by it; the AWS harness passed the
-#     Elasticsearch version for every engine, and benchmark.sh does the same
+#   distribution version: Rally picks the track's revision by it; benchmark.sh passes the
+#     Elasticsearch version for every engine
 # Environment: ESRALLY (the esrally binary), TRACK, TRACK_REPOSITORY, CHALLENGE,
 #   TRACK_PARAMS (JSON), EXCLUDE_TASKS, INCLUDE_TASKS, TEST_MODE=1, PARALLEL=1 (other races
-#   run beside this one: give it its own Rally home and data cache, as the AWS harness did,
+#   run beside this one: give it its own Rally home and data cache,
 #   and leave the other esrally processes running).
 set -euo pipefail
 
