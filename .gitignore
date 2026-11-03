@@ -7,3 +7,6 @@ lcov.info
 *.profraw
 .DS_Store
 .infino/
+
+# Rally run directories (rally/benchmark.sh, rally/local.sh)
+/rally/results/

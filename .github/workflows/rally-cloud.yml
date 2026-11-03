@@ -1,0 +1,297 @@
+name: Rally head-to-head (Cloud)
+
+# Races Elasticsearch, stock OpenSearch and OpenSearch with the Infino plugin with Rally on
+# GCP (rally/benchmark.sh, one job per engine, each on its own runner and engine VMs), and
+# writes the comparison into the run's summary and artifacts. Each race job builds the plugin
+# from infino-ai/opensearch-infino at the chosen ref itself, so the plugin is never uploaded
+# as an artifact.
+#
+# Needs, in the `ci` environment: GCP_WIF_PROVIDER, GCP_SERVICE_ACCOUNT and GCP_PROJECT_ID
+# (as the other cloud workflows), OPENSEARCH_INFINO_TOKEN (read access to the plugin
+# repository), and INFINO_API_KEY for the proxy-mode engine.
+
+on:
+  workflow_dispatch:
+    inputs:
+      plugin_ref:
+        description: "infino-ai/opensearch-infino ref to build; the resolved SHA is recorded."
+        required: false
+        default: main
+        type: string
+      engines:
+        description: "Comma-separated: elasticsearch, opensearch, opensearch-infino, opensearch-infino-proxy."
+        required: false
+        default: elasticsearch,opensearch,opensearch-infino
+        type: string
+      track:
+        description: "Rally track. http_logs is the logs track; nested (the AWS harness's default) is mostly nested queries."
+        required: false
+        default: http_logs
+        type: string
+      challenge:
+        description: "Rally challenge; empty = the track's default."
+        required: false
+        default: ""
+        type: string
+      test_mode:
+        description: "Rally test mode (1,000 documents per corpus)."
+        required: false
+        default: false
+        type: boolean
+      ingest_percentage:
+        description: "Track parameter ingest_percentage; empty = the track's."
+        required: false
+        default: ""
+        type: string
+      bulk_indexing_clients:
+        description: "Track parameter bulk_indexing_clients."
+        required: false
+        default: "8"
+        type: string
+      exclude_tasks:
+        description: "Tasks no engine runs."
+        required: false
+        default: indices-stats
+        type: string
+      infino_exclude_tasks:
+        description: "Tasks only the Infino engines skip."
+        required: false
+        default: ""
+        type: string
+      include_tasks:
+        description: "Run only these tasks (overrides the exclusions)."
+        required: false
+        default: ""
+        type: string
+      os_version:
+        description: "OpenSearch release; the plugin is built for it."
+        required: false
+        default: 3.9.0
+        type: string
+      es_version:
+        description: "Elasticsearch release."
+        required: false
+        default: 9.1.3
+        type: string
+      machine_type:
+        description: "Engine and runner machine type (n2-highmem-4 is the AWS harness's i3en.xlarge)."
+        required: false
+        default: n2-highmem-4
+        type: string
+      engine_ssds:
+        description: "Local NVMe SSDs (375 GB each) per engine VM."
+        required: false
+        default: "1"
+        type: string
+      zone:
+        description: "GCE zone."
+        required: false
+        default: us-central1-a
+        type: string
+      price_per_hour:
+        description: "Hourly price of one engine VM, for the cost rows; empty = no cost rows."
+        required: false
+        default: ""
+        type: string
+      platform_url:
+        description: "Infino Cloud URL, for the proxy-mode engine."
+        required: false
+        default: https://api.platform.infino.ws
+        type: string
+      platform_database:
+        description: "Infino Cloud database the proxy-mode engine writes the track's tables to."
+        required: false
+        default: ""
+        type: string
+      timeout_minutes:
+        description: "Hard ceiling per race job (min); its VMs are deleted when it is hit."
+        required: false
+        default: "360"
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: rally-cloud
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      engines: ${{ steps.plan.outputs.engines }}
+      gradle: ${{ steps.plan.outputs.gradle }}
+    steps:
+      - id: plan
+        env:
+          ENGINES: ${{ inputs.engines }}
+          OS_VERSION: ${{ inputs.os_version }}
+        run: |
+          set -euo pipefail
+          json=$(printf '%s' "$ENGINES" | tr ',' '\n' | tr -d ' ' | sed '/^$/d' | jq -R . | jq -cs .)
+          echo "engines=$json" >> "$GITHUB_OUTPUT"
+          # The Gradle each OpenSearch release's build tools want.
+          case "$OS_VERSION" in
+            2.19.*) gradle=8.12.1 ;;
+            3.0.*) gradle=8.14 ;;
+            *) gradle=9.7.1 ;;
+          esac
+          echo "gradle=$gradle" >> "$GITHUB_OUTPUT"
+          echo "engines $json, gradle $gradle"
+
+  race:
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: ci
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: ${{ fromJSON(needs.plan.outputs.engines) }}
+    env:
+      RUN: rally-${{ github.run_id }}-${{ strategy.job-index }}
+    steps:
+      - name: Checkout (this repo)
+        uses: actions/checkout@v4
+
+      - name: Checkout the plugin
+        if: ${{ startsWith(matrix.engine, 'opensearch-infino') }}
+        uses: actions/checkout@v4
+        with:
+          repository: infino-ai/opensearch-infino
+          ref: ${{ inputs.plugin_ref }}
+          token: ${{ secrets.OPENSEARCH_INFINO_TOKEN }}
+          path: opensearch-infino
+      - uses: actions/setup-java@v4
+        if: ${{ startsWith(matrix.engine, 'opensearch-infino') }}
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+        if: ${{ startsWith(matrix.engine, 'opensearch-infino') }}
+        with:
+          gradle-version: ${{ needs.plan.outputs.gradle }}
+      - name: Build the plugin and its bridge
+        if: ${{ startsWith(matrix.engine, 'opensearch-infino') }}
+        working-directory: opensearch-infino
+        env:
+          OPENSEARCH_VERSION: ${{ inputs.os_version }}
+          CARGO_INCREMENTAL: "0"
+        run: |
+          bash scripts/build.sh
+          echo "PLUGIN_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: GCP login
+        uses: ./.github/actions/cloud-login
+        with:
+          cloud: gcp
+          gcp_wif_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          gcp_service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Race ${{ matrix.engine }}
+        env:
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          ZONE: ${{ inputs.zone }}
+          ENGINES: ${{ matrix.engine }}
+          TRACK: ${{ inputs.track }}
+          CHALLENGE: ${{ inputs.challenge }}
+          TEST_MODE: ${{ inputs.test_mode && '1' || '0' }}
+          INGEST_PERCENTAGE: ${{ inputs.ingest_percentage }}
+          BULK_INDEXING_CLIENTS: ${{ inputs.bulk_indexing_clients }}
+          EXCLUDE_TASKS: ${{ inputs.exclude_tasks }}
+          INFINO_EXCLUDE_TASKS: ${{ inputs.infino_exclude_tasks }}
+          INCLUDE_TASKS: ${{ inputs.include_tasks }}
+          OS_VERSION: ${{ inputs.os_version }}
+          ES_VERSION: ${{ inputs.es_version }}
+          ENGINE_MACHINE: ${{ inputs.machine_type }}
+          RUNNER_MACHINE: ${{ inputs.machine_type }}
+          ENGINE_SSDS: ${{ inputs.engine_ssds }}
+          PLUGIN_ZIP: ${{ github.workspace }}/opensearch-infino/plugin/build/distributions/infino-engine.zip
+          BRIDGE_LIB: ${{ github.workspace }}/opensearch-infino/infino-capi/target/release/libinfino_capi.so
+          INFINO_PLATFORM_URL: ${{ matrix.engine == 'opensearch-infino-proxy' && inputs.platform_url || '' }}
+          INFINO_DATABASE: ${{ inputs.platform_database }}
+          INFINO_API_KEY: ${{ matrix.engine == 'opensearch-infino-proxy' && secrets.INFINO_API_KEY || '' }}
+          TTL_HOURS: "8"
+        run: |
+          set -euo pipefail
+          bash rally/benchmark.sh
+          if [ -n "${PLUGIN_SHA:-}" ]; then echo "plugin_sha=$PLUGIN_SHA" >> "rally/results/$RUN/run.txt"; fi
+
+      - name: Re-login for teardown
+        if: ${{ always() }}
+        uses: ./.github/actions/cloud-login
+        with:
+          cloud: gcp
+          gcp_wif_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          gcp_service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - name: Teardown anything the run left
+        if: ${{ always() }}
+        env:
+          PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          ZONE: ${{ inputs.zone }}
+        run: |
+          # benchmark.sh deletes its VMs on exit; this catches a run killed before its exit
+          # handler ran. VM and firewall-rule names start with the run's name.
+          vms=$(gcloud --project "$PROJECT" compute instances list --filter="name~^${RUN}-" --format="value(name)" || true)
+          [ -z "$vms" ] || gcloud --project "$PROJECT" compute instances delete --zone "$ZONE" --quiet $vms || true
+          rules=$(gcloud --project "$PROJECT" compute firewall-rules list --filter="name~^${RUN}-" --format="value(name)" || true)
+          [ -z "$rules" ] || gcloud --project "$PROJECT" compute firewall-rules delete --quiet $rules || true
+          # Nothing private or secret goes into the artifact.
+          rm -f rally/results/*/ssh-key rally/results/*/ssh-key.pub \
+            rally/results/*/infino-engine.zip rally/results/*/libinfino_capi.so
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: rally-results-${{ strategy.job-index }}
+          path: rally/results/
+          if-no-files-found: warn
+
+  compare:
+    needs: [plan, race]
+    if: ${{ always() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: rally-results-*
+          path: ${{ runner.temp }}/results
+          merge-multiple: true
+      - name: Compare
+        env:
+          RESULTS: ${{ runner.temp }}/results
+          PRICE: ${{ inputs.price_per_hour }}
+          ENGINES: ${{ join(fromJSON(needs.plan.outputs.engines), ' ') }}
+        run: |
+          set -euo pipefail
+          # Each race job wrote its own run directory, with every file named by its engine but
+          # the run's settings and the runner's setup log; the comparison reads them from one.
+          OUT=$RESULTS/rally-${{ github.run_id }}
+          mkdir -p "$OUT"
+          for d in "$RESULTS"/rally-${{ github.run_id }}-*/; do
+            job=$(basename "$d")
+            for f in "$d"*; do
+              case "$(basename "$f")" in
+                run.txt) cp "$f" "$OUT/run-$job.txt" ;;
+                setup-runner.log) cp "$f" "$OUT/setup-runner-$job.log" ;;
+                comparison.*) ;;
+                *) cp "$f" "$OUT/" ;;
+              esac
+            done
+          done
+          price=()
+          [ -n "$PRICE" ] && price=("--price-per-hour=$PRICE")
+          # shellcheck disable=SC2086
+          python3 rally/compare.py "${price[@]}" "$OUT" $ENGINES
+          {
+            echo '```'
+            cat "$OUT/comparison.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rally-comparison
+          path: ${{ runner.temp }}/results/rally-${{ github.run_id }}/

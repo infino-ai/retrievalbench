@@ -11,7 +11,7 @@
 # never touched — in particular bench-vm-* (infino's own Benchmark run).
 set -euo pipefail
 CLOUD="${CLOUD:-azure}"
-PREFIXES="${PREFIXES:-vdbbench- clickbench-}"
+PREFIXES="${PREFIXES:-vdbbench- clickbench- rally-}"
 RG="${RG:-rg-infino-bench}"          # Azure resource group
 AWS_REGION_R="${AWS_REGION_R:-us-east-1}"
 now="$(date -u +%s)"
@@ -104,7 +104,8 @@ reap_aws() {
 }
 
 # --- GCP --------------------------------------------------------------------
-# Instance name == firewall-rule name == "${prefix}${run_id}".
+# Instance name == firewall-rule name: "${prefix}${run_id}", or for a rally- run one rule
+# per VM, each named as its VM.
 reap_gcp() {
   local pfx="$1"
   echo "== expired ${pfx}* instances =="
