@@ -2,23 +2,68 @@
 
 What Infino's document id costs a search engine: to mint, to store, to resolve from a search hit, and to find a row by.
 
-Every row in an Infino table has a system-managed `_id`: a 128-bit Snowflake-style id made of a 64-bit millisecond timestamp, a 40-bit random writer id and a 24-bit sequence number. Writers draw their 40 bits at random when they start, so they mint ids without coordinating with each other.
+Every row in an Infino table has a system-managed `_id`, a 128-bit Snowflake-style id:
 
-Everything measured is the engine's own code, at the commit pinned in `Cargo.toml`. Ids are minted by its `IdGenerator`, every superfile is built by its `SuperfileBuilder`, and hits are resolved to ids by its `SuperfileReader`. The bench measures:
+| bits | field |
+|---:|---|
+| 64 | millisecond timestamp |
+| 40 | writer id, drawn at random when a writer starts |
+| 24 | sequence number within the millisecond |
 
-| table | what it measures |
-|---|---|
-| Minting | ids per second with 1 writer and with one writer per logical CPU, each with its own generator: one id at a time through `next_id`, and in batches of 1,024 through `reserve_range`, the way an append reserves its ids with one clock read and fills them in |
-| One generator shared by every thread | appends through one supertable handle share its generator behind a lock: the lock taken for every id, and once per batch of 1,024 |
-| Bytes per id | one superfile of 1M ids from one writer: the Parquet `_id` column and the packed id sidecar, against the 16 raw bytes |
-| Resolving k hits to ids | turning the row numbers of a search's top k hits into `_id`s, from the Parquet `_id` column and from the id sidecar, for k = 10, 100 and 1,000 |
-| Finding a row by id | what a delete or an update does first: skip every superfile whose id range cannot hold the id, and scan the `_id` column of the rest, in a table of 100 superfiles of 100,000 rows written by 1 and by 4 concurrent writers |
+Because the writer id is random, writers mint ids without coordinating with each other. Because the timestamp leads, ids sort by the millisecond they were minted in, and they are stored as a plain `Decimal128(38, 0)` Parquet column.
+
+Everything measured is the engine's own code, at the commit pinned in `Cargo.toml`: ids are minted by its `IdGenerator`, superfiles are built by its `SuperfileBuilder`, and hits are resolved by its `SuperfileReader`.
+
+## What it measures
+
+- **Minting:** ids per second with 1 writer and with one writer per logical CPU, each with its own generator. One id at a time through `next_id`, and in batches of 1,024 through `reserve_range`, which is how an append mints: one clock read reserves a run of ids, and the append fills them in.
+- **One generator shared by every thread:** appends through one supertable handle share its generator behind a lock. The lock is taken for every id, and once per batch of 1,024.
+- **Bytes per id:** one superfile of 1M ids from one writer. The Parquet `_id` column and the packed id sidecar, against 16 raw bytes.
+- **Resolving k hits to ids:** turning the row numbers of a search's top k hits into `_id`s, from the Parquet `_id` column and from the id sidecar, for k = 10, 100 and 1,000.
+- **Finding a row by id:** what a delete or an update does first. Skip every superfile whose id range cannot hold the id, and scan the `_id` column of the rest. A table of 100 superfiles of 100,000 rows, written by 1 and by 4 concurrent writers.
 
 A test checks that both ways of minting yield distinct ids in increasing order.
 
-## Numbers
+## Results
 
-No result has been published yet for this version of the bench. The tables will be copied verbatim from the first file `run.sh` writes under `results/`.
+Measured on 5 Nov 2026 with Infino at [`c5a80fa9`](https://github.com/infino-ai/infino/commit/c5a80fa9800d5d0004ae0d0ff1493923e3707d66) and this repository at `db5a0ae`, on a dedicated Google Cloud `c3-highcpu-8` VM: Intel Xeon Platinum 8481C (Sapphire Rapids) at 2.7 GHz, 8 vCPUs, 16 GB of memory, Rocky Linux 9.8, Rust 1.95.0. The tables are copied verbatim from [`results/2026-11-05-gcp-c3-highcpu-8.md`](results/2026-11-05-gcp-c3-highcpu-8.md), which `run.sh` wrote and stamped.
+
+cpus: 8, ids per writer: 5000000, median of 5 runs
+
+### Minting
+
+| how | 1 writer | 8 writers | ns per id, 1 writer |
+|---|---:|---:|---:|
+| one id at a time (`next_id`) | 986.0 M/s | 3.84 B/s | 1.01 |
+| in batches of 1024, as an append reserves them (`reserve_range`) | 1.42 B/s | 5.67 B/s | 0.70 |
+
+### One generator shared by 8 threads
+
+| lock taken | ids per second |
+|---|---:|
+| for every id | 4.6 M/s |
+| once per 1024 ids | 3.91 B/s |
+
+### Bytes per id, one superfile of 1000000 docs from one writer
+
+| raw | Parquet `_id` column | packed id sidecar | Parquet `_id` pages | encodings |
+|---:|---:|---:|---:|---|
+| 16 | 1.08 | 1.29 | 977 | PLAIN RLE |
+
+### Resolving k hits to ids, one superfile of 1000000 docs
+
+| k | from the Parquet `_id` column | from the id sidecar | speedup |
+|---:|---:|---:|---:|
+| 10 | 271 µs | 0.6 µs | 472× |
+| 100 | 1340 µs | 2.1 µs | 640× |
+| 1000 | 7962 µs | 16.3 µs | 488× |
+
+### Finding a row by id, 100 superfiles × 100000 docs
+
+| concurrent writers | superfiles scanned | lookup time |
+|---:|---:|---:|
+| 1 | 1.0 of 100 | 1.9 ms |
+| 4 | 4.0 of 100 | 7.6 ms |
 
 ## Running it
 
@@ -29,7 +74,7 @@ cargo run --release -- quick  # smaller sizes, under a minute
 cargo run --release -- mint   # only the minting tables
 ```
 
-The toolchain is the repository's, from `rust-toolchain.toml`, i.e. the same one the engine pins. Each run prints its tables as markdown. The absolute numbers depend on the machine. Writer counts follow the machine's logical CPU count.
+The toolchain is the repository's, from `rust-toolchain.toml`, the same one the engine pins. Each run prints its tables as markdown. The absolute numbers depend on the machine, and writer counts follow its logical CPU count.
 
 To publish a result, commit first and then run:
 
