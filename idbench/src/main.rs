@@ -11,15 +11,18 @@
 // SuperfileBuilder (Parquet body, full-text index and the packed id
 // sidecar), and hits are resolved to ids by its SuperfileReader.
 //
-// Run:  cargo run --release            (a few minutes on 8 cores, after the build)
+// Run:  cargo run --release            (a few minutes, after the build)
 //       cargo run --release -- quick   (smaller sizes, for a smoke test)
 //       cargo run --release -- mint    (only the minting tables)
 
 use std::{
     hint::black_box,
-    sync::{Arc, Barrier, Mutex},
+    sync::{
+        Arc, Barrier, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use arrow_array::{Decimal128Array, LargeStringArray, RecordBatch};
@@ -36,7 +39,8 @@ use parquet::{
     arrow::{
         ProjectionMask,
         arrow_reader::{
-            ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection, RowSelector,
+            ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection,
+            RowSelector,
         },
     },
     file::metadata::PageIndexPolicy,
@@ -48,45 +52,78 @@ const BATCH: usize = 1024;
 
 // ---------------------------------------------------------------- minting
 
-/// Ids per second, minted by `threads` writers, each with its own
-/// generator and each minting `per_thread` ids. With `batch == 1` every id
-/// is a `next_id` call; otherwise a writer reserves `batch` ids at a time
-/// with `reserve_range` and fills them in, as an append does.
-fn mint_rate(threads: usize, per_thread: usize, batch: usize) -> f64 {
-    let barrier = Arc::new(Barrier::new(threads + 1));
-    let handles: Vec<_> = (0..threads)
-        .map(|_| {
-            let barrier = barrier.clone();
-            thread::spawn(move || {
-                let g = IdGenerator::new();
-                let mut buf: Vec<i128> = Vec::with_capacity(batch);
-                g.next_id(); // start the clock's ticker before timing
-                barrier.wait();
-                if batch == 1 {
-                    let mut acc = 0i128;
-                    for _ in 0..per_thread {
-                        acc ^= g.next_id();
+/// Ids per second from `threads` writers running for `dur`. Each writer
+/// builds its own `step` with `make` and calls it until told to stop; a
+/// step mints a chunk of ids and returns how many. Every rep runs for a
+/// fixed time rather than a fixed count, so the fastest rows are timed over
+/// as long a window as the slowest. Also returns how many threads the
+/// process had halfway through the run (Linux only), which shows what the
+/// writers share the CPUs with.
+fn timed<S: FnMut() -> u64>(
+    threads: usize,
+    dur: Duration,
+    make: &(impl Fn() -> S + Sync),
+) -> (f64, Option<usize>) {
+    let stop = AtomicBool::new(false);
+    let barrier = Barrier::new(threads + 1);
+    thread::scope(|s| {
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                s.spawn(|| {
+                    let mut step = make();
+                    step(); // starts the clock's ticker and allocates before timing
+                    barrier.wait();
+                    let mut n = 0u64;
+                    while !stop.load(Ordering::Relaxed) {
+                        n += step();
                     }
-                    black_box(acc);
-                } else {
-                    let mut left = per_thread;
-                    while left > 0 {
-                        let n = left.min(batch);
-                        fill(&g.reserve_range(n), &mut buf);
-                        black_box(&buf);
-                        left -= n;
-                    }
-                }
-                barrier.wait();
+                    n
+                })
             })
+            .collect();
+        barrier.wait();
+        let t = Instant::now();
+        thread::sleep(dur / 2);
+        let process_threads = std::fs::read_dir("/proc/self/task").ok().map(|d| d.count());
+        thread::sleep(dur - dur / 2);
+        stop.store(true, Ordering::Relaxed);
+        let total: u64 = handles.into_iter().map(|h| h.join().unwrap()).sum();
+        (total as f64 / t.elapsed().as_secs_f64(), process_threads)
+    })
+}
+
+/// Ids minted per step of the one-id-at-a-time loop, between checks of
+/// the stop flag.
+const STEP: u64 = 4096;
+
+/// Ids per second from `threads` writers, each with its own generator.
+/// With `batch == 1` every id is a `next_id` call; otherwise a writer
+/// reserves `batch` ids at a time with `reserve_range` and fills them in,
+/// as an append does.
+fn mint_rate(threads: usize, dur: Duration, batch: usize) -> (f64, Option<usize>) {
+    if batch == 1 {
+        timed(threads, dur, &|| {
+            let g = IdGenerator::new();
+            move || {
+                let mut acc = 0i128;
+                for _ in 0..STEP {
+                    acc ^= g.next_id();
+                }
+                black_box(acc);
+                STEP
+            }
         })
-        .collect();
-    barrier.wait();
-    let t = Instant::now();
-    barrier.wait();
-    let secs = t.elapsed().as_secs_f64();
-    handles.into_iter().for_each(|h| h.join().unwrap());
-    (threads * per_thread) as f64 / secs
+    } else {
+        timed(threads, dur, &|| {
+            let g = IdGenerator::new();
+            let mut buf: Vec<i128> = Vec::with_capacity(batch);
+            move || {
+                fill(&g.reserve_range(batch), &mut buf);
+                black_box(&buf);
+                batch as u64
+            }
+        })
+    }
 }
 
 /// Expand `reserve_range`'s spans into the ids they hold, as an append
@@ -102,34 +139,19 @@ fn fill(spans: &[(i128, i128)], buf: &mut Vec<i128>) {
 /// take the lock once per batch of `batch` rows, as an append does: the
 /// ids are reserved under the lock and filled in after it is released.
 /// With `batch == 1` the lock is taken for every id.
-fn mint_rate_shared(threads: usize, per_thread: usize, batch: usize) -> f64 {
-    let g = Arc::new(Mutex::new(IdGenerator::new()));
-    let barrier = Arc::new(Barrier::new(threads + 1));
-    let handles: Vec<_> = (0..threads)
-        .map(|_| {
-            let g = g.clone();
-            let barrier = barrier.clone();
-            thread::spawn(move || {
-                let mut buf: Vec<i128> = Vec::with_capacity(batch);
-                barrier.wait();
-                let mut left = per_thread;
-                while left > 0 {
-                    let n = left.min(batch);
-                    let spans = g.lock().unwrap().reserve_range(n);
-                    fill(&spans, &mut buf);
-                    black_box(&buf);
-                    left -= n;
-                }
-                barrier.wait();
-            })
-        })
-        .collect();
-    barrier.wait();
-    let t = Instant::now();
-    barrier.wait();
-    let secs = t.elapsed().as_secs_f64();
-    handles.into_iter().for_each(|h| h.join().unwrap());
-    (threads * per_thread) as f64 / secs
+fn mint_rate_shared(threads: usize, dur: Duration, batch: usize) -> f64 {
+    let g = Mutex::new(IdGenerator::new());
+    timed(threads, dur, &|| {
+        let g = &g;
+        let mut buf: Vec<i128> = Vec::with_capacity(batch);
+        move || {
+            let spans = g.lock().unwrap().reserve_range(batch);
+            fill(&spans, &mut buf);
+            black_box(&buf);
+            batch as u64
+        }
+    })
+    .0
 }
 
 // ------------------------------------------------------------- superfiles
@@ -164,76 +186,91 @@ fn build_superfile(ids: &[i128]) -> SuperfileReader {
     SuperfileReader::open(Bytes::from(builder.finish().expect("finish"))).expect("open")
 }
 
-/// The `_id` column of a superfile, read straight from its Parquet body:
-/// the rows at `docs` (ascending), or every row when `docs` is `None`.
-/// With a row selection and the page index, only pages holding a
-/// requested row are decoded.
-fn parquet_ids(sf: &SuperfileReader, docs: Option<&[u32]>) -> Vec<i128> {
-    let bytes = sf.parquet_bytes().expect("in-memory superfile").clone();
-    let mut b = ParquetRecordBatchReaderBuilder::try_new_with_options(
-        bytes,
-        ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional),
-    )
-    .unwrap();
-    let mask = ProjectionMask::roots(b.parquet_schema(), [0]);
-    b = b.with_projection(mask);
-    if let Some(docs) = docs {
-        let n_rows = sf.n_docs() as usize;
-        let mut sel = Vec::with_capacity(docs.len() * 2 + 1);
-        let mut at = 0usize;
-        for &d in docs {
-            let d = d as usize;
-            if d > at {
-                sel.push(RowSelector::skip(d - at));
-            }
-            sel.push(RowSelector::select(1));
-            at = d + 1;
-        }
-        if n_rows > at {
-            sel.push(RowSelector::skip(n_rows - at));
-        }
-        b = b.with_row_selection(RowSelection::from(sel));
-    }
-    let mut out = Vec::new();
-    for batch in b.build().unwrap() {
-        let batch = batch.unwrap();
-        let a = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<Decimal128Array>()
-            .unwrap();
-        out.extend(a.values().iter().copied());
-    }
-    out
+/// A superfile's Parquet body with its footer and page index decoded once,
+/// as a reader that keeps files open caches them, so a read pays only for
+/// the pages it decodes.
+struct ParquetBody {
+    bytes: Bytes,
+    meta: ArrowReaderMetadata,
+    n_rows: usize,
 }
 
-/// How the engine laid out the `_id` column: data pages across all row
-/// groups, and the encodings it chose.
-fn id_pages(sf: &SuperfileReader) -> (usize, String) {
-    let bytes = sf.parquet_bytes().expect("in-memory superfile").clone();
-    let b = ParquetRecordBatchReaderBuilder::try_new_with_options(
-        bytes,
-        ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional),
-    )
-    .unwrap();
-    let md = b.metadata();
-    let pages = md
-        .offset_index()
-        .map(|oi| oi.iter().map(|rg| rg[0].page_locations().len()).sum())
-        .unwrap_or(0);
-    let mut enc: Vec<String> = md
-        .row_groups()
-        .iter()
-        .flat_map(|rg| {
-            rg.column(0)
-                .encodings()
-                .map(|e| format!("{e:?}"))
-                .collect::<Vec<_>>()
-        })
-        .collect();
-    enc.sort();
-    enc.dedup();
-    (pages, enc.join(" "))
+impl ParquetBody {
+    fn open(sf: &SuperfileReader) -> Self {
+        let bytes = sf.parquet_bytes().expect("in-memory superfile").clone();
+        let meta = ArrowReaderMetadata::load(
+            &bytes,
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional),
+        )
+        .unwrap();
+        Self {
+            bytes,
+            meta,
+            n_rows: sf.n_docs() as usize,
+        }
+    }
+
+    /// The `_id` column: the rows at `docs` (ascending), or every row when
+    /// `docs` is `None`. With a row selection and the page index, only
+    /// pages holding a requested row are decoded.
+    fn ids(&self, docs: Option<&[u32]>) -> Vec<i128> {
+        let mut b = ParquetRecordBatchReaderBuilder::new_with_metadata(
+            self.bytes.clone(),
+            self.meta.clone(),
+        );
+        let mask = ProjectionMask::roots(b.parquet_schema(), [0]);
+        b = b.with_projection(mask);
+        if let Some(docs) = docs {
+            let mut sel = Vec::with_capacity(docs.len() * 2 + 1);
+            let mut at = 0usize;
+            for &d in docs {
+                let d = d as usize;
+                if d > at {
+                    sel.push(RowSelector::skip(d - at));
+                }
+                sel.push(RowSelector::select(1));
+                at = d + 1;
+            }
+            if self.n_rows > at {
+                sel.push(RowSelector::skip(self.n_rows - at));
+            }
+            b = b.with_row_selection(RowSelection::from(sel));
+        }
+        let mut out = Vec::new();
+        for batch in b.build().unwrap() {
+            let batch = batch.unwrap();
+            let a = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Decimal128Array>()
+                .unwrap();
+            out.extend(a.values().iter().copied());
+        }
+        out
+    }
+
+    /// How the engine laid out the `_id` column: data pages across all row
+    /// groups, and the encodings it chose.
+    fn id_pages(&self) -> (usize, String) {
+        let md = self.meta.metadata();
+        let pages = md
+            .offset_index()
+            .map(|oi| oi.iter().map(|rg| rg[0].page_locations().len()).sum())
+            .unwrap_or(0);
+        let mut enc: Vec<String> = md
+            .row_groups()
+            .iter()
+            .flat_map(|rg| {
+                rg.column(0)
+                    .encodings()
+                    .map(|e| format!("{e:?}"))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        enc.sort();
+        enc.dedup();
+        (pages, enc.join(" "))
+    }
 }
 
 /// The `_id`s of the hits at `docs`, through the engine's own resolve:
@@ -269,24 +306,32 @@ fn main() {
     let threads = thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(8);
-    let per_thread = if quick { 1_000_000 } else { 5_000_000 };
+    let rep_time = Duration::from_millis(if quick { 200 } else { 1000 });
     let file_docs = if quick { 100_000 } else { 1_000_000 };
     let n_files = if quick { 20 } else { 100 };
     let docs_per_file = if quick { 10_000 } else { 100_000 };
     let reps = 5;
 
     println!("# idbench\n");
-    println!("cpus: {threads}, ids per writer: {per_thread}, median of {reps} runs\n");
+    println!(
+        "cpus: {threads}, each minting rep runs for {} ms, median of {reps} reps\n",
+        rep_time.as_millis()
+    );
 
     // 1. Minting, each writer with its own generator.
     println!("## Minting\n");
     println!("| how | 1 writer | {threads} writers | ns per id, 1 writer |");
     println!("|---|---:|---:|---:|");
+    let mut process_threads = None;
     for batch in [1usize, BATCH] {
-        let one = median((0..reps).map(|_| mint_rate(1, per_thread, batch)).collect());
+        let one = median((0..reps).map(|_| mint_rate(1, rep_time, batch).0).collect());
         let many = median(
             (0..reps)
-                .map(|_| mint_rate(threads, per_thread, batch))
+                .map(|_| {
+                    let (rate, tasks) = mint_rate(threads, rep_time, batch);
+                    process_threads = tasks;
+                    rate
+                })
                 .collect(),
         );
         println!(
@@ -301,6 +346,12 @@ fn main() {
             1e9 / one
         );
     }
+    if let Some(n) = process_threads {
+        println!(
+            "\nThreads in the process during a {threads}-writer rep: {n} ({threads} writers, \
+             the main thread, and the shared clock's ticker, which wakes once a millisecond)."
+        );
+    }
 
     // 2. One generator shared by every thread, as appends through one
     //    supertable handle share it.
@@ -310,7 +361,7 @@ fn main() {
     for batch in [1usize, BATCH] {
         let many = median(
             (0..reps)
-                .map(|_| mint_rate_shared(threads, per_thread, batch))
+                .map(|_| mint_rate_shared(threads, rep_time, batch))
                 .collect(),
         );
         println!(
@@ -332,6 +383,7 @@ fn main() {
     let g = IdGenerator::new();
     let ids: Vec<i128> = (0..file_docs).map(|_| g.next_id()).collect();
     let sf = build_superfile(&ids);
+    let body = ParquetBody::open(&sf);
     let size = sf.size_breakdown().unwrap().expect("size breakdown");
     let col = size
         .columns
@@ -339,7 +391,7 @@ fn main() {
         .find(|(n, _)| n == "_id")
         .map(|&(_, b)| b)
         .unwrap();
-    let (pages, encodings) = id_pages(&sf);
+    let (pages, encodings) = body.id_pages();
     println!("\n## Bytes per id, one superfile of {file_docs} docs from one writer\n");
     println!(
         "| raw | Parquet `_id` column | packed id sidecar | Parquet `_id` pages | encodings |"
@@ -369,7 +421,7 @@ fn main() {
             .collect();
         for q in &queries[..3] {
             let want: Vec<i128> = q.iter().map(|&d| ids[d as usize]).collect();
-            assert_eq!(parquet_ids(&sf, Some(q)), want);
+            assert_eq!(body.ids(Some(q)), want);
             assert_eq!(sidecar_ids(&sf, q), want);
         }
         let pq_us = median(
@@ -377,7 +429,7 @@ fn main() {
                 .map(|_| {
                     let t = Instant::now();
                     for q in &queries {
-                        black_box(parquet_ids(&sf, Some(q)));
+                        black_box(body.ids(Some(q)));
                     }
                     t.elapsed().as_secs_f64() * 1e6 / queries.len() as f64
                 })
@@ -399,7 +451,7 @@ fn main() {
             pq_us / sc_us
         );
     }
-    drop((ids, sf));
+    drop((ids, body, sf));
 
     // 5. Finding rows by id across a table: what a delete or an update by
     //    `_id` does first. The manifest keeps each superfile's id min and
@@ -424,7 +476,10 @@ fn main() {
             .iter()
             .map(|f| (*f.iter().min().unwrap(), *f.iter().max().unwrap()))
             .collect();
-        let sfs: Vec<SuperfileReader> = files.iter().map(|f| build_superfile(f)).collect();
+        let bodies: Vec<ParquetBody> = files
+            .iter()
+            .map(|f| ParquetBody::open(&build_superfile(f)))
+            .collect();
         let targets: Vec<i128> = (0..20)
             .map(|_| files[rng.random_range(0..n_files)][rng.random_range(0..docs_per_file)])
             .collect();
@@ -437,7 +492,7 @@ fn main() {
                     continue;
                 }
                 scanned += 1;
-                found |= parquet_ids(&sfs[f], None).contains(&id);
+                found |= bodies[f].ids(None).contains(&id);
             }
             assert!(found);
         }
