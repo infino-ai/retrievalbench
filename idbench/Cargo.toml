@@ -1,0 +1,20 @@
+[package]
+name = "idbench"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "What Infino's 128-bit document id costs to mint, store, resolve from a search hit, and look up"
+
+[dependencies]
+# The engine itself, from main. `test-helpers` makes its superfile builder,
+# reader and id generator reachable from outside the crate.
+infino = { git = "https://github.com/infino-ai/infino", rev = "c5a80fa9", features = ["test-helpers"] }
+arrow-array = "58"
+arrow-schema = "58"
+bytes = "1"
+parquet = { version = "58", default-features = false, features = ["arrow", "zstd"] }
+rand = "0.9"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
