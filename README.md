@@ -13,7 +13,7 @@
 | [Vector databases](#vector-databases) | VectorDBBench's bundled peers | 1M / 10M | [live viewer](https://vdbbench-viewer-q6unoyyhua-uc.a.run.app) |
 | [SQL on ClickBench](#sql-on-clickbench) | the public leaderboard | 100M rows | [`clickbench/`](clickbench/README.md) |
 | [Full-text at Wikipedia scale](#full-text-at-wikipedia-scale) | Tantivy, Lucene, … | fixed Wikipedia corpus | [`search-benchmark/`](search-benchmark/README.md) |
-| [Document ids](#document-ids) | auto-increment, UUIDv4, UUIDv7, ULID, Snowflake | 5M ids per writer, 1M-row superfile, 10M-row table | [`idbench/`](idbench/README.md) |
+| [Document ids](#document-ids) | none, Infino's own id only | 5M ids per writer, 1M-row superfile, 10M-row table | [`idbench/`](idbench/README.md) |
 
 ## Embedded vector libraries
 
@@ -99,10 +99,9 @@ in-process tables. See [`search-benchmark/README.md`](search-benchmark/README.md
 
 ## Document ids
 
-What an id scheme costs a search engine to mint, store and look up:
-auto-increment, UUIDv4, UUIDv7, ULID and 64-bit Snowflake against Infino's
-128-bit `_id`, all through Infino's own superfile builder and reader, so only
-the ids differ. A standalone crate, pinned to an Infino commit; its
+What Infino's 128-bit `_id` costs to mint, store, resolve from a search hit
+and look up, measured through the engine's own id generator, superfile
+builder and reader. A standalone crate, pinned to an Infino commit; its
 [README](idbench/README.md) gives the numbers and the commit, date and machine
 they were measured on.
 
