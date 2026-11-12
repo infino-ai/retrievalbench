@@ -14,6 +14,7 @@
 | [SQL on ClickBench](#sql-on-clickbench) | the public leaderboard | 100M rows | [`clickbench/`](clickbench/README.md) |
 | [Full-text at Wikipedia scale](#full-text-at-wikipedia-scale) | Tantivy, Lucene, … | fixed Wikipedia corpus | [`search-benchmark/`](search-benchmark/README.md) |
 | [Document ids](#document-ids) | none, Infino's own id only | 5M ids per writer, 1M-row superfile, 10M-row table | [`idbench/`](idbench/README.md) |
+| [OpenSearch under Rally](#opensearch-under-rally) | Elasticsearch, stock OpenSearch | Rally tracks (`nested`, `http_logs`) | [`opensearch-rally/`](opensearch-rally/README.md) |
 
 ## Embedded vector libraries
 
@@ -104,6 +105,15 @@ and look up, measured through the engine's own id generator, superfile
 builder and reader. A standalone crate, pinned to an Infino commit; its
 [README](idbench/README.md) gives the numbers and the commit, date and machine
 they were measured on.
+
+## OpenSearch under Rally
+
+OpenSearch with the [Infino for OpenSearch](https://github.com/infino-ai/opensearch-infino)
+plugin, raced against Elasticsearch and stock OpenSearch with
+[Rally](https://github.com/elastic/rally), one GCE VM per engine. Each run
+reports ingest, every search task, storage, CPU and memory side by side; runs
+are not published to `results/`. See
+[`opensearch-rally/README.md`](opensearch-rally/README.md).
 
 ## Hardware
 

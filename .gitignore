@@ -7,3 +7,6 @@ lcov.info
 *.profraw
 .DS_Store
 .infino/
+
+# opensearch-rally run directories (benchmark.sh, local.sh); never published results
+/opensearch-rally/results/
