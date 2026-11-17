@@ -2,7 +2,7 @@ name: VM Reaper
 
 # Safety net for leaked bench VMs: each bench job tears its own VM down, but a
 # killed runner or partial provision can leave one billing. This sweeps expired
-# vdbbench-* and clickbench-* resources daily (and on demand) across azure, aws
+# vdbbench-*, clickbench-* and rally-* resources daily (and on demand) across azure, aws
 # and gcp. Never touches bench-vm-* (infino's own Benchmark run): the reaper is
 # scoped to an explicit prefix allowlist.
 #

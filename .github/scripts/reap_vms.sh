@@ -11,7 +11,7 @@
 # never touched — in particular bench-vm-* (infino's own Benchmark run).
 set -euo pipefail
 CLOUD="${CLOUD:-azure}"
-PREFIXES="${PREFIXES:-vdbbench- clickbench-}"
+PREFIXES="${PREFIXES:-vdbbench- clickbench- rally-}"
 RG="${RG:-rg-infino-bench}"          # Azure resource group
 AWS_REGION_R="${AWS_REGION_R:-us-east-1}"
 now="$(date -u +%s)"
@@ -104,7 +104,9 @@ reap_aws() {
 }
 
 # --- GCP --------------------------------------------------------------------
-# Instance name == firewall-rule name == "${prefix}${run_id}".
+# Instance name == firewall-rule name == "${prefix}${run_id}", except for
+# opensearch-rally: a run's VMs are "<run>-runner" and "<run>-<engine>", and its
+# two firewall rules "<run>-ssh" and "<run>-int".
 reap_gcp() {
   local pfx="$1"
   echo "== expired ${pfx}* instances =="
@@ -127,6 +129,9 @@ reap_gcp() {
     while read -r fw; do
       [ -n "$fw" ] || continue
       printf '%s\n' "$live" | grep -qxF "$fw" && continue
+      # An opensearch-rally rule is live while any VM of its run is.
+      run="${fw%-ssh}"; run="${run%-int}"
+      if [ "$run" != "$fw" ] && printf '%s\n' "$live" | grep -q "^${run}-"; then continue; fi
       echo "reap orphan firewall: $fw"
       gcloud compute firewall-rules delete "$fw" --quiet 2>/dev/null || true
     done
