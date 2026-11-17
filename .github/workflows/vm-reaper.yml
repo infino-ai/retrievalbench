@@ -33,7 +33,7 @@ jobs:
         cloud: [azure, aws, gcp]
     steps:
       - name: Checkout (for composite + script)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Login (${{ matrix.cloud }})
         id: login
         continue-on-error: true

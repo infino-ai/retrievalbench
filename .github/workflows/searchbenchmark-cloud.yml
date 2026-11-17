@@ -74,7 +74,7 @@ jobs:
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
     steps:
       - name: Checkout (this repo, for composite actions)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Azure login
         if: ${{ inputs.cloud == 'azure' }}
